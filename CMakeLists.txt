@@ -1,0 +1,118 @@
+cmake_minimum_required(VERSION 3.16)
+project(molterm VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# ── Dependencies ─────────────────────────────────────────────────────────────
+
+include(FetchContent)
+
+# gemmi — mmCIF/PDB parser (header-only)
+FetchContent_Declare(
+    gemmi
+    GIT_REPOSITORY https://github.com/project-gemmi/gemmi.git
+    GIT_TAG        v0.7.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(gemmi)
+
+# USalign — structural alignment
+FetchContent_Declare(
+    usalign
+    GIT_REPOSITORY https://github.com/pylelab/USalign.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(usalign)
+if(NOT usalign_POPULATED)
+    FetchContent_Populate(usalign)
+endif()
+
+# Build USalign binary from single source
+add_executable(USalign ${usalign_SOURCE_DIR}/USalign.cpp)
+target_compile_options(USalign PRIVATE -O3 -ffast-math)
+set_target_properties(USalign PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# ncurses — system package
+find_package(Curses REQUIRED)
+
+# ── Sources ──────────────────────────────────────────────────────────────────
+
+set(MOLTERM_SOURCES
+    src/main.cpp
+    # Core
+    src/core/MolObject.cpp
+    src/core/ObjectStore.cpp
+    src/core/Selection.cpp
+    # IO
+    src/io/CifLoader.cpp
+    src/io/Aligner.cpp
+    # TUI
+    src/tui/Screen.cpp
+    src/tui/Window.cpp
+    src/tui/Layout.cpp
+    src/tui/StatusBar.cpp
+    src/tui/CommandLine.cpp
+    src/tui/TabBar.cpp
+    src/tui/ObjectPanel.cpp
+    # Render
+    src/render/Camera.cpp
+    src/render/ColorMapper.cpp
+    src/render/Canvas.cpp
+    src/render/AsciiCanvas.cpp
+    src/render/BrailleCanvas.cpp
+    src/render/BlockCanvas.cpp
+    src/render/AsciiRenderer.cpp
+    # Repr
+    src/repr/WireframeRepr.cpp
+    src/repr/BallStickRepr.cpp
+    src/repr/BackboneRepr.cpp
+    src/repr/SpacefillRepr.cpp
+    src/repr/CartoonRepr.cpp
+    # Input
+    src/input/Keymap.cpp
+    src/input/KeymapManager.cpp
+    src/input/InputHandler.cpp
+    # Cmd
+    src/cmd/CommandParser.cpp
+    src/cmd/CommandRegistry.cpp
+    src/cmd/UndoStack.cpp
+    # App
+    src/app/Tab.cpp
+    src/app/TabManager.cpp
+    src/app/Application.cpp
+)
+
+# ── Target ───────────────────────────────────────────────────────────────────
+
+add_executable(molterm ${MOLTERM_SOURCES})
+
+target_include_directories(molterm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CURSES_INCLUDE_DIR}
+)
+
+target_link_libraries(molterm PRIVATE
+    gemmi::gemmi_cpp
+    ${CURSES_LIBRARIES}
+)
+
+target_compile_options(molterm PRIVATE
+    -Wall -Wextra -Wpedantic
+)
+
+target_compile_definitions(molterm PRIVATE
+    USALIGN_PATH="${CMAKE_BINARY_DIR}/USalign"
+)
+
+# molterm depends on USalign binary being built
+add_dependencies(molterm USalign)
+
+# ── Install ──────────────────────────────────────────────────────────────────
+
+install(TARGETS molterm DESTINATION bin)

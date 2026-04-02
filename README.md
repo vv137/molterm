@@ -1,0 +1,582 @@
+# MolTerm — TUI Molecular Viewer
+
+> A terminal-based molecular structure viewer with VIM-like interface, ncurses TUI, gemmi-powered mmCIF/PDB parsing, and PyMOL session export.
+
+## Project Overview
+
+MolTerm renders 3D molecular structures in the terminal using Unicode Braille characters and ncurses colors. It targets structural biologists and computational chemists who live in the terminal and want quick molecule inspection without launching a full GUI.
+
+**Language:** C++17  
+**Build:** CMake ≥ 3.16  
+**Dependencies:** ncurses (system), gemmi v0.7.0 (FetchContent)
+
+## Build Instructions
+
+```bash
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+./molterm [file.cif] [file.pdb] ...
+```
+
+### Dependencies
+
+- **gemmi** v0.7.0 — mmCIF/PDB parser (fetched by CMake FetchContent)
+- **USalign** — structural alignment TM-align/MM-align (fetched + compiled by CMake FetchContent)
+- **ncurses** — system package (`apt install libncurses-dev` / `brew install ncurses`)
+
+Future:
+
+- **toml++** — TOML config parser for Phase 4 customization
+
+---
+
+## Architecture
+
+```
+molterm/
+├── CMakeLists.txt
+├── README.md
+├── .gitignore
+├── include/molterm/
+│   ├── app/
+│   │   ├── Application.h         # top-level lifecycle, main loop
+│   │   ├── TabManager.h          # tab container, move/copy between tabs
+│   │   └── Tab.h                 # single tab (objects + camera)
+│   ├── core/
+│   │   ├── MolObject.h           # molecular object (atoms, bonds, repr, per-atom colors)
+│   │   ├── AtomData.h            # per-atom struct (pos, name, element, chain, resSeq, B, occ)
+│   │   ├── BondData.h            # bond struct (atom indices + order)
+│   │   ├── Selection.h           # selection algebra: parse, set ops, named selections
+│   │   └── ObjectStore.h         # shared_ptr registry, add/remove/rename/clone
+│   ├── io/
+│   │   ├── CifLoader.h           # gemmi mmCIF/PDB loader with spatial hash bonding + _struct_conn
+│   │   └── Aligner.h             # USalign integration: TM-align, MM-align, transform
+│   ├── render/
+│   │   ├── Canvas.h              # abstract sub-pixel canvas (drawDot, drawLine, drawCircle)
+│   │   ├── AsciiCanvas.h         # 1×1 sub-pixel per cell, ASCII chars
+│   │   ├── BrailleCanvas.h       # 2×4 sub-pixel per cell, Unicode Braille (U+2800–U+28FF)
+│   │   ├── BlockCanvas.h         # 1×2 sub-pixel per cell, Unicode half-blocks (▀▄█)
+│   │   ├── Renderer.h            # legacy abstract renderer (Phase 1, still compiled)
+│   │   ├── AsciiRenderer.h       # legacy Phase 1 ASCII renderer
+│   │   ├── Camera.h              # 3×3 rotation matrix, pan, zoom, project/projectf (aspect-aware)
+│   │   ├── DepthBuffer.h         # Z-buffer for occlusion (header-only)
+│   │   └── ColorMapper.h         # color schemes + 15-color named palette + per-atom overrides
+│   ├── repr/
+│   │   ├── Representation.h      # abstract: render(MolObject, Camera, Canvas)
+│   │   ├── WireframeRepr.h       # bond lines (half-bond coloring) + atom dots
+│   │   ├── BallStickRepr.h       # filled circles + thin bond lines
+│   │   ├── BackboneRepr.h        # Cα trace per chain
+│   │   ├── SpacefillRepr.h       # VDW spheres, depth-sorted
+│   │   └── CartoonRepr.h         # SS-aware trace (helix/sheet/loop widths)
+│   ├── tui/
+│   │   ├── Screen.h              # ncurses RAII (initscr/endwin, colors, input, mouse)
+│   │   ├── Window.h              # WINDOW* RAII wrapper (print, color, resize)
+│   │   ├── Layout.h              # split: TabBar | Viewport [| ObjectPanel] | StatusBar | CmdLine
+│   │   ├── StatusBar.h           # mode indicator, object info, renderer name
+│   │   ├── CommandLine.h         # ":" input with cursor, history, word delete
+│   │   ├── ObjectPanel.h         # right sidebar: object list with visibility indicators
+│   │   └── TabBar.h              # top row: clickable tab labels
+│   ├── input/
+│   │   ├── InputHandler.h        # mode-aware key dispatch, trie sequence handling
+│   │   ├── KeymapManager.h       # loads default keybindings (TOML in Phase 4)
+│   │   ├── Keymap.h              # trie-based multi-key sequence → Action mapping
+│   │   ├── Action.h              # enum of all bindable actions
+│   │   └── Mode.h                # enum: Normal, Command, Visual, Search
+│   └── cmd/
+│       ├── CommandParser.h       # parse ":cmd arg1, arg2" with quotes and ! detection
+│       ├── CommandRegistry.h     # name → lambda handler, tab completion
+│       └── UndoStack.h           # undo/redo with 100-entry limit
+└── src/                          # .cpp implementations mirror include/ structure
+    ├── main.cpp
+    ├── app/
+    ├── core/
+    ├── io/
+    ├── render/
+    ├── repr/
+    ├── tui/
+    ├── input/
+    └── cmd/
+```
+
+---
+
+## Rendering Pipeline
+
+```
+MolObject ──→ Representation ──→ Canvas ──→ Window
+                   ↑                ↑
+    ColorMapper (scheme + per-atom) Camera (3×3 rot + pan + zoom)
+```
+
+### Canvas Abstraction
+
+All rendering goes through the `Canvas` interface, which provides sub-pixel drawing primitives. Three backends:
+
+| Canvas | Sub-pixels/cell | Resolution | Characters |
+|--------|----------------|------------|------------|
+| **BrailleCanvas** (default) | 2×4 | 8× | Unicode Braille `⠀`–`⣿` |
+| **BlockCanvas** | 1×2 | 2× | Half-blocks `▀` `▄` `█` |
+| **AsciiCanvas** | 1×1 | 1× | `*` `@` `o` `-` `\|` `/` `\` |
+
+Switch at runtime: `:set renderer braille|block|ascii`
+
+### Representations
+
+Each `Representation` subclass knows what to draw; the `Canvas` knows how.
+
+| Repr | Show/Hide | Default | Description |
+|------|-----------|---------|-------------|
+| **WireframeRepr** | `sw`/`xw` | ON | Bond lines with half-bond coloring + atom dots. `:set wt <n>` |
+| **BallStickRepr** | `sb`/— | off | Filled circles + thin bonds. `:set br <n>` |
+| **BackboneRepr** | `sk`/`xk` | ON | Cα–Cα trace. `:set bt <n>` |
+| **SpacefillRepr** | `ss`/— | off | VDW spheres (back-to-front sorted). Scale adjustable |
+| **CartoonRepr** | `sc`/— | off | SS-aware Cα trace: thick helix, wide sheet, thin loop |
+
+### Color Schemes
+
+| Scheme | Key | Description |
+|--------|-----|-------------|
+| Element (CPK) | `ce` | C=green N=blue O=red S=yellow P=magenta |
+| Chain | `cc` | A=green B=cyan C=magenta D=yellow E=red F=blue (cycled) |
+| Secondary structure | `cs` | Helix=red Sheet=yellow Loop=green |
+| B-factor | `cb` | Blue→Green→Red gradient |
+
+### Named Color Palette
+
+Per-atom coloring via `:color <name> [selection]`. Overrides scheme for matched atoms.
+
+**Available colors:** `red` `green` `blue` `yellow` `magenta` `cyan` `white` `orange` `pink` `lime` `teal` `purple` `salmon` `slate` `gray`
+
+Extended colors (orange, pink, lime, teal, purple, salmon, slate, gray) use 256-color terminal; fallback to 8-color approximations.
+
+```
+:color red chain A            # color chain A red
+:color salmon helix           # color helices salmon
+:color cyan resi 50-60        # color residue range
+:color blue                   # color all atoms blue
+:color clear                  # remove all per-atom overrides
+:color element                # switch back to element scheme
+```
+
+### Selection Algebra
+
+Used by `:select`, `:count`, and `/` search. Recursive descent parser with operator precedence.
+
+**Keywords:**
+
+| Keyword | Example | Description |
+|---------|---------|-------------|
+| `all` | `all` | All atoms |
+| `chain` | `chain A` | Chain ID |
+| `resn` | `resn ALA` | Residue name |
+| `resi` | `resi 42` or `resi 10-50` | Residue number (or range) |
+| `name` | `name CA` | Atom name |
+| `element` | `element Fe` | Element symbol |
+| `helix` | `helix` | SSType::Helix atoms |
+| `sheet` | `sheet` | SSType::Sheet atoms |
+| `loop` | `loop` | SSType::Loop atoms |
+| `backbone` / `bb` | `backbone` | N, CA, C, O atoms |
+| `sidechain` / `sc` | `sidechain` | Non-backbone atoms |
+| `hydro` | `hydro` | Hydrogen atoms |
+| `water` | `water` | HOH/WAT/DOD residues |
+| `obj` | `obj myprotein` | All atoms if current object name matches |
+| `@name` | `@ala and chain B` | Reference a named selection |
+
+**Operators:** `and`, `or`, `not`, `( )` — precedence: `or` < `and` < `not`
+
+**Auto-selection:** Every selection operation auto-saves the result as `sele`. Use `@sele` to reference the last result.
+
+**Examples:**
+
+```
+:select chain A and resn ALA        # → auto-saved as "sele"
+:select ala = resn ALA              # named selection
+:color red @ala                     # use named selection in color command
+:select active = resi 50-60 and chain A
+:count @active and helix            # reference named selection
+:color salmon @sele                 # color latest selection result
+:sele                               # list: sele(25) ala(25) active(42)
+/helix and chain B                  # search mode with n/N navigation
+```
+
+---
+
+## VIM-like Mode System
+
+### Modes
+
+| Mode | Entry | Exit | Purpose |
+|------|-------|------|---------|
+| **Normal** | `ESC` / `Ctrl+C` from any mode | — | Navigation, object manipulation |
+| **Command** | `:` from Normal | `ESC`, `Enter` (execute) | Typed commands |
+| **Visual** | `v` from Normal | `ESC` | Atom/residue selection (Phase 4) |
+| **Search** | `/` from Normal | `ESC`, `Enter` (execute) | Search via selection expressions, `n`/`N` navigate |
+
+### Default Keybindings (Fully Customizable)
+
+All keybindings are defined via a trie-based `Keymap`. Defaults in `KeymapManager::loadDefaults()`. Users will override via `~/.molterm/keymap.toml` (Phase 4).
+
+#### Normal Mode — Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `h` / `←` | `rotate_left` | Rotate molecule left |
+| `j` / `↓` | `rotate_down` | Rotate molecule down |
+| `k` / `↑` | `rotate_up` | Rotate molecule up |
+| `l` / `→` | `rotate_right` | Rotate molecule right |
+| `H` | `pan_left` | Pan view left |
+| `J` | `pan_down` | Pan view down |
+| `K` | `pan_up` | Pan view up |
+| `L` | `pan_right` | Pan view right |
+| `+` / `=` | `zoom_in` | Zoom in |
+| `-` | `zoom_out` | Zoom out |
+| `0` | `reset_view` | Reset camera to default |
+| `.` | `repeat_last` | Repeat last action |
+| `Ctrl+L` | `redraw` | Force redraw |
+| Scroll wheel | zoom | Mouse scroll zooms in/out |
+
+#### Normal Mode — Object & State
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `o` | `toggle_panel` | Toggle object panel sidebar |
+| `Tab` | `next_object` | Cycle to next object |
+| `Shift+Tab` | `prev_object` | Cycle to previous object |
+| `Space` | `toggle_visible` | Toggle visibility of current object |
+| `d` `d` | `delete_object` | Delete current object |
+| `y` `y` | `yank_object` | Yank (copy) object to clipboard |
+| `p` | `paste_object` | Paste yanked object into current tab |
+| `r` | `rename_object` | Rename current object |
+
+#### Normal Mode — Representations
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `s` `w` | `show_wireframe` | Show wireframe |
+| `s` `b` | `show_ballstick` | Show ball-and-stick |
+| `s` `s` | `show_spacefill` | Show spacefill / CPK |
+| `s` `c` | `show_cartoon` | Show cartoon |
+| `s` `k` | `show_backbone` | Show backbone trace |
+| `x` `w` | `hide_wireframe` | Hide wireframe |
+| `x` `k` | `hide_backbone` | Hide backbone trace |
+| `x` `a` | `hide_all` | Hide all representations |
+
+Mnemonic: **s**how → `s` prefix, e**x**it/remove → `x` prefix.
+
+#### Normal Mode — Tabs
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `g` `t` | `next_tab` | Go to next tab |
+| `g` `T` | `prev_tab` | Go to previous tab |
+| `Ctrl+T` | `new_tab` | Open new tab |
+| `Ctrl+W` | `close_tab` | Close current tab |
+| `m` `t` | `move_to_tab` | Move current object to another tab |
+| `d` `t` | `copy_to_tab` | Copy current object to another tab |
+| Click tab | `goto_tab` | Mouse click on tab bar |
+
+#### Normal Mode — Coloring
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `c` `e` | `color_by_element` | Color by element (CPK) |
+| `c` `c` | `color_by_chain` | Color by chain |
+| `c` `s` | `color_by_ss` | Color by secondary structure |
+| `c` `b` | `color_by_bfactor` | Color by B-factor (heat map) |
+
+#### Normal Mode — Quick Actions
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `:` | `enter_command` | Enter command mode |
+| `/` | `enter_search` | Enter search mode |
+| `v` | `enter_visual` | Enter visual mode |
+| `n` | `search_next` | Next search match |
+| `N` | `search_prev` | Previous search match |
+| `i` | `inspect` | Show detailed info for atom under cursor |
+| `?` | `show_help` | Show keybinding help |
+| `u` | `undo` | Undo last action |
+| `Ctrl+R` | `redo` | Redo |
+
+#### Command Mode (`:`)
+
+Input editing: `Backspace`, `Ctrl+W` (delete word), `Ctrl+U` (clear line).
+History: `↑` / `↓` arrow keys cycle through previous commands. Pressing `:` shows last 5 commands as overlay (disappears when typing). History is deduped, 200 entry limit.
+
+**Implemented commands:**
+
+| Command | Description |
+|---------|-------------|
+| `:load <file>` / `:e <file>` | Load mmCIF/PDB file |
+| `:q[!]` / `:quit[!]` / `:qa` | Quit |
+| `:show <repr>` | Show repr (wireframe/wire, ballstick/sticks/bs, backbone/trace/ca, spacefill/spheres/cpk, cartoon/ribbon) |
+| `:hide <repr\|all>` | Hide repr or all |
+| `:color <scheme>` | Color by element/cpk, chain, ss/secondary, bfactor/b, clear |
+| `:color <name> [selection]` | Per-atom color: `:color red chain A` (see Named Color Palette) |
+| `:zoom` | Center and zoom to fit |
+| `:set renderer <type>` | Switch renderer (ascii, braille, block) |
+| `:set backbone_thickness <n>` | Backbone trace thickness, float (alias: `bt`) |
+| `:set wireframe_thickness <n>` | Wireframe line thickness, float (alias: `wt`) |
+| `:set ball_radius <n>` | Ball-and-stick atom radius (alias: `br`) |
+| `:set panel` | Toggle object panel |
+| `:tabnew [name]` | Create new tab |
+| `:tabclose` | Close current tab |
+| `:objects` | List loaded objects |
+| `:delete [name]` | Delete object (current if no arg) |
+| `:rename [old] <new>` | Rename object |
+| `:info` | Show atom/bond count for current object |
+| `:select <expr>` | Select atoms by expression (see Selection Algebra) |
+| `:select <name> = <expr>` | Create named selection |
+| `:count <expr>` | Count atoms matching expression |
+| `:sele` | List named selections with atom counts |
+| `:align <obj> [sel] to <obj> [sel]` | TM-align via USalign (sel filters alignment, transforms whole object) |
+| `:mmalign <obj> [sel] to <obj> [sel]` | MM-align for multi-chain complexes (`-mm 1`) |
+| `:super <obj> [sel] to <obj> [sel]` | Alias for `:align` |
+| `:help` | List available commands |
+
+**Planned commands (Phase 4–5):**
+
+```
+:save <file>                    Save current state
+:export <file.pml>              Export as PyMOL script (.pml)
+:fetch <pdb_id>                 Download from RCSB PDB
+:map <mode> <key> <action>      Map key to action in mode
+:unmap <mode> <key>             Remove key mapping
+:keybindings                    Show all current bindings
+:measure <a1> <a2>              Measure distance
+:angle <a1> <a2> <a3>           Measure angle
+:dihedral <a1> <a2> <a3> <a4>  Measure dihedral
+```
+
+---
+
+## Customization System (Phase 4)
+
+### Configuration Files
+
+```
+~/.molterm/
+├── config.toml          # general settings
+├── keymap.toml          # custom keybindings (overrides defaults)
+└── colors.toml          # custom color schemes
+```
+
+### keymap.toml Example
+
+```toml
+# Leader key (default: space)
+leader = "space"
+
+# Key notation: C- (Ctrl), M- (Alt), S- (Shift), <CR>, <Space>, <Tab>, <BS>
+
+[normal]
+"h"         = "rotate_left"
+"j"         = "rotate_down"
+"k"         = "rotate_up"
+"l"         = "rotate_right"
+"H"         = "pan_left"
+"J"         = "pan_down"
+"K"         = "pan_up"
+"L"         = "pan_right"
+"+"         = "zoom_in"
+"-"         = "zoom_out"
+"0"         = "reset_view"
+"<Tab>"     = "next_object"
+"<S-Tab>"   = "prev_object"
+"<Space>"   = "toggle_visible"
+"gt"        = "next_tab"
+"gT"        = "prev_tab"
+"<C-t>"     = "new_tab"
+"<C-w>"     = "close_tab"
+"dd"        = "delete_object"
+"yy"        = "yank_object"
+"p"         = "paste_object"
+"sw"        = "show_wireframe"
+"sb"        = "show_ballstick"
+"ss"        = "show_spacefill"
+"sc"        = "show_cartoon"
+"sk"        = "show_backbone"
+"xw"        = "hide_wireframe"
+"xk"        = "hide_backbone"
+"xa"        = "hide_all"
+"ce"        = "color_by_element"
+"cc"        = "color_by_chain"
+"cs"        = "color_by_ss"
+"cb"        = "color_by_bfactor"
+"mt"        = "move_to_tab"
+"dt"        = "copy_to_tab"
+"/"         = "enter_search"
+"n"         = "search_next"
+"N"         = "search_prev"
+"i"         = "inspect"
+"o"         = "toggle_panel"
+"?"         = "show_help"
+"u"         = "undo"
+"<C-r>"     = "redo"
+"."         = "repeat_last"
+":"         = "enter_command"
+"v"         = "enter_visual"
+
+[visual]
+"<Esc>" = "exit_to_normal"
+"<C-c>" = "exit_to_normal"
+
+[command]
+"<CR>"    = "execute"
+"<Esc>"   = "exit_to_normal"
+"<C-c>"   = "exit_to_normal"
+"<Tab>"   = "autocomplete"
+"<Up>"    = "history_prev"
+"<Down>"  = "history_next"
+"<C-w>"   = "delete_word"
+"<C-u>"   = "clear_line"
+
+[search]
+"<CR>"    = "execute_search"
+"<Esc>"   = "exit_to_normal"
+"<C-c>"   = "exit_to_normal"
+```
+
+### colors.toml Example
+
+```toml
+[schemes.element]
+C  = "green"
+N  = "blue"
+O  = "red"
+S  = "yellow"
+P  = "magenta"
+H  = "white"
+Fe = "cyan"
+_default = "white"
+
+[schemes.chain]
+_cycle = ["green", "cyan", "magenta", "yellow", "red", "blue"]
+
+[schemes.ss]
+helix = "red"
+sheet = "yellow"
+loop  = "green"
+
+[schemes.bfactor]
+gradient = ["blue", "green", "red"]
+min = 0.0
+max = 100.0
+```
+
+---
+
+## PyMOL Export (Phase 4)
+
+### .pml Script Export
+
+Generate a PyMOL command script that reconstructs the MolTerm session:
+
+```python
+# Generated by MolTerm
+load 1abc.cif, obj_1abc
+load 2def.pdb, obj_2def
+hide everything
+show cartoon, obj_1abc
+show sticks, obj_1abc and chain A and resn HEM
+color marine, obj_1abc and chain A
+color salmon, obj_1abc and chain B
+select active_site, obj_1abc and byres (resn HEM around 5)
+set_view (\
+     0.872,   -0.327,    0.364,\
+     0.489,    0.582,   -0.650,\
+    -0.000,    0.745,    0.667,\
+     0.000,    0.000, -150.000,\
+    12.345,   23.456,   34.567,\
+   100.000,  200.000,  -20.000 )
+```
+
+---
+
+## Implementation Status
+
+### Phase 1: Foundation — DONE
+
+- [x] CMakeLists.txt with gemmi (FetchContent) + ncurses
+- [x] Screen/Window — ncurses RAII wrappers
+- [x] MolObject + CifLoader — gemmi mmCIF/PDB parsing, spatial hash bond detection + `_struct_conn`
+- [x] Camera — 3×3 rotation matrix, orthographic projection, zoom, pan
+- [x] AsciiRenderer — basic wireframe rendering (legacy, replaced by Canvas in Phase 2)
+- [x] InputHandler — trie-based multi-key sequences, 4-mode state machine
+- [x] Layout — TabBar, Viewport, ObjectPanel, StatusBar, CommandLine
+- [x] Commands — :load, :q, :show, :hide, :color, :zoom, :tabnew, :tabclose, :objects, :delete, :rename, :info, :help, :set
+- [x] Tab system — multiple tabs, copy/move objects between tabs
+- [x] SIGWINCH resize handling
+
+### Phase 2: Rich Rendering — DONE
+
+- [x] Canvas abstraction — abstract sub-pixel drawing (drawDot, drawLine, drawCircle)
+- [x] BrailleCanvas — 2×4 sub-pixel Unicode Braille, 8× resolution
+- [x] BlockCanvas — 1×2 sub-pixel Unicode half-blocks, 2× resolution
+- [x] AsciiCanvas — 1×1 fallback with directional line chars
+- [x] DepthBuffer — Z-sorting at sub-pixel resolution
+- [x] ColorMapper — element/chain/SS/B-factor color schemes
+- [x] WireframeRepr — half-bond coloring, atom dots
+- [x] BallStickRepr — filled circles with adaptive radius
+- [x] BackboneRepr — Cα–Cα chain trace
+- [x] Mouse support — scroll wheel zoom, tab bar click
+- [x] Runtime renderer switching — `:set renderer ascii|braille|block`
+
+### Phase 3: VIM Features + Selection — DONE
+
+- [x] **Selection algebra** — recursive descent parser: chain, resn, resi (range), name, element, helix/sheet/loop, backbone/sidechain, hydro, water, and/or/not/parens
+- [x] **Search** — `/` parses selection expression, `n`/`N` navigate matches with atom details
+- [x] **Undo/Redo** — UndoStack with push/undo/redo, 100-entry limit, `u`/`Ctrl+R` bindings
+- [x] **SpacefillRepr** — VDW spheres, back-to-front sorted, scale adjustable
+- [x] **CartoonRepr** — SS-aware Cα trace (thick helix, wide sheet, thin loop)
+- [x] **Commands** — `:select <expr>`, `:select name = expr`, `:count <expr>`, `:sele`
+- [x] **Named selections** — stored in map, `:sele` lists with atom counts
+- [x] **Per-atom coloring** — 15-color palette, `:color <name> <selection>`, overrides scheme
+- [x] **@name references** — `@sele`, `@ala` etc. in selection expressions
+- [x] **Auto-sele** — every selection result auto-saved as `sele`
+- [x] **`obj` keyword** — `obj myprotein` selects all atoms if object name matches
+- [x] **Inspect mode** — `i` toggles crosshair cursor, mouse click picks atoms, shows chain/resn/name/element/B/occ/xyz
+- [x] **Command history** — `:` shows last 5 commands overlay, `↑`/`↓` cycle, 200 limit
+- [x] **USalign integration** — `:align`, `:mmalign`, `:super` with per-side selection and `-ter 0`
+- [ ] **Visual mode** — atom/residue selection extension with hjkl (deferred to Phase 4)
+
+### Phase 4: Customization + Export
+
+- [ ] **ConfigParser** — TOML config loading from `~/.molterm/`
+- [ ] **KeymapManager TOML** — fully customizable keybindings from file
+- [ ] **Color schemes** — user-defined color themes from `colors.toml`
+- [ ] **SessionExporter** — .pml script generation
+- [ ] **`:fetch`** — download structures from RCSB PDB
+- [ ] **Macro recording** — `q`/`@` VIM-style macros
+- [ ] **Tab completion** — for commands, filenames, object names
+
+### Phase 5: Polish
+
+- [ ] **Help system** — `:help` overlay with keybinding cheat sheet
+- [ ] **Measurement tools** — distance, angle, dihedral display
+- [ ] **Multi-state animation** — `[`/`]` state cycling, play/pause
+- [ ] **Performance** — frustum culling, level-of-detail for large structures
+- [ ] **Logging** — structured logging to `~/.molterm/molterm.log`
+
+---
+
+## Coding Conventions
+
+- **C++17** strict — no exceptions
+- `std::unique_ptr` / `std::shared_ptr` with clear ownership semantics
+- `enum class` over raw enums
+- `#pragma once` for header guards
+- **Naming:** `PascalCase` for types, `camelCase` for methods/variables, `UPPER_SNAKE` for constants
+- All ncurses calls through `Screen`/`Window` wrappers — never raw ncurses in business logic
+- Separate concerns: parsing (io/), data model (core/), rendering (render/ + repr/), TUI (tui/), input (input/), commands (cmd/)
+- Each class testable in isolation
+
+---
+
+## Testing Strategy
+
+- **Unit tests** (Google Test): core data structures, selection parser, projection math, config parser
+- **Integration tests**: load known mmCIF → verify atom count, bond count, residue names
+- **Rendering tests**: snapshot-based — render to string buffer, compare against expected output
+- **Fuzzing**: feed malformed CIF files to CifLoader
