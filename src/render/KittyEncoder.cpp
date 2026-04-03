@@ -16,7 +16,8 @@ static std::vector<uint8_t> zlibCompress(const uint8_t* data, size_t len) {
     return out;
 }
 
-std::string KittyEncoder::encode(const uint8_t* rgb, int width, int height) {
+std::string KittyEncoder::encode(const uint8_t* rgb, int width, int height,
+                                  int cols, int rows) {
     buf_.clear();
     if (width <= 0 || height <= 0) return buf_;
 
@@ -51,6 +52,13 @@ std::string KittyEncoder::encode(const uint8_t* rgb, int width, int height) {
             buf_ += std::to_string(width);
             buf_ += ",v=";
             buf_ += std::to_string(height);
+            // c/r = display size in terminal cells (forces scaling to fit viewport)
+            if (cols > 0 && rows > 0) {
+                buf_ += ",c=";
+                buf_ += std::to_string(cols);
+                buf_ += ",r=";
+                buf_ += std::to_string(rows);
+            }
             buf_ += ",q=2,";
             first = false;
         }

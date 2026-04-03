@@ -15,7 +15,9 @@ public:
     // rgb: row-major RGB pixel data (3 bytes per pixel)
     // width, height: pixel dimensions
     // Returns the encoded string ready to write to stdout.
-    virtual std::string encode(const uint8_t* rgb, int width, int height) = 0;
+    // cols/rows: terminal cell dimensions for protocols that support scaling (Kitty)
+    virtual std::string encode(const uint8_t* rgb, int width, int height,
+                               int cols = 0, int rows = 0) = 0;
 
     // Human-readable name for status bar
     virtual const char* name() const = 0;

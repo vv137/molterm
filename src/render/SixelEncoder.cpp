@@ -16,7 +16,8 @@ static int quantize(uint8_t r, uint8_t g, uint8_t b) {
     return ri * 36 + gi * 6 + bi;
 }
 
-std::string SixelEncoder::encode(const uint8_t* rgb, int width, int height) {
+std::string SixelEncoder::encode(const uint8_t* rgb, int width, int height,
+                                  int /*cols*/, int /*rows*/) {
     buf_.clear();
     if (width <= 0 || height <= 0) return buf_;
 

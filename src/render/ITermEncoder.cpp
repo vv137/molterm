@@ -44,7 +44,8 @@ static std::vector<uint8_t> encodeBMP(const uint8_t* rgb, int w, int h) {
     return bmp;
 }
 
-std::string ITermEncoder::encode(const uint8_t* rgb, int width, int height) {
+std::string ITermEncoder::encode(const uint8_t* rgb, int width, int height,
+                                  int /*cols*/, int /*rows*/) {
     buf_.clear();
     if (width <= 0 || height <= 0) return buf_;
 

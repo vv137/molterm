@@ -342,7 +342,7 @@ void PixelCanvas::flush(Window& win) {
         return;
     }
 
-    std::string encoded = encoder_->encode(rgb_.data(), pixW_, pixH_);
+    std::string encoded = encoder_->encode(rgb_.data(), pixW_, pixH_, termW_, termH_);
     if (!encoded.empty()) {
         int wy = 0, wx = 0;
         getbegyx(win.raw(), wy, wx);
