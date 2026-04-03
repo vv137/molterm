@@ -258,6 +258,161 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
 
         cStart = cEnd;
     }
+
+    // ── Nucleic acid base ladders ──────────────────────────────────────────
+    // Draw C1'→base stick + regular polygon ring shapes (hexagon/pentagon).
+
+    auto isNucleotide = [](const std::string& rn) -> bool {
+        return rn == "A" || rn == "G" || rn == "C" || rn == "U" ||
+               rn == "DA" || rn == "DG" || rn == "DC" || rn == "DT" || rn == "DU" ||
+               rn == "ADE" || rn == "GUA" || rn == "CYT" || rn == "URA" || rn == "THY";
+    };
+    auto isPurine = [](const std::string& rn) -> bool {
+        return rn == "A" || rn == "G" || rn == "DA" || rn == "DG" || rn == "ADE" || rn == "GUA";
+    };
+    auto baseColor = [](const std::string& rn) -> int {
+        if (rn == "A" || rn == "DA" || rn == "ADE") return kColorRed;
+        if (rn == "G" || rn == "DG" || rn == "GUA") return kColorGreen;
+        if (rn == "C" || rn == "DC" || rn == "CYT") return kColorBlue;
+        if (rn == "U" || rn == "DU" || rn == "URA") return kColorYellow;
+        if (rn == "DT" || rn == "THY") return kColorCyan;
+        return kColorOther;
+    };
+
+    // Helper: find atom by name in residue range
+    auto findAtom = [&](int start, int end, const char* name) -> int {
+        for (int j = start; j < end; ++j)
+            if (atoms[j].name == name) return j;
+        return -1;
+    };
+
+    // Helper: compute ring center and normal from atom positions
+    auto ringGeometry = [&](const std::vector<int>& indices,
+                            float& cx, float& cy, float& cz,
+                            float& nnx, float& nny, float& nnz) {
+        cx = cy = cz = 0;
+        for (int idx : indices) { cx += atoms[idx].x; cy += atoms[idx].y; cz += atoms[idx].z; }
+        float n = static_cast<float>(indices.size());
+        cx /= n; cy /= n; cz /= n;
+        // Normal from first 3 atoms
+        if (indices.size() >= 3) {
+            float ax = atoms[indices[1]].x - atoms[indices[0]].x;
+            float ay = atoms[indices[1]].y - atoms[indices[0]].y;
+            float az = atoms[indices[1]].z - atoms[indices[0]].z;
+            float bx2 = atoms[indices[2]].x - atoms[indices[0]].x;
+            float by2 = atoms[indices[2]].y - atoms[indices[0]].y;
+            float bz2 = atoms[indices[2]].z - atoms[indices[0]].z;
+            cross3(ax, ay, az, bx2, by2, bz2, nnx, nny, nnz);
+            normalize3(nnx, nny, nnz);
+        } else { nnx = 0; nny = 0; nnz = 1; }
+    };
+
+    // Helper: draw regular polygon in 3D (n sides, center, normal, radius, in-plane ref)
+    auto drawRegularPolygon = [&](float cx, float cy, float cz,
+                                  float nnx, float nny, float nnz,
+                                  float radius, int nSides, int color) {
+        // Build in-plane axes
+        float ux, uy, uz;
+        if (std::abs(nnx) < 0.9f) { cross3(nnx, nny, nnz, 1, 0, 0, ux, uy, uz); }
+        else { cross3(nnx, nny, nnz, 0, 1, 0, ux, uy, uz); }
+        normalize3(ux, uy, uz);
+        float vx, vy, vz;
+        cross3(nnx, nny, nnz, ux, uy, uz, vx, vy, vz);
+        normalize3(vx, vy, vz);
+
+        // Generate vertices (max 9 sides = purine ring)
+        constexpr float PI = 3.14159265f;
+        constexpr int kMaxSides = 9;
+        float vsx[kMaxSides], vsy[kMaxSides], vsz[kMaxSides];
+        nSides = std::min(nSides, kMaxSides);
+        for (int s = 0; s < nSides; ++s) {
+            float angle = 2.0f * PI * s / nSides - PI / 2.0f;
+            float ca = std::cos(angle), sa = std::sin(angle);
+            float wx = cx + radius * (ca * ux + sa * vx);
+            float wy = cy + radius * (ca * uy + sa * vy);
+            float wz = cz + radius * (ca * uz + sa * vz);
+            cam.projectCached(wx, wy, wz, vsx[s], vsy[s], vsz[s]);
+        }
+
+        if (pixCanvas) {
+            float csx, csy, csd;
+            cam.projectCached(cx, cy, cz, csx, csy, csd);
+            for (int s = 0; s < nSides; ++s) {
+                int s1 = (s + 1) % nSides;
+                pixCanvas->drawTriangle(csx, csy, csd,
+                                        vsx[s], vsy[s], vsz[s],
+                                        vsx[s1], vsy[s1], vsz[s1], color);
+            }
+        } else {
+            // Text canvas: draw edges
+            for (int s = 0; s < nSides; ++s) {
+                int s1 = (s + 1) % nSides;
+                canvas.drawLine(static_cast<int>(vsx[s]), static_cast<int>(vsy[s]), vsz[s],
+                                static_cast<int>(vsx[s1]), static_cast<int>(vsy[s1]), vsz[s1], color);
+            }
+        }
+    };
+
+    // Pyrimidine 6-ring atom names
+    static const char* k6ring[] = {"N1","C2","N3","C4","C5","C6"};
+    // Purine 5-ring atom names (fused ring)
+    static const char* k5ring[] = {"C4","C5","N7","C8","N9"};
+
+    int ai = 0;
+    while (ai < static_cast<int>(atoms.size())) {
+        const auto& a0 = atoms[ai];
+        if (!isNucleotide(a0.resName)) { ++ai; continue; }
+
+        int resStart = ai;
+        while (ai < static_cast<int>(atoms.size()) &&
+               atoms[ai].chainId == a0.chainId && atoms[ai].resSeq == a0.resSeq)
+            ++ai;
+        int resEnd = ai;
+
+        // Find C1'
+        int c1idx = findAtom(resStart, resEnd, "C1'");
+        if (c1idx < 0) c1idx = findAtom(resStart, resEnd, "C1*");
+        if (c1idx < 0) continue;
+
+        bool purine = isPurine(a0.resName);
+        int color = baseColor(a0.resName);
+
+        // 6-membered ring (both purine and pyrimidine have it)
+        int hex[6], hexN = 0;
+        for (auto* name : k6ring) {
+            int idx = findAtom(resStart, resEnd, name);
+            if (idx >= 0 && hexN < 6) hex[hexN++] = idx;
+        }
+
+        if (hexN >= 3) {
+            std::vector<int> hv(hex, hex + hexN);
+            float hcx, hcy, hcz, hnx, hny, hnz;
+            ringGeometry(hv, hcx, hcy, hcz, hnx, hny, hnz);
+
+            float sx0, sy0, d0, sx1, sy1, d1;
+            cam.projectCached(atoms[c1idx].x, atoms[c1idx].y, atoms[c1idx].z, sx0, sy0, d0);
+            cam.projectCached(hcx, hcy, hcz, sx1, sy1, d1);
+            canvas.drawLine(static_cast<int>(sx0), static_cast<int>(sy0), d0,
+                            static_cast<int>(sx1), static_cast<int>(sy1), d1, color);
+
+            drawRegularPolygon(hcx, hcy, hcz, hnx, hny, hnz, 1.2f, 6, color);
+        }
+
+        // 5-membered ring (purine only)
+        if (purine) {
+            int pent[5], pentN = 0;
+            for (auto* name : k5ring) {
+                int idx = findAtom(resStart, resEnd, name);
+                if (idx >= 0 && pentN < 5) pent[pentN++] = idx;
+            }
+            if (pentN >= 3) {
+                std::vector<int> pv(pent, pent + pentN);
+                float pcx, pcy, pcz, pnx, pny, pnz;
+                ringGeometry(pv, pcx, pcy, pcz, pnx, pny, pnz);
+                drawRegularPolygon(pcx, pcy, pcz, pnx, pny, pnz, 1.0f, 5, color);
+            }
+        }
+    }
 }
 
 } // namespace molterm

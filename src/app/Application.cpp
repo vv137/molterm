@@ -641,11 +641,10 @@ void Application::handleAction(Action action) {
         case Action::TogglePixelRenderer:
             fprintf(stdout, "\033[2J");
             fflush(stdout);
-            framesToSkip_ = 0;  // don't skip the first frame after switch
+            framesToSkip_ = 0;
             if (rendererType_ == RendererType::Pixel) {
                 rendererType_ = RendererType::Braille;
                 canvas_ = std::make_unique<BrailleCanvas>();
-                clearok(curscr, TRUE);
                 cmdLine_.setMessage("Renderer: BRAILLE");
             } else {
                 setRenderer(RendererType::Pixel);
@@ -653,6 +652,9 @@ void Application::handleAction(Action action) {
                 const char* name = (pc && pc->encoder()) ? pc->encoder()->name() : "PIXEL";
                 cmdLine_.setMessage(std::string("Renderer: ") + name);
             }
+            // Force full ncurses repaint so status bar appears immediately
+            clearok(curscr, TRUE);
+            wrefresh(curscr);
             break;
 
         // Macro recording
