@@ -31,6 +31,14 @@ namespace molterm {
 static volatile sig_atomic_t g_resized = 0;
 static void resizeHandler(int) { g_resized = 1; }
 
+// Clear pixel graphics artifacts and force full ncurses repaint
+static void clearScreenAndRepaint() {
+    fprintf(stdout, "\033[2J");
+    fflush(stdout);
+    clearok(curscr, TRUE);
+    wrefresh(curscr);
+}
+
 Application::Application() = default;
 Application::~Application() = default;
 
@@ -330,11 +338,7 @@ void Application::handleAction(Action action) {
         case Action::ResetView:   cam.reset(); tab.centerView(); break;
         case Action::CenterSelection: tab.centerView(); break;
         case Action::Redraw:
-            // Clear screen to remove stale Sixel artifacts, then full redraw
-            fflush(stdout);
-            fprintf(stdout, "\033[2J");
-            fflush(stdout);
-            clearok(curscr, TRUE);
+            clearScreenAndRepaint();
             break;
 
         // Objects
@@ -643,9 +647,8 @@ void Application::handleAction(Action action) {
         }
 
         // Renderer toggle (braille ↔ pixel)
-        case Action::TogglePixelRenderer:
-            fprintf(stdout, "\033[2J");
-            fflush(stdout);
+        case Action::TogglePixelRenderer: {
+            clearScreenAndRepaint();
             framesToSkip_ = 0;
             if (rendererType_ == RendererType::Pixel) {
                 rendererType_ = RendererType::Braille;
@@ -657,10 +660,8 @@ void Application::handleAction(Action action) {
                 const char* name = (pc && pc->encoder()) ? pc->encoder()->name() : "PIXEL";
                 cmdLine_.setMessage(std::string("Renderer: ") + name);
             }
-            // Force full ncurses repaint so status bar appears immediately
-            clearok(curscr, TRUE);
-            wrefresh(curscr);
             break;
+        }
 
         // Macro recording
         case Action::StartMacro:
@@ -1329,7 +1330,7 @@ void Application::registerCommands() {
             return app.layout().panelVisible() ? "Panel visible" : "Panel hidden";
         }
         if (opt == "renderer" || opt == "render") {
-            if (cmd.args.size() < 2) return "Usage: :set renderer <ascii|braille|block|sixel|pixel|auto>";
+            if (cmd.args.size() < 2) return "Usage: :set renderer <ascii|braille|block|sixel|pixel|auto|kitty|iterm2>";
             const auto& val = cmd.args[1];
             if (val == "ascii")        app.setRenderer(RendererType::Ascii);
             else if (val == "braille") app.setRenderer(RendererType::Braille);
@@ -1348,6 +1349,7 @@ void Application::registerCommands() {
                 app.setRenderer(RendererType::Pixel);
             }
             else return "Unknown renderer: " + val;
+            clearScreenAndRepaint();
             return "Renderer set to " + val;
         }
         if (opt == "backbone_thickness" || opt == "bt") {

@@ -29,6 +29,7 @@ void Camera::rotateZ(float degrees) {
 }
 
 void Camera::pan(float dx, float dy) {
+    // Pan in Angstrom units (independent of canvas resolution)
     panX_ += dx;
     panY_ += dy;
     markDirty();
@@ -71,9 +72,8 @@ bool Camera::project(float wx, float wy, float wz,
     // Scale: 1 Angstrom = zoom_ * (screenH/50) pixels roughly
     float scale = zoom_ * static_cast<float>(std::min(screenW, screenH)) / 50.0f;
 
-    sx = static_cast<int>(rx * scale + panX_) + screenW / 2;
-    // Terminal cells are ~2:1 tall:wide, so halve Y for ASCII (1:1 sub-pixel)
-    sy = static_cast<int>(-ry * scale / 2.0f + panY_) + screenH / 2;
+    sx = static_cast<int>((rx + panX_) * scale) + screenW / 2;
+    sy = static_cast<int>(-(ry + panY_) * scale / 2.0f) + screenH / 2;
     depth = rz;
 
     return true;
@@ -93,10 +93,9 @@ bool Camera::projectf(float wx, float wy, float wz,
 
     float scale = zoom_ * static_cast<float>(std::min(screenW, screenH)) / 50.0f;
 
-    sx = rx * scale + panX_ + static_cast<float>(screenW) / 2.0f;
-    // Correct for non-square sub-pixels: divide by aspectYX
-    // If sub-pixels are tall (aspectYX > 1), compress Y; if square (1.0), no correction
-    sy = -ry * scale / aspectYX + panY_ + static_cast<float>(screenH) / 2.0f;
+    // Pan is in Angstrom units — multiply by scale to get screen offset
+    sx = (rx + panX_) * scale + static_cast<float>(screenW) / 2.0f;
+    sy = -(ry + panY_) * scale / aspectYX + static_cast<float>(screenH) / 2.0f;
     depth = rz;
 
     return true;
@@ -105,8 +104,8 @@ bool Camera::projectf(float wx, float wy, float wz,
 void Camera::prepareProjection(int screenW, int screenH, float aspectYX) const {
     projScale_ = zoom_ * static_cast<float>(std::min(screenW, screenH)) / 50.0f;
     projScaleY_ = projScale_ / aspectYX;
-    projOffX_ = panX_ + static_cast<float>(screenW) / 2.0f;
-    projOffY_ = panY_ + static_cast<float>(screenH) / 2.0f;
+    projOffX_ = static_cast<float>(screenW) / 2.0f;
+    projOffY_ = static_cast<float>(screenH) / 2.0f;
 }
 
 void Camera::projectCached(float wx, float wy, float wz,
@@ -114,8 +113,10 @@ void Camera::projectCached(float wx, float wy, float wz,
     float x = wx - centerX_;
     float y = wy - centerY_;
     float z = wz - centerZ_;
-    sx = (rot_[0]*x + rot_[1]*y + rot_[2]*z) * projScale_ + projOffX_;
-    sy = -(rot_[3]*x + rot_[4]*y + rot_[5]*z) * projScaleY_ + projOffY_;
+    float rx = rot_[0]*x + rot_[1]*y + rot_[2]*z;
+    float ry = rot_[3]*x + rot_[4]*y + rot_[5]*z;
+    sx = (rx + panX_) * projScale_ + projOffX_;
+    sy = -(ry + panY_) * projScaleY_ + projOffY_;
     depth = rot_[6]*x + rot_[7]*y + rot_[8]*z;
 }
 

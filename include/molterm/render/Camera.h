@@ -69,7 +69,7 @@ private:
     float panX_, panY_;
     float zoom_;
     float rotSpeed_;
-    float panSpeed_ = 5.0f;
+    float panSpeed_ = 1.0f;  // Angstroms per keypress
     bool dirty_ = true;
 
     void multiplyRotX(float rad);
