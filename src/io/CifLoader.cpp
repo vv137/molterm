@@ -115,6 +115,7 @@ std::unique_ptr<MolObject> CifLoader::loadCif(const std::string& filepath) {
                 ad.occupancy = static_cast<float>(atom.occ);
                 ad.serial = atom.serial;
                 ad.formalCharge = static_cast<int8_t>(atom.charge);
+                ad.isHet = (res.het_flag == 'H');
                 obj->atoms().push_back(std::move(ad));
             }
         }

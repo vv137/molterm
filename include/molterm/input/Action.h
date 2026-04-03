@@ -46,6 +46,10 @@ enum class Action {
     ShowRibbon,
     ShowBackbone,
     HideWireframe,
+    HideBallStick,
+    HideSpacefill,
+    HideCartoon,
+    HideRibbon,
     HideBackbone,
     HideAll,
 
@@ -146,6 +150,10 @@ inline std::string actionName(Action a) {
         case Action::RenameObject:   return "rename_object";
         case Action::TogglePanel:    return "toggle_panel";
         case Action::HideWireframe:  return "hide_wireframe";
+        case Action::HideBallStick:  return "hide_ballstick";
+        case Action::HideSpacefill:  return "hide_spacefill";
+        case Action::HideCartoon:    return "hide_cartoon";
+        case Action::HideRibbon:     return "hide_ribbon";
         case Action::HideBackbone:   return "hide_backbone";
         case Action::MoveToTab:      return "move_to_tab";
         case Action::CopyToTab:      return "copy_to_tab";
@@ -207,6 +215,10 @@ inline Action actionFromName(const std::string& name) {
     if (name == "show_ribbon")      return Action::ShowRibbon;
     if (name == "show_backbone")    return Action::ShowBackbone;
     if (name == "hide_wireframe")   return Action::HideWireframe;
+    if (name == "hide_ballstick")   return Action::HideBallStick;
+    if (name == "hide_spacefill")   return Action::HideSpacefill;
+    if (name == "hide_cartoon")     return Action::HideCartoon;
+    if (name == "hide_ribbon")      return Action::HideRibbon;
     if (name == "hide_backbone")    return Action::HideBackbone;
     if (name == "hide_all")         return Action::HideAll;
     if (name == "next_tab")         return Action::NextTab;

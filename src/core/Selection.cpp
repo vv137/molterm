@@ -334,6 +334,11 @@ private:
                 },
                 "water");
         }
+        if (kwLower == "het" || kwLower == "hetatm" || kwLower == "ligand") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) { return a.isHet; },
+                "het");
+        }
         if (kwLower == "obj") {
             // obj <name> — select all atoms if current object name matches
             std::string objName = current_.value;

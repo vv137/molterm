@@ -78,6 +78,10 @@ void KeymapManager::bindNormalDefaults() {
 
     // Hide
     km.bind(Mode::Normal, {'x', 'w'},  Action::HideWireframe, "Hide wireframe");
+    km.bind(Mode::Normal, {'x', 'b'},  Action::HideBallStick, "Hide ball-and-stick");
+    km.bind(Mode::Normal, {'x', 's'},  Action::HideSpacefill, "Hide spacefill");
+    km.bind(Mode::Normal, {'x', 'c'},  Action::HideCartoon,   "Hide cartoon");
+    km.bind(Mode::Normal, {'x', 'r'},  Action::HideRibbon,    "Hide ribbon");
     km.bind(Mode::Normal, {'x', 'k'},  Action::HideBackbone,  "Hide backbone");
     km.bind(Mode::Normal, {'x', 'a'},  Action::HideAll,       "Hide all");
 

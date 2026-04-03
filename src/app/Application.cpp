@@ -368,12 +368,12 @@ void Application::handleAction(Action action) {
         }
         case Action::ShowCartoon: {
             auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::Cartoon);
+            if (obj) { obj->hideRepr(ReprType::Ribbon); obj->showRepr(ReprType::Cartoon); }
             break;
         }
         case Action::ShowRibbon: {
             auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::Ribbon);
+            if (obj) { obj->hideRepr(ReprType::Cartoon); obj->showRepr(ReprType::Ribbon); }
             break;
         }
         case Action::ShowBackbone: {
@@ -384,6 +384,26 @@ void Application::handleAction(Action action) {
         case Action::HideWireframe: {
             auto obj = tab.currentObject();
             if (obj) obj->hideRepr(ReprType::Wireframe);
+            break;
+        }
+        case Action::HideBallStick: {
+            auto obj = tab.currentObject();
+            if (obj) obj->hideRepr(ReprType::BallStick);
+            break;
+        }
+        case Action::HideSpacefill: {
+            auto obj = tab.currentObject();
+            if (obj) obj->hideRepr(ReprType::Spacefill);
+            break;
+        }
+        case Action::HideCartoon: {
+            auto obj = tab.currentObject();
+            if (obj) obj->hideRepr(ReprType::Cartoon);
+            break;
+        }
+        case Action::HideRibbon: {
+            auto obj = tab.currentObject();
+            if (obj) obj->hideRepr(ReprType::Ribbon);
             break;
         }
         case Action::HideBackbone: {

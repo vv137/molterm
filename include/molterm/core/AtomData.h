@@ -23,6 +23,7 @@ struct AtomData {
     float occupancy = 1.0f;
     int serial = 0;
     int8_t formalCharge = 0;
+    bool isHet = false;       // HETATM (ligand, ion, non-standard residue)
     SSType ssType = SSType::Loop;
 };
 

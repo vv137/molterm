@@ -66,7 +66,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         if (cLen < 2) { cStart = cEnd; continue; }
 
         // Step 1: Generate spline points
-        struct SplinePoint { float x, y, z; SSType ss; int color; };
+        struct SplinePoint { float x, y, z; SSType ss; int color; float arrowFrac; };
         std::vector<SplinePoint> spine;
         spine.reserve(cLen * subdiv + 1);
 
@@ -81,14 +81,19 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             int col2 = ColorMapper::colorForAtom(atoms[cas[i2].idx], scheme,
                 mol.atomColor(cas[i2].idx), rf(cas[i2].idx));
 
+            // Detect sheet→non-sheet transition for arrowhead
+            bool isSheetEnd = (cas[i1].ss == SSType::Sheet && cas[i2].ss != SSType::Sheet);
+
             for (int s = 0; s < subdiv; ++s) {
                 float t = static_cast<float>(s) / static_cast<float>(subdiv);
+                float af = isSheetEnd ? t : -1.0f;  // arrowFrac: 0→1 along arrowhead segment
                 spine.push_back({
                     catmullRom(cas[i0].x, cas[i1].x, cas[i2].x, cas[i3].x, t),
                     catmullRom(cas[i0].y, cas[i1].y, cas[i2].y, cas[i3].y, t),
                     catmullRom(cas[i0].z, cas[i1].z, cas[i2].z, cas[i3].z, t),
                     (t < 0.5f) ? cas[i1].ss : cas[i2].ss,
-                    (t < 0.5f) ? col1 : col2
+                    (t < 0.5f) ? col1 : col2,
+                    af
                 });
             }
         }
@@ -96,7 +101,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         auto& last = cas[cEnd - 1];
         spine.push_back({last.x, last.y, last.z, last.ss,
             ColorMapper::colorForAtom(atoms[last.idx], scheme,
-                mol.atomColor(last.idx), rf(last.idx))});
+                mol.atomColor(last.idx), rf(last.idx)), -1.0f});
 
         int nPts = static_cast<int>(spine.size());
         if (nPts < 2) { cStart = cEnd; continue; }
@@ -166,6 +171,17 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                 float hw = ssHalfW(spine[i].ss);
                 float hh = ssHalfH(spine[i].ss);
                 bool isCoil = (spine[i].ss == SSType::Loop);
+
+                // Sheet arrowhead: widen then taper to point
+                if (spine[i].arrowFrac >= 0.0f) {
+                    float af = spine[i].arrowFrac;
+                    if (af < 0.5f) {
+                        hw *= (1.0f + af * 1.2f);  // widen to 1.6×
+                    } else {
+                        hw *= (2.0f * (1.0f - af) * 1.6f);  // taper to 0
+                        if (hw < 0.05f) hw = 0.05f;
+                    }
+                }
 
                 std::vector<Vert> ring;
                 if (isCoil) {
