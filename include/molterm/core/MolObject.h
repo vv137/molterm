@@ -25,6 +25,7 @@ enum class ColorScheme {
     BFactor,
     PLDDT,
     Rainbow,
+    ResType,   // VMD-like: nonpolar/polar/acidic/basic
     Uniform,
 };
 

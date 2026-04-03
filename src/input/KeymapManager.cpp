@@ -92,6 +92,7 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'c', 'b'},  Action::ColorByBFactor, "Color by B-factor");
     km.bind(Mode::Normal, {'c', 'p'},  Action::ColorByPLDDT,   "Color by pLDDT");
     km.bind(Mode::Normal, {'c', 'r'},  Action::ColorByRainbow, "Color rainbow (N→C)");
+    km.bind(Mode::Normal, {'c', 't'},  Action::ColorByResType, "Color by residue type");
 
     // Tabs
     km.bind(Mode::Normal, {'g', 't'},  Action::NextTab,     "Next tab");

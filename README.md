@@ -113,6 +113,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `cb` | B-factor |
 | `cp` | pLDDT (AlphaFold confidence) |
 | `cr` | Rainbow (N→C terminus) |
+| `ct` | Residue type (nonpolar/polar/acidic/basic) |
 
 </details>
 
@@ -152,7 +153,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :fetch afdb:<uniprot_id>        " Download from AlphaFold DB (e.g. fetch afdb:P12345)
 :show <repr> [selection]         " Show repr (optionally for selection only)
 :hide <repr|all> [selection]    " Hide repr (optionally for selection only)
-:color <scheme>                 " element, chain, ss, bfactor, plddt, rainbow, clear
+:color <scheme>                 " element, chain, ss, bfactor, plddt, rainbow, restype, clear
 :color <name> [selection]       " Per-atom color (red, blue, salmon, etc.) with optional selection
 :select <expr>                  " Select atoms (see Selection Algebra below)
 :select <name> = <expr>         " Named selection (e.g. :select s1 = $sele)
@@ -237,6 +238,7 @@ Switch at runtime: `:set renderer braille|block|ascii|pixel` or `m` to toggle.
 | B-factor | `cb` | Blue→Green→Red gradient |
 | pLDDT | `cp` | AlphaFold confidence (>90 blue, 70-90 light blue, 50-70 yellow, <50 orange) |
 | Rainbow | `cr` | Per-chain N→C terminus blue→red gradient |
+| Residue type | `ct` | VMD-like: nonpolar (white), polar (green), acidic (red), basic (blue) |
 
 **Per-atom coloring:** `:color <name> [selection]` — 15 named colors: `red green blue yellow magenta cyan white orange pink lime teal purple salmon slate gray`
 

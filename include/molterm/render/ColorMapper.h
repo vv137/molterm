@@ -67,6 +67,11 @@ enum ColorPairId : int {
     kColorRainbow2 = 82,  // green
     kColorRainbow3 = 83,  // yellow
     kColorRainbow4 = 84,  // red
+    // ResType (VMD-like chemical property groups)
+    kColorResNonpolar = 90,  // white/gray — ALA VAL LEU ILE PRO PHE TRP MET GLY
+    kColorResPolar    = 91,  // green — SER THR CYS TYR ASN GLN
+    kColorResAcidic   = 92,  // red — ASP GLU
+    kColorResBasic    = 93,  // blue — LYS ARG HIS
 };
 
 class ColorMapper {
@@ -90,6 +95,9 @@ public:
 
     // Get rainbow color for a fraction [0,1] (blue→red)
     static int colorForRainbow(float fraction);
+
+    // Get color for residue chemical type (VMD-like)
+    static int colorForResType(const std::string& resName);
 
     // Resolve named color string to color pair ID. Returns -1 if unknown.
     static int colorByName(const std::string& name);

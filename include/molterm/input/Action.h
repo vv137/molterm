@@ -67,6 +67,7 @@ enum class Action {
     ColorBySS,
     ColorByBFactor,
     ColorByRainbow,
+    ColorByResType,
 
     // Mode transitions
     EnterCommand,
@@ -145,6 +146,7 @@ inline std::string actionName(Action a) {
         case Action::ColorByChain:   return "color_by_chain";
         case Action::ColorBySS:      return "color_by_ss";
         case Action::ColorByBFactor: return "color_by_bfactor";
+        case Action::ColorByResType: return "color_by_restype";
         case Action::ToggleVisible:  return "toggle_visible";
         case Action::NextObject:     return "next_object";
         case Action::PrevObject:     return "prev_object";
@@ -241,6 +243,7 @@ inline Action actionFromName(const std::string& name) {
     if (name == "color_by_chain")   return Action::ColorByChain;
     if (name == "color_by_ss")      return Action::ColorBySS;
     if (name == "color_by_bfactor") return Action::ColorByBFactor;
+    if (name == "color_by_restype") return Action::ColorByResType;
     if (name == "color_by_plddt")   return Action::ColorByPLDDT;
     if (name == "color_by_rainbow") return Action::ColorByRainbow;
     if (name == "enter_command")    return Action::EnterCommand;

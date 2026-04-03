@@ -403,6 +403,10 @@ PixelCanvas::RGB PixelCanvas::colorPairToRGB(int colorPair) {
         case kColorRainbow2:    return {0, 220, 0};
         case kColorRainbow3:    return {255, 255, 0};
         case kColorRainbow4:    return {255, 0, 0};
+        case kColorResNonpolar: return {190, 190, 190};   // light gray
+        case kColorResPolar:    return {50, 200, 80};     // green
+        case kColorResAcidic:   return {230, 50, 50};     // red
+        case kColorResBasic:    return {60, 100, 255};    // blue
         default:                return {200, 200, 200};
     }
 }

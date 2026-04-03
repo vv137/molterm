@@ -65,6 +65,12 @@ void ColorMapper::initColors() {
     init_pair(kColorRainbow3, COLOR_YELLOW,  -1);
     init_pair(kColorRainbow4, COLOR_RED,     -1);
 
+    // ResType (VMD-like chemical property groups)
+    init_pair(kColorResNonpolar, COLOR_WHITE,   -1);
+    init_pair(kColorResPolar,    COLOR_GREEN,   -1);
+    init_pair(kColorResAcidic,   COLOR_RED,     -1);
+    init_pair(kColorResBasic,    COLOR_BLUE,    -1);
+
     // Extended colors (require 256-color terminal)
     if (COLORS >= 256) {
         init_pair(kColorOrange,  208, -1);  // orange
@@ -86,6 +92,11 @@ void ColorMapper::initColors() {
         init_pair(kColorRainbow2, 46,  -1);  // green
         init_pair(kColorRainbow3, 226, -1);  // yellow
         init_pair(kColorRainbow4, 196, -1);  // red
+        // ResType with 256-color precision
+        init_pair(kColorResNonpolar, 250, -1);  // light gray
+        init_pair(kColorResPolar,    119, -1);  // light green
+        init_pair(kColorResAcidic,   196, -1);  // bright red
+        init_pair(kColorResBasic,    69,  -1);  // bright blue
     } else {
         init_pair(kColorOrange,  COLOR_YELLOW,  -1);
         init_pair(kColorPink,    COLOR_MAGENTA, -1);
@@ -127,6 +138,8 @@ int ColorMapper::colorForAtom(const AtomData& atom, ColorScheme scheme,
         }
         case ColorScheme::Rainbow:
             return (rainbowFrac >= 0.0f) ? colorForRainbow(rainbowFrac) : kColorRainbow2;
+        case ColorScheme::ResType:
+            return colorForResType(atom.resName);
         default: return kColorOther;
     }
 }
@@ -159,6 +172,26 @@ int ColorMapper::colorForSS(SSType ss) {
         case SSType::Loop:  return kColorLoop;
     }
     return kColorLoop;
+}
+
+int ColorMapper::colorForResType(const std::string& resName) {
+    // Nonpolar/hydrophobic (white/gray)
+    if (resName == "ALA" || resName == "VAL" || resName == "LEU" ||
+        resName == "ILE" || resName == "PRO" || resName == "PHE" ||
+        resName == "TRP" || resName == "MET" || resName == "GLY")
+        return kColorResNonpolar;
+    // Polar/uncharged (green)
+    if (resName == "SER" || resName == "THR" || resName == "CYS" ||
+        resName == "TYR" || resName == "ASN" || resName == "GLN")
+        return kColorResPolar;
+    // Acidic/negative (red)
+    if (resName == "ASP" || resName == "GLU")
+        return kColorResAcidic;
+    // Basic/positive (blue)
+    if (resName == "LYS" || resName == "ARG" || resName == "HIS")
+        return kColorResBasic;
+    // Non-standard / ligand / nucleic acid → default
+    return kColorResPolar;
 }
 
 int ColorMapper::colorByName(const std::string& name) {
