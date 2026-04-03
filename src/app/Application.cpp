@@ -368,12 +368,12 @@ void Application::handleAction(Action action) {
         }
         case Action::ShowCartoon: {
             auto obj = tab.currentObject();
-            if (obj) { obj->hideRepr(ReprType::Ribbon); obj->showRepr(ReprType::Cartoon); }
+            if (obj) obj->showRepr(ReprType::Cartoon);
             break;
         }
         case Action::ShowRibbon: {
             auto obj = tab.currentObject();
-            if (obj) { obj->hideRepr(ReprType::Cartoon); obj->showRepr(ReprType::Ribbon); }
+            if (obj) obj->showRepr(ReprType::Ribbon);
             break;
         }
         case Action::ShowBackbone: {

@@ -32,7 +32,7 @@ static void cross3(float ax, float ay, float az,
 
 void RibbonRepr::render(const MolObject& mol, const Camera& cam,
                          Canvas& canvas) {
-    if (!mol.visible() || !mol.reprVisible(ReprType::Cartoon)) return;
+    if (!mol.visible() || !mol.reprVisible(ReprType::Ribbon)) return;
 
     int cw = canvas.subW(), ch = canvas.subH();
     float aspect = canvas.aspectYX();
