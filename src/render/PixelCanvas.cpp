@@ -221,20 +221,27 @@ bool PixelCanvas::savePNG(const std::string& path) const {
     pngPut32(ihdr, static_cast<uint32_t>(pixW_));
     pngPut32(ihdr, static_cast<uint32_t>(pixH_));
     ihdr.push_back(8);  // bit depth
-    ihdr.push_back(2);  // color type: RGB
+    ihdr.push_back(6);  // color type: RGBA (transparent background)
     ihdr.push_back(0);  // compression
     ihdr.push_back(0);  // filter
     ihdr.push_back(0);  // interlace
     pngWriteChunk(f, "IHDR", ihdr.data(), ihdr.size());
 
-    // IDAT: filter byte (0=None) + RGB row data, zlib compressed
-    size_t rawSize = static_cast<size_t>(pixH_) * (1 + pixW_ * 3);
+    // IDAT: filter byte (0=None) + RGBA row data, zlib compressed
+    size_t rawSize = static_cast<size_t>(pixH_) * (1 + pixW_ * 4);
     std::vector<uint8_t> raw(rawSize);
     size_t offset = 0;
     for (int y = 0; y < pixH_; ++y) {
         raw[offset++] = 0;  // filter: None
-        std::memcpy(&raw[offset], &src[y * pixW_ * 3], pixW_ * 3);
-        offset += pixW_ * 3;
+        for (int x = 0; x < pixW_; ++x) {
+            size_t si = (static_cast<size_t>(y) * pixW_ + x) * 3;
+            uint8_t r = src[si], g = src[si + 1], b = src[si + 2];
+            bool isBg = (r == 0 && g == 0 && b == 0);
+            raw[offset++] = r;
+            raw[offset++] = g;
+            raw[offset++] = b;
+            raw[offset++] = isBg ? 0 : 255;  // alpha: 0=transparent, 255=opaque
+        }
     }
 
     uLongf compLen = compressBound(static_cast<uLong>(rawSize));
