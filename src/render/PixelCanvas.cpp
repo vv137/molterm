@@ -1,0 +1,255 @@
+#include "molterm/render/PixelCanvas.h"
+#include "molterm/render/ColorMapper.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <ncurses.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+namespace molterm {
+
+PixelCanvas::PixelCanvas(std::unique_ptr<GraphicsEncoder> encoder)
+    : encoder_(std::move(encoder)) {
+    queryCellSize();
+}
+
+void PixelCanvas::queryCellSize() {
+    struct winsize ws = {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 &&
+        ws.ws_xpixel > 0 && ws.ws_ypixel > 0 &&
+        ws.ws_col > 0 && ws.ws_row > 0) {
+        cellPixW_ = std::max(2, static_cast<int>(ws.ws_xpixel / ws.ws_col));
+        cellPixH_ = std::max(4, static_cast<int>(ws.ws_ypixel / ws.ws_row));
+    }
+}
+
+void PixelCanvas::setEncoder(std::unique_ptr<GraphicsEncoder> enc) {
+    encoder_ = std::move(enc);
+    prevRgb_.clear();  // force full redraw
+}
+
+void PixelCanvas::resize(int termW, int termH) {
+    queryCellSize();
+    int newPixW = termW * cellPixW_;
+    int newPixH = termH * cellPixH_;
+
+    if (newPixW == pixW_ && newPixH == pixH_) return;
+
+    termW_ = termW;
+    termH_ = termH;
+    pixW_ = newPixW;
+    pixH_ = newPixH;
+
+    size_t nPix = static_cast<size_t>(pixW_) * pixH_;
+    rgb_.resize(nPix * 3);
+    colorIds_.resize(nPix);
+    prevRgb_.clear();
+    zbuf_.resize(pixW_, pixH_);
+    clear();
+}
+
+void PixelCanvas::clear() {
+    std::memset(rgb_.data(), 0, rgb_.size());
+    std::memset(colorIds_.data(), 0xFF, colorIds_.size());
+    zbuf_.clear();
+    zMin_ = std::numeric_limits<float>::max();
+    zMax_ = std::numeric_limits<float>::lowest();
+}
+
+// ── Drawing ─────────────────────────────────────────────────────────────────
+
+void PixelCanvas::setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+    size_t idx = (static_cast<size_t>(y) * pixW_ + x) * 3;
+    rgb_[idx] = r;
+    rgb_[idx + 1] = g;
+    rgb_[idx + 2] = b;
+}
+
+void PixelCanvas::drawDot(int sx, int sy, float depth, int colorPair) {
+    if (!inBounds(sx, sy)) return;
+    if (!zbuf_.testAndSet(sx, sy, depth)) return;
+    if (depth < zMin_) zMin_ = depth;
+    if (depth > zMax_) zMax_ = depth;
+    auto c = colorPairToRGB(colorPair);
+    setPixel(sx, sy, c.r, c.g, c.b);
+    colorIds_[static_cast<size_t>(sy) * pixW_ + sx] = static_cast<int8_t>(colorPair);
+}
+
+void PixelCanvas::drawLine(int x0, int y0, float d0,
+                            int x1, int y1, float d1, int colorPair) {
+    // Shaded line: interpolate depth along line, apply subtle intensity variation.
+    // Closer segments are brighter, farther are dimmer (complements depth fog).
+    auto base = colorPairToRGB(colorPair);
+
+    Canvas::bresenham(x0, y0, d0, x1, y1, d1,
+        [&](int x, int y, float depth) {
+            if (!inBounds(x, y)) return;
+            if (!zbuf_.testAndSet(x, y, depth)) return;
+            if (depth < zMin_) zMin_ = depth;
+            if (depth > zMax_) zMax_ = depth;
+
+            float intensity = 0.85f + 0.15f * (1.0f / (1.0f + std::abs(depth) * 0.01f));
+            intensity = std::min(1.0f, intensity);
+
+            uint8_t cr = static_cast<uint8_t>(std::min(255.0f, base.r * intensity));
+            uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
+            uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
+            setPixel(x, y, cr, cg, cb);
+            colorIds_[static_cast<size_t>(y) * pixW_ + x] = static_cast<int8_t>(colorPair);
+        });
+}
+
+void PixelCanvas::drawCircle(int cx, int cy, float depth,
+                              int radius, int colorPair, bool filled) {
+    if (!filled) {
+        Canvas::drawCircle(cx, cy, depth, radius, colorPair, false);
+        return;
+    }
+
+    // Sphere shading with precomputed intensity per (dx,dy) offset.
+    auto base = colorPairToRGB(colorPair);
+    float invR = 1.0f / static_cast<float>(std::max(1, radius));
+    float r2 = static_cast<float>(radius * radius);
+
+    for (int dy = -radius; dy <= radius; ++dy) {
+        int dy2 = dy * dy;
+        for (int dx = -radius; dx <= radius; ++dx) {
+            float dist2 = static_cast<float>(dx * dx + dy2);
+            if (dist2 > r2) continue;
+
+            int px = cx + dx, py = cy + dy;
+            if (!inBounds(px, py)) continue;
+
+            // Fast approximation: nz ≈ 1 - dist2/(2*r2) instead of sqrt
+            float normDist2 = dist2 / r2;
+            float nz = 1.0f - normDist2 * 0.5f;
+            float nx = static_cast<float>(dx) * invR;
+            float ny = static_cast<float>(dy) * invR;
+
+            float dot = -0.5f * nx - 0.5f * ny + 0.707f * nz;
+            float halfLambert = std::abs(dot) * 0.4f + 0.6f;
+            float intensity = 0.45f + 0.55f * halfLambert;
+
+            float zOff = depth - nz * static_cast<float>(radius) * 0.01f;
+            if (!zbuf_.testAndSet(px, py, zOff)) continue;
+
+            if (depth < zMin_) zMin_ = depth;
+            if (depth > zMax_) zMax_ = depth;
+
+            uint8_t cr = static_cast<uint8_t>(std::min(255.0f, base.r * intensity));
+            uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
+            uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
+            setPixel(px, py, cr, cg, cb);
+            colorIds_[static_cast<size_t>(py) * pixW_ + px] = static_cast<int8_t>(colorPair);
+        }
+    }
+}
+
+void PixelCanvas::drawChar(int, int, float, char, int) {
+    // No glyph rasterizer — labels not rendered in pixel mode
+}
+
+// ── Post-processing ─────────────────────────────────────────────────────────
+
+void PixelCanvas::applyDepthFog(float strength, uint8_t fogR, uint8_t fogG, uint8_t fogB) {
+    if (pixW_ <= 0 || pixH_ <= 0 || strength <= 0.0f) return;
+    if (zMax_ <= zMin_) return;  // nothing rendered or flat
+
+    float invRange = strength / (zMax_ - zMin_);
+
+    // Single pass: blend each rendered pixel toward fog color
+    size_t nPix = static_cast<size_t>(pixW_) * pixH_;
+    for (size_t i = 0; i < nPix; ++i) {
+        if (colorIds_[i] < 0) continue;  // background — skip
+
+        float z = zbuf_.get(static_cast<int>(i % pixW_), static_cast<int>(i / pixW_));
+        float t = (z - zMin_) * invRange;
+
+        size_t idx = i * 3;
+        rgb_[idx]     = static_cast<uint8_t>(rgb_[idx]     + (fogR - rgb_[idx])     * t);
+        rgb_[idx + 1] = static_cast<uint8_t>(rgb_[idx + 1] + (fogG - rgb_[idx + 1]) * t);
+        rgb_[idx + 2] = static_cast<uint8_t>(rgb_[idx + 2] + (fogB - rgb_[idx + 2]) * t);
+    }
+}
+
+// ── Flush ───────────────────────────────────────────────────────────────────
+
+void PixelCanvas::flush(Window& win) {
+    if (pixW_ <= 0 || pixH_ <= 0 || !encoder_) return;
+
+    // Skip if identical to previous frame
+    if (prevRgb_.size() == rgb_.size() &&
+        std::memcmp(prevRgb_.data(), rgb_.data(), rgb_.size()) == 0) {
+        return;
+    }
+
+    std::string encoded = encoder_->encode(rgb_.data(), pixW_, pixH_);
+    if (!encoded.empty()) {
+        int wy = 0, wx = 0;
+        getbegyx(win.raw(), wy, wx);
+        // Save cursor, move to viewport origin, emit image, restore cursor
+        fprintf(stdout, "\0337\033[%d;%dH%s\0338", wy + 1, wx + 1, encoded.c_str());
+        fflush(stdout);
+    }
+
+    std::swap(prevRgb_, rgb_);
+    rgb_.resize(prevRgb_.size());  // re-allocate for next frame's clear()
+}
+
+// ── Color pair → RGB ────────────────────────────────────────────────────────
+
+PixelCanvas::RGB PixelCanvas::colorPairToRGB(int colorPair) {
+    switch (colorPair) {
+        case kColorCarbon:      return {34, 200, 34};
+        case kColorNitrogen:    return {50, 80, 255};
+        case kColorOxygen:      return {255, 40, 40};
+        case kColorSulfur:      return {255, 220, 30};
+        case kColorPhosphorus:  return {200, 50, 200};
+        case kColorHydrogen:    return {220, 220, 220};
+        case kColorIron:        return {80, 220, 220};
+        case kColorOther:       return {200, 200, 200};
+        case kColorChainA:      return {34, 200, 34};
+        case kColorChainB:      return {80, 220, 220};
+        case kColorChainC:      return {200, 50, 200};
+        case kColorChainD:      return {255, 220, 30};
+        case kColorChainE:      return {255, 40, 40};
+        case kColorChainF:      return {50, 80, 255};
+        case kColorHelix:       return {255, 60, 60};
+        case kColorSheet:       return {255, 220, 30};
+        case kColorLoop:        return {34, 200, 34};
+        case kColorBFactorLow:  return {50, 80, 255};
+        case kColorBFactorMid:  return {34, 200, 34};
+        case kColorBFactorHigh: return {255, 40, 40};
+        case kColorRed:         return {255, 50, 50};
+        case kColorGreen:       return {50, 220, 50};
+        case kColorBlue:        return {50, 80, 255};
+        case kColorYellow:      return {255, 255, 50};
+        case kColorMagenta:     return {255, 50, 255};
+        case kColorCyan:        return {50, 255, 255};
+        case kColorWhite:       return {240, 240, 240};
+        case kColorOrange:      return {255, 165, 0};
+        case kColorPink:        return {255, 175, 200};
+        case kColorLime:        return {135, 255, 0};
+        case kColorTeal:        return {0, 150, 136};
+        case kColorPurple:      return {160, 80, 255};
+        case kColorSalmon:      return {255, 140, 105};
+        case kColorSlate:       return {100, 130, 180};
+        case kColorGray:        return {158, 158, 158};
+        case kColorPLDDTVeryHigh: return {0, 83, 214};
+        case kColorPLDDTHigh:     return {101, 203, 243};
+        case kColorPLDDTLow:      return {255, 219, 19};
+        case kColorPLDDTVeryLow:  return {255, 125, 69};
+        case kColorRainbow0:    return {0, 60, 255};
+        case kColorRainbow1:    return {0, 220, 255};
+        case kColorRainbow2:    return {0, 220, 0};
+        case kColorRainbow3:    return {255, 255, 0};
+        case kColorRainbow4:    return {255, 0, 0};
+        default:                return {200, 200, 200};
+    }
+}
+
+} // namespace molterm

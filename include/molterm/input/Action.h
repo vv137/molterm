@@ -12,6 +12,8 @@ enum class Action {
     RotateRight,
     RotateUp,
     RotateDown,
+    RotateCW,
+    RotateCCW,
     PanLeft,
     PanRight,
     PanUp,
@@ -90,6 +92,7 @@ enum class Action {
     ExecuteSearch,
 
     // Macro recording (Phase 4)
+    TogglePixelRenderer,
     StartMacro,
     PlayMacro,
     ColorByPLDDT,
@@ -102,6 +105,8 @@ inline std::string actionName(Action a) {
         case Action::RotateRight:    return "rotate_right";
         case Action::RotateUp:       return "rotate_up";
         case Action::RotateDown:     return "rotate_down";
+        case Action::RotateCW:       return "rotate_cw";
+        case Action::RotateCCW:      return "rotate_ccw";
         case Action::PanLeft:        return "pan_left";
         case Action::PanRight:       return "pan_right";
         case Action::PanUp:          return "pan_up";
@@ -155,6 +160,7 @@ inline std::string actionName(Action a) {
         case Action::DeleteWord:     return "delete_word";
         case Action::ClearLine:      return "clear_line";
         case Action::ExecuteSearch:  return "execute_search";
+        case Action::TogglePixelRenderer: return "toggle_pixel";
         case Action::StartMacro:     return "start_macro";
         case Action::PlayMacro:      return "play_macro";
         case Action::ColorByPLDDT:   return "color_by_plddt";
@@ -171,6 +177,8 @@ inline Action actionFromName(const std::string& name) {
     if (name == "rotate_right")     return Action::RotateRight;
     if (name == "rotate_up")        return Action::RotateUp;
     if (name == "rotate_down")      return Action::RotateDown;
+    if (name == "rotate_cw")        return Action::RotateCW;
+    if (name == "rotate_ccw")       return Action::RotateCCW;
     if (name == "pan_left")         return Action::PanLeft;
     if (name == "pan_right")        return Action::PanRight;
     if (name == "pan_up")           return Action::PanUp;
@@ -226,6 +234,7 @@ inline Action actionFromName(const std::string& name) {
     if (name == "delete_word")      return Action::DeleteWord;
     if (name == "clear_line")       return Action::ClearLine;
     if (name == "execute_search")   return Action::ExecuteSearch;
+    if (name == "toggle_pixel")     return Action::TogglePixelRenderer;
     if (name == "start_macro")      return Action::StartMacro;
     if (name == "play_macro")       return Action::PlayMacro;
     return Action::None;

@@ -55,9 +55,15 @@ molterm/
 │   │   ├── AsciiCanvas.h         # 1×1 sub-pixel per cell, ASCII chars
 │   │   ├── BrailleCanvas.h       # 2×4 sub-pixel per cell, Unicode Braille (U+2800–U+28FF)
 │   │   ├── BlockCanvas.h         # 1×2 sub-pixel per cell, Unicode half-blocks (▀▄█)
-│   │   ├── Renderer.h            # legacy abstract renderer (Phase 1, still compiled)
+│   │   ├── PixelCanvas.h         # RGB framebuffer + pluggable GraphicsEncoder
+│   │   ├── GraphicsEncoder.h     # abstract encoder interface (Sixel/Kitty/iTerm2)
+│   │   ├── SixelEncoder.h        # Sixel protocol encoder
+│   │   ├── KittyEncoder.h        # Kitty graphics protocol (zlib + chunked)
+│   │   ├── ITermEncoder.h        # iTerm2 inline image protocol (OSC 1337)
+│   │   ├── ProtocolPicker.h      # auto-detect terminal graphics protocol
+│   │   ├── Renderer.h            # legacy abstract renderer (Phase 1)
 │   │   ├── AsciiRenderer.h       # legacy Phase 1 ASCII renderer
-│   │   ├── Camera.h              # 3×3 rotation matrix, pan, zoom, project/projectf (aspect-aware)
+│   │   ├── Camera.h              # 3×3 rotation, pan, zoom, projection cache
 │   │   ├── DepthBuffer.h         # Z-buffer for occlusion (header-only)
 │   │   └── ColorMapper.h         # color schemes + 15-color named palette + per-atom overrides
 │   ├── repr/
@@ -116,8 +122,11 @@ All rendering goes through the `Canvas` interface, which provides sub-pixel draw
 | **BrailleCanvas** (default) | 2×4 | 8× | Unicode Braille `⠀`–`⣿` |
 | **BlockCanvas** | 1×2 | 2× | Half-blocks `▀` `▄` `█` |
 | **AsciiCanvas** | 1×1 | 1× | `*` `@` `o` `-` `\|` `/` `\` |
+| **PixelCanvas** | terminal cell pixels | native | Sixel, Kitty, or iTerm2 protocol (auto-detected) |
 
-Switch at runtime: `:set renderer braille|block|ascii`
+**PixelCanvas** features: sphere shading (Half-Lambert), depth fog, frame diff (skip unchanged), adaptive frame skip.
+
+Switch at runtime: `:set renderer braille|block|ascii|pixel`
 
 ### Representations
 
@@ -221,14 +230,16 @@ All keybindings are defined via a trie-based `Keymap`. Defaults in `KeymapManage
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `h` / `←` | `rotate_left` | Rotate molecule left |
-| `j` / `↓` | `rotate_down` | Rotate molecule down |
-| `k` / `↑` | `rotate_up` | Rotate molecule up |
-| `l` / `→` | `rotate_right` | Rotate molecule right |
-| `H` | `pan_left` | Pan view left |
-| `J` | `pan_down` | Pan view down |
-| `K` | `pan_up` | Pan view up |
-| `L` | `pan_right` | Pan view right |
+| `h` / `←` | `rotate_left` | Rotate molecule left (Y-axis) |
+| `j` / `↓` | `rotate_down` | Rotate molecule down (X-axis) |
+| `k` / `↑` | `rotate_up` | Rotate molecule up (X-axis) |
+| `l` / `→` | `rotate_right` | Rotate molecule right (Y-axis) |
+| `<` | `rotate_ccw` | Rotate counter-clockwise (Z-axis) |
+| `>` | `rotate_cw` | Rotate clockwise (Z-axis) |
+| `W` | `pan_up` | Pan view up |
+| `A` | `pan_left` | Pan view left |
+| `S` | `pan_down` | Pan view down |
+| `D` | `pan_right` | Pan view right |
 | `+` / `=` | `zoom_in` | Zoom in |
 | `-` | `zoom_out` | Zoom out |
 | `0` | `reset_view` | Reset camera to default |
@@ -300,6 +311,7 @@ Mnemonic: **s**how → `s` prefix, e**x**it/remove → `x` prefix.
 | `?` | `show_help` | Show keybinding help |
 | `u` | `undo` | Undo last action |
 | `Ctrl+R` | `redo` | Redo |
+| `m` | `toggle_pixel` | Toggle braille ↔ pixel renderer |
 | `q` | `start_macro` | Start/stop macro recording (then press a-z for register) |
 | `@` | `play_macro` | Play macro (then press a-z for register) |
 
@@ -319,10 +331,12 @@ History: `↑` / `↓` arrow keys cycle through previous commands. Pressing `:` 
 | `:color <scheme>` | Color by element/cpk, chain, ss/secondary, bfactor/b, plddt, rainbow, clear |
 | `:color <name> [selection]` | Per-atom color: `:color red chain A` (see Named Color Palette) |
 | `:zoom` | Center and zoom to fit |
-| `:set renderer <type>` | Switch renderer (ascii, braille, block) |
+| `:set renderer <type>` | Switch renderer: ascii, braille, block, pixel/auto (Sixel/Kitty/iTerm2) |
 | `:set backbone_thickness <n>` | Backbone trace thickness, float (alias: `bt`) |
 | `:set wireframe_thickness <n>` | Wireframe line thickness, float (alias: `wt`) |
 | `:set ball_radius <n>` | Ball-and-stick atom radius (alias: `br`) |
+| `:set pan_speed <n>` | Pan speed per keypress (alias: `ps`, default: 5) |
+| `:set fog <0.0-1.0>` | Depth fog strength (0=off, default: 0.35) |
 | `:set panel` | Toggle object panel |
 | `:tabnew [name]` | Create new tab |
 | `:tabclose` | Close current tab |
@@ -557,12 +571,31 @@ set_view (\
 - [x] **Tab completion** — context-aware for commands, filenames, object names, repr names, color names, settings
 - [x] **`$` selection prefix** — `$sele`, `$ala` etc. (changed from `@`)
 
+### Phase 4.5: PixelCanvas + Visual — DONE
+
+- [x] **PixelCanvas** — RGB framebuffer with pluggable GraphicsEncoder (Sixel/Kitty/iTerm2)
+- [x] **ProtocolPicker** — auto-detect terminal graphics protocol via env vars
+- [x] **KittyEncoder** — zlib compression + chunked base64 + atomic image replacement
+- [x] **ITermEncoder** — OSC 1337 inline image protocol with BMP encoding
+- [x] **SixelEncoder** — 6×6×6 color cube quantization + RLE + transparent background
+- [x] **Depth fog** — post-pass atmospheric perspective, configurable via `:set fog`
+- [x] **Sphere shading** — Half-Lambert lighting on filled circles (Spacefill/BallStick)
+- [x] **Line shading** — depth-based intensity on wireframe/backbone/cartoon
+- [x] **Z-axis rotation** — `<`/`>` keys for roll
+- [x] **Projection cache** — `prepareProjection()` per frame, `projectCached()` per vertex
+- [x] **LOD** — skip atom dots for >10K atom wireframe
+- [x] **Adaptive frame skip** — skip 1-3 frames when render > 100ms
+- [x] **Frame diff** — skip identical frames via RGB memcmp
+- [x] **Rainbow color scheme** — per-chain N→C blue→red gradient, `cr` keybinding
+- [x] **Gzipped PDB/CIF** — transparent `.gz` support via gemmi
+- [x] **`-v`/`--version`** — git tag or dev+hash
+
 ### Phase 5: Polish
 
 - [ ] **Help system** — `:help` overlay with keybinding cheat sheet
 - [ ] **Measurement tools** — distance, angle, dihedral display
 - [ ] **Multi-state animation** — `[`/`]` state cycling, play/pause
-- [ ] **Performance** — frustum culling, level-of-detail for large structures
+- [ ] **Ribbon geometry** — Catmull-Rom spline cartoon with Frenet-Serret frames
 - [ ] **Logging** — structured logging to `~/.molterm/molterm.log`
 
 ---

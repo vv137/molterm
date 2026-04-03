@@ -19,14 +19,15 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     if (r < 1) r = 1;
     bool thick = (r > 1);
 
-    // Pre-project all atoms to sub-pixel coords
+    // Pre-project all atoms using cached projection
     struct Projected { float sx, sy, depth; bool valid; };
     std::vector<Projected> proj(atoms.size());
+    cam.prepareProjection(cw, ch, aspect);
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
-        proj[i].valid = cam.projectf(a.x, a.y, a.z, cw, ch,
-                                      proj[i].sx, proj[i].sy, proj[i].depth,
-                                      aspect);
+        cam.projectCached(a.x, a.y, a.z, proj[i].sx, proj[i].sy, proj[i].depth);
+        proj[i].valid = (proj[i].sx >= 0 && proj[i].sx < cw &&
+                         proj[i].sy >= 0 && proj[i].sy < ch);
     }
 
     // Helper: draw a line segment, thin or thick
@@ -63,8 +64,10 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         drawSeg(mx, my, md, x1, y1, p2.depth, c2);
     }
 
-    // Draw atoms on top
+    // Draw atoms on top (skip atom dots for large structures — bonds suffice)
+    bool skipAtomDots = atoms.size() > 10000;
     for (size_t i = 0; i < atoms.size(); ++i) {
+        if (skipAtomDots) break;
         if (!proj[i].valid) continue;
         int sx = static_cast<int>(std::round(proj[i].sx));
         int sy = static_cast<int>(std::round(proj[i].sy));

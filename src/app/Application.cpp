@@ -6,7 +6,8 @@
 #include "molterm/render/AsciiCanvas.h"
 #include "molterm/render/BrailleCanvas.h"
 #include "molterm/render/BlockCanvas.h"
-#include "molterm/render/SixelCanvas.h"
+#include "molterm/render/PixelCanvas.h"
+#include "molterm/render/ProtocolPicker.h"
 #include "molterm/render/ColorMapper.h"
 #include "molterm/repr/WireframeRepr.h"
 #include "molterm/repr/BallStickRepr.h"
@@ -16,6 +17,7 @@
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -51,7 +53,10 @@ void Application::init(int argc, char* argv[]) {
     RendererType rt = RendererType::Braille;
     if (cfg.defaultRenderer == "ascii")  rt = RendererType::Ascii;
     if (cfg.defaultRenderer == "block")  rt = RendererType::Block;
-    if (cfg.defaultRenderer == "sixel")  rt = RendererType::Sixel;
+    if (cfg.defaultRenderer == "pixel" || cfg.defaultRenderer == "auto" ||
+        cfg.defaultRenderer == "sixel" || cfg.defaultRenderer == "kitty" ||
+        cfg.defaultRenderer == "iterm2")
+        rt = RendererType::Pixel;
     setRenderer(rt);
     initRepresentations();
     registerCommands();
@@ -103,15 +108,25 @@ void Application::setRenderer(RendererType type) {
         case RendererType::Block:
             canvas_ = std::make_unique<BlockCanvas>();
             break;
-        case RendererType::Sixel:
-            canvas_ = std::make_unique<SixelCanvas>();
+        case RendererType::Pixel: {
+            auto proto = ProtocolPicker::detect();
+            auto encoder = ProtocolPicker::createEncoder(proto);
+            if (encoder) {
+                canvas_ = std::make_unique<PixelCanvas>(std::move(encoder));
+            } else {
+                // Fallback to braille if no pixel protocol available
+                rendererType_ = RendererType::Braille;
+                canvas_ = std::make_unique<BrailleCanvas>();
+            }
             break;
+        }
     }
 }
 
 int Application::run() {
     running_ = true;
     needsRedraw_ = true;
+    int framesToSkip = 0;
 
     while (running_) {
         if (g_resized) {
@@ -120,7 +135,20 @@ int Application::run() {
         }
 
         if (needsRedraw_) {
-            renderFrame();
+            if (framesToSkip > 0) {
+                // Skip this frame to maintain responsiveness
+                --framesToSkip;
+            } else {
+                auto t0 = std::chrono::steady_clock::now();
+                renderFrame();
+                auto t1 = std::chrono::steady_clock::now();
+                lastFrameMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+                // If frame took > 100ms, skip next 1-3 frames
+                if (lastFrameMs_ > 100) {
+                    framesToSkip = std::min(3, static_cast<int>(lastFrameMs_ / 50));
+                }
+            }
             needsRedraw_ = false;
         }
 
@@ -285,15 +313,23 @@ void Application::handleAction(Action action) {
         case Action::RotateDown:
             if (inspectMode_) { cursorY_ = std::min(layout_.viewportHeight() - 1, cursorY_ + 1); goto inspectUpdate; }
             cam.rotateX(rs);   break;
-        case Action::PanLeft:     cam.pan(-2, 0);    break;
-        case Action::PanRight:    cam.pan(2, 0);     break;
-        case Action::PanUp:       cam.pan(0, -1);    break;
-        case Action::PanDown:     cam.pan(0, 1);     break;
+        case Action::RotateCW:    cam.rotateZ(rs);   break;
+        case Action::RotateCCW:   cam.rotateZ(-rs);  break;
+        case Action::PanLeft:     cam.pan(-cam.panSpeed(), 0);    break;
+        case Action::PanRight:    cam.pan(cam.panSpeed(), 0);     break;
+        case Action::PanUp:       cam.pan(0, -cam.panSpeed());    break;
+        case Action::PanDown:     cam.pan(0, cam.panSpeed());     break;
         case Action::ZoomIn:      cam.zoomBy(1.2f);  break;
         case Action::ZoomOut:     cam.zoomBy(1.0f/1.2f); break;
         case Action::ResetView:   cam.reset(); tab.centerView(); break;
         case Action::CenterSelection: tab.centerView(); break;
-        case Action::Redraw:      break;
+        case Action::Redraw:
+            // Clear screen to remove stale Sixel artifacts, then full redraw
+            fflush(stdout);
+            fprintf(stdout, "\033[2J");
+            fflush(stdout);
+            clearok(curscr, TRUE);
+            break;
 
         // Objects
         case Action::NextObject:    tab.selectNextObject(); break;
@@ -487,7 +523,7 @@ void Application::handleAction(Action action) {
                 } else if (cmdName == "set") {
                     for (const auto& o : {"renderer", "backbone_thickness", "bt",
                                            "wireframe_thickness", "wt", "ball_radius", "br",
-                                           "panel"}) {
+                                           "pan_speed", "ps", "fog", "panel"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
                     }
@@ -567,6 +603,23 @@ void Application::handleAction(Action action) {
             cmdLine_.setMessage(msg.empty() ? "Nothing to redo" : msg);
             break;
         }
+
+        // Renderer toggle (braille ↔ pixel)
+        case Action::TogglePixelRenderer:
+            if (rendererType_ == RendererType::Pixel) {
+                setRenderer(RendererType::Braille);
+                fflush(stdout);
+                fprintf(stdout, "\033[2J");
+                fflush(stdout);
+                clearok(curscr, TRUE);
+                cmdLine_.setMessage("Renderer: BRAILLE");
+            } else {
+                setRenderer(RendererType::Pixel);
+                auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
+                const char* name = (pc && pc->encoder()) ? pc->encoder()->name() : "PIXEL";
+                cmdLine_.setMessage(std::string("Renderer: ") + name);
+            }
+            break;
 
         // Macro recording
         case Action::StartMacro:
@@ -660,7 +713,7 @@ void Application::renderFrame() {
     // Tab bar
     tabBar_.render(layout_.tabBar(), tabMgr_.tabNames(), tabMgr_.currentIndex());
 
-    // Viewport
+    // Viewport — render to canvas but defer pixel flush
     renderViewport();
 
     // Object panel
@@ -678,6 +731,11 @@ void Application::renderFrame() {
 
     layout_.refreshAll();
     doupdate();
+
+    // Pixel graphics must be written AFTER doupdate() so ncurses doesn't overwrite.
+    if (rendererType_ == RendererType::Pixel) {
+        canvas_->flush(layout_.viewport());
+    }
 }
 
 void Application::renderViewport() {
@@ -699,7 +757,17 @@ void Application::renderViewport() {
         }
     }
 
-    canvas_->flush(win);
+    // Apply depth fog on pixel canvas (post-processing before flush)
+    if (rendererType_ == RendererType::Pixel) {
+        auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
+        if (pc && fogStrength_ > 0.0f) pc->applyDepthFog(fogStrength_);
+    }
+
+    // Pixel flush is deferred to after doupdate() in renderFrame().
+    // Other renderers flush here (they go through ncurses).
+    if (rendererType_ != RendererType::Pixel) {
+        canvas_->flush(win);
+    }
 
     // Show history hint overlay when command line is active and empty
     cmdLine_.renderHistoryHint(win);
@@ -741,7 +809,11 @@ void Application::updateStatusBar() {
         case RendererType::Ascii:   rendererName = "ASCII"; break;
         case RendererType::Braille: rendererName = "BRAILLE"; break;
         case RendererType::Block:   rendererName = "BLOCK"; break;
-        case RendererType::Sixel:  rendererName = "SIXEL"; break;
+        case RendererType::Pixel: {
+            auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
+            rendererName = pc && pc->encoder() ? pc->encoder()->name() : "PIXEL";
+            break;
+        }
     }
     rightInfo = rendererName + " | " + tab.name();
 
@@ -750,6 +822,12 @@ void Application::updateStatusBar() {
 }
 
 void Application::onResize() {
+    // Flush any in-flight Sixel output before reinitializing
+    fflush(stdout);
+    // Clear screen to remove stale Sixel images at old coordinates
+    fprintf(stdout, "\033[2J");
+    fflush(stdout);
+
     endwin();
     refresh();
     layout_.resize(screen_.height(), screen_.width());
@@ -762,28 +840,26 @@ void Application::buildProjCache() {
     auto obj = tab.currentObject();
     if (!obj || !obj->visible()) return;
 
-    // Use sub-pixel projection for finer atom discrimination
     int sw = canvas_ ? canvas_->subW() : layout_.viewportWidth();
     int sh = canvas_ ? canvas_->subH() : layout_.viewportHeight();
     float aspect = canvas_ ? canvas_->aspectYX() : 2.0f;
     int scaleX = canvas_ ? canvas_->scaleX() : 1;
     int scaleY = canvas_ ? canvas_->scaleY() : 1;
+    int w = layout_.viewportWidth();
+    int h = layout_.viewportHeight();
 
     const auto& atoms = obj->atoms();
-    const auto& cam = tab.camera();
+    auto& cam = tab.camera();
+    cam.prepareProjection(sw, sh, aspect);
 
+    projCache_.reserve(atoms.size() / 2);
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         float fsx, fsy, depth;
-        if (cam.projectf(atoms[i].x, atoms[i].y, atoms[i].z, sw, sh, fsx, fsy, depth, aspect)) {
-            // Convert sub-pixel to terminal coords for storage
-            int tx = static_cast<int>(fsx) / scaleX;
-            int ty = static_cast<int>(fsy) / scaleY;
-            int w = layout_.viewportWidth();
-            int h = layout_.viewportHeight();
-            if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
-                // Store sub-pixel coords for fine matching
-                projCache_.push_back({i, static_cast<int>(fsx), static_cast<int>(fsy), depth});
-            }
+        cam.projectCached(atoms[i].x, atoms[i].y, atoms[i].z, fsx, fsy, depth);
+        int tx = static_cast<int>(fsx) / scaleX;
+        int ty = static_cast<int>(fsy) / scaleY;
+        if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
+            projCache_.push_back({i, static_cast<int>(fsx), static_cast<int>(fsy), depth});
         }
     }
 }
@@ -1093,12 +1169,14 @@ void Application::registerCommands() {
             return app.layout().panelVisible() ? "Panel visible" : "Panel hidden";
         }
         if (opt == "renderer" || opt == "render") {
-            if (cmd.args.size() < 2) return "Usage: :set renderer <ascii|braille|block|sixel>";
+            if (cmd.args.size() < 2) return "Usage: :set renderer <ascii|braille|block|sixel|pixel|auto>";
             const auto& val = cmd.args[1];
             if (val == "ascii")        app.setRenderer(RendererType::Ascii);
             else if (val == "braille") app.setRenderer(RendererType::Braille);
             else if (val == "block")   app.setRenderer(RendererType::Block);
-            else if (val == "sixel")   app.setRenderer(RendererType::Sixel);
+            else if (val == "pixel" || val == "auto" || val == "sixel" ||
+                     val == "kitty" || val == "iterm2")
+                app.setRenderer(RendererType::Pixel);
             else return "Unknown renderer: " + val;
             return "Renderer set to " + val;
         }
@@ -1131,6 +1209,18 @@ void Application::registerCommands() {
                 return "Ball radius set to " + std::to_string(val);
             }
             return "BallStick repr not found";
+        }
+        if (opt == "pan_speed" || opt == "ps") {
+            if (cmd.args.size() < 2) return "Usage: :set pan_speed <1-20>";
+            float val = std::stof(cmd.args[1]);
+            app.tabs().currentTab().camera().setPanSpeed(val);
+            return "Pan speed set to " + std::to_string(val);
+        }
+        if (opt == "fog") {
+            if (cmd.args.size() < 2) return "Usage: :set fog <0.0-1.0> (0=off)";
+            float val = std::stof(cmd.args[1]);
+            app.setFogStrength(val);
+            return "Fog strength set to " + std::to_string(val);
         }
         return "Unknown option: " + opt;
     }, ":set <option> [value]", "Set option");

@@ -24,6 +24,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         std::string chainId;
     };
     std::vector<CaAtom> cas;
+    cam.prepareProjection(cw, ch, aspect);
 
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
@@ -32,8 +33,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         CaAtom ca;
         ca.idx = i;
         ca.chainId = a.chainId;
-        if (!cam.projectf(a.x, a.y, a.z, cw, ch, ca.sx, ca.sy, ca.depth, aspect))
-            continue;
+        cam.projectCached(a.x, a.y, a.z, ca.sx, ca.sy, ca.depth);
         cas.push_back(ca);
     }
 

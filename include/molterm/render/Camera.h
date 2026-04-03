@@ -12,6 +12,7 @@ public:
     // View manipulation
     void rotateX(float degrees);
     void rotateY(float degrees);
+    void rotateZ(float degrees);
     void pan(float dx, float dy);
     void zoomBy(float factor);
     void reset();
@@ -34,6 +35,12 @@ public:
                   float& sx, float& sy, float& depth,
                   float aspectYX = 1.0f) const;
 
+    // Prepare cached projection constants for a given viewport.
+    // Call once per frame, then use projectCached() per vertex.
+    void prepareProjection(int screenW, int screenH, float aspectYX = 1.0f) const;
+    void projectCached(float wx, float wy, float wz,
+                       float& sx, float& sy, float& depth) const;
+
     // Access internal state (for export)
     const std::array<float, 9>& rotation() const { return rot_; }
     float centerX() const { return centerX_; }
@@ -46,17 +53,31 @@ public:
     void setZoom(float z) { zoom_ = z; }
     float rotationSpeed() const { return rotSpeed_; }
     void setRotationSpeed(float s) { rotSpeed_ = s; }
+    float panSpeed() const { return panSpeed_; }
+    void setPanSpeed(float s) { panSpeed_ = s; }
+
+    // Dirty tracking — check and clear in one call
+    bool isDirty() const { return dirty_; }
+    void clearDirty() { dirty_ = false; }
 
 private:
+    void markDirty() { dirty_ = true; }
     // 3x3 rotation matrix (row-major)
     std::array<float, 9> rot_;
     float centerX_, centerY_, centerZ_;
     float panX_, panY_;
     float zoom_;
     float rotSpeed_;
+    float panSpeed_ = 5.0f;
+    bool dirty_ = true;
 
     void multiplyRotX(float rad);
     void multiplyRotY(float rad);
+    void multiplyRotZ(float rad);
+
+    // Cached projection constants (set by prepareProjection)
+    mutable float projScale_ = 0, projScaleY_ = 0;
+    mutable float projOffX_ = 0, projOffY_ = 0;
 };
 
 } // namespace molterm

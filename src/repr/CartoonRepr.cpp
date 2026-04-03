@@ -26,6 +26,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         std::string chainId;
     };
     std::vector<CaInfo> cas;
+    cam.prepareProjection(cw, ch, aspect);
 
     for (size_t i = 0; i < atoms.size(); ++i) {
         if (atoms[i].name != "CA") continue;
@@ -36,9 +37,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         ca.ss = atoms[i].ssType;
 
         float fsx, fsy;
-        if (!cam.projectf(atoms[i].x, atoms[i].y, atoms[i].z,
-                          cw, ch, fsx, fsy, ca.depth, aspect))
-            continue;
+        cam.projectCached(atoms[i].x, atoms[i].y, atoms[i].z,
+                          fsx, fsy, ca.depth);
 
         ca.sx = static_cast<int>(std::round(fsx));
         ca.sy = static_cast<int>(std::round(fsy));

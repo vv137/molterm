@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -27,7 +28,7 @@ enum class RendererType {
     Ascii,
     Braille,
     Block,
-    Sixel,
+    Pixel,    // PixelCanvas + auto-detected protocol (Sixel/Kitty/iTerm2)
 };
 
 class Application {
@@ -68,6 +69,10 @@ public:
     std::unordered_map<std::string, Selection>& namedSelections() { return namedSelections_; }
 
     bool running() const { return running_; }
+
+    // Fog
+    float fogStrength() const { return fogStrength_; }
+    void setFogStrength(float s) { fogStrength_ = s; }
 
     // Macro recording (Phase 4)
     bool isRecordingMacro() const { return macroRecording_; }
@@ -116,6 +121,8 @@ private:
 
     bool running_ = false;
     bool needsRedraw_ = true;
+    int64_t lastFrameMs_ = 0;
+    float fogStrength_ = 0.35f;
 
     // Macro recording state
     bool macroRecording_ = false;

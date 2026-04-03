@@ -37,10 +37,12 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
     std::vector<ProjAtom> projected;
     projected.reserve(atoms.size());
 
+    cam.prepareProjection(cw, ch, aspect);
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         const auto& a = atoms[i];
         float fsx, fsy, depth;
-        if (!cam.projectf(a.x, a.y, a.z, cw, ch, fsx, fsy, depth, aspect))
+        cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);
+        if (fsx < -100 || fsx > cw + 100 || fsy < -100 || fsy > ch + 100)
             continue;
 
         // Radius in sub-pixels: VDW radius * scale * camera zoom * canvas scale

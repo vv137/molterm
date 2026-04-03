@@ -21,11 +21,11 @@ void BallStickRepr::render(const MolObject& mol, const Camera& cam,
 
     struct Projected { float sx, sy, depth; bool valid; };
     std::vector<Projected> proj(atoms.size());
+    cam.prepareProjection(cw, ch, aspect);
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
-        proj[i].valid = cam.projectf(a.x, a.y, a.z, cw, ch,
-                                      proj[i].sx, proj[i].sy, proj[i].depth,
-                                      aspect);
+        cam.projectCached(a.x, a.y, a.z, proj[i].sx, proj[i].sy, proj[i].depth);
+        proj[i].valid = true;
     }
 
     // Draw bonds as thin lines

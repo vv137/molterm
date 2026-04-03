@@ -88,7 +88,11 @@ set(MOLTERM_SOURCES
     src/render/AsciiCanvas.cpp
     src/render/BrailleCanvas.cpp
     src/render/BlockCanvas.cpp
-    src/render/SixelCanvas.cpp
+    src/render/PixelCanvas.cpp
+    src/render/SixelEncoder.cpp
+    src/render/KittyEncoder.cpp
+    src/render/ITermEncoder.cpp
+    src/render/ProtocolPicker.cpp
     src/render/AsciiRenderer.cpp
     # Repr
     src/repr/WireframeRepr.cpp
@@ -123,9 +127,12 @@ target_include_directories(molterm PRIVATE
     $<$<NOT:$<BOOL:${NCURSESW_FOUND}>>:${CURSES_INCLUDE_DIR}>
 )
 
+find_package(ZLIB REQUIRED)
+
 target_link_libraries(molterm PRIVATE
     gemmi::gemmi_cpp
     tomlplusplus::tomlplusplus
+    ZLIB::ZLIB
     $<IF:$<BOOL:${NCURSESW_FOUND}>,PkgConfig::NCURSESW,${CURSES_LIBRARIES}>
 )
 

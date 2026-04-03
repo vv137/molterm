@@ -50,10 +50,12 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {KEY_RIGHT}, Action::RotateRight, "Rotate right");
     km.bind(Mode::Normal, {KEY_UP},    Action::RotateUp,    "Rotate up");
     km.bind(Mode::Normal, {KEY_DOWN},  Action::RotateDown,  "Rotate down");
-    km.bind(Mode::Normal, {'H'},       Action::PanLeft,     "Pan left");
-    km.bind(Mode::Normal, {'L'},       Action::PanRight,    "Pan right");
-    km.bind(Mode::Normal, {'K'},       Action::PanUp,       "Pan up");
-    km.bind(Mode::Normal, {'J'},       Action::PanDown,     "Pan down");
+    km.bind(Mode::Normal, {'W'},       Action::PanUp,       "Pan up");
+    km.bind(Mode::Normal, {'A'},       Action::PanLeft,     "Pan left");
+    km.bind(Mode::Normal, {'S'},       Action::PanDown,     "Pan down");
+    km.bind(Mode::Normal, {'D'},       Action::PanRight,    "Pan right");
+    km.bind(Mode::Normal, {'<'},       Action::RotateCCW,   "Rotate CCW (Z-axis)");
+    km.bind(Mode::Normal, {'>'},       Action::RotateCW,    "Rotate CW (Z-axis)");
     km.bind(Mode::Normal, {'+'},       Action::ZoomIn,      "Zoom in");
     km.bind(Mode::Normal, {'='},       Action::ZoomIn,      "Zoom in");
     km.bind(Mode::Normal, {'-'},       Action::ZoomOut,     "Zoom out");
@@ -111,6 +113,9 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'y', 'y'},  Action::YankObject,   "Yank object");
     km.bind(Mode::Normal, {'p'},       Action::PasteObject,  "Paste object");
     km.bind(Mode::Normal, {'r'},       Action::RenameObject, "Rename object");
+
+    // Renderer toggle
+    km.bind(Mode::Normal, {'m'},       Action::TogglePixelRenderer, "Toggle braille/pixel");
 
     // Macro recording
     km.bind(Mode::Normal, {'q'},       Action::StartMacro,  "Record/stop macro");
