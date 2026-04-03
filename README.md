@@ -312,6 +312,7 @@ Mnemonic: **s**how → `s` prefix, e**x**it/remove → `x` prefix.
 | `u` | `undo` | Undo last action |
 | `Ctrl+R` | `redo` | Redo |
 | `m` | `toggle_pixel` | Toggle braille ↔ pixel renderer |
+| `P` | `screenshot` | Save viewport as PNG (pixel renderer) |
 | `q` | `start_macro` | Start/stop macro recording (then press a-z for register) |
 | `@` | `play_macro` | Play macro (then press a-z for register) |
 
@@ -330,13 +331,17 @@ History: `↑` / `↓` arrow keys cycle through previous commands. Pressing `:` 
 | `:hide <repr\|all>` | Hide repr or all |
 | `:color <scheme>` | Color by element/cpk, chain, ss/secondary, bfactor/b, plddt, rainbow, clear |
 | `:color <name> [selection]` | Per-atom color: `:color red chain A` (see Named Color Palette) |
-| `:zoom` | Center and zoom to fit |
+| `:center [selection]` | Center camera on selection (or all atoms) |
+| `:zoom [selection]` | Center and zoom to fit selection |
+| `:orient [selection]` | Align principal axes + center + zoom |
+| `:screenshot [file.png]` | Save viewport as PNG (pixel renderer, transparent bg) |
 | `:set renderer <type>` | Switch renderer: ascii, braille, block, pixel/auto (Sixel/Kitty/iTerm2) |
 | `:set backbone_thickness <n>` | Backbone trace thickness, float (alias: `bt`) |
 | `:set wireframe_thickness <n>` | Wireframe line thickness, float (alias: `wt`) |
 | `:set ball_radius <n>` | Ball-and-stick atom radius (alias: `br`) |
 | `:set pan_speed <n>` | Pan speed per keypress (alias: `ps`, default: 5) |
 | `:set fog <0.0-1.0>` | Depth fog strength (0=off, default: 0.35) |
+| `:set auto_center` | Toggle auto-center on load (default: on) |
 | `:set panel` | Toggle object panel |
 | `:tabnew [name]` | Create new tab |
 | `:tabclose` | Close current tab |

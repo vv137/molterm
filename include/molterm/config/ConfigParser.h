@@ -18,6 +18,7 @@ struct Config {
     int ballRadius = 3;
     std::string defaultColorScheme = "element";
     bool showPanel = false;
+    bool autoCenter = true;
 };
 
 class ConfigParser {

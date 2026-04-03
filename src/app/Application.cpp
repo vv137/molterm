@@ -58,6 +58,7 @@ void Application::init(int argc, char* argv[]) {
         cfg.defaultRenderer == "iterm2")
         rt = RendererType::Pixel;
     setRenderer(rt);
+    autoCenter_ = cfg.autoCenter;
     initRepresentations();
     registerCommands();
 
@@ -170,7 +171,7 @@ std::string Application::loadFile(const std::string& path) {
 
         auto ptr = store_.add(std::move(obj));
         tabMgr_.currentTab().addObject(ptr);
-        tabMgr_.currentTab().centerView();
+        if (autoCenter_) tabMgr_.currentTab().centerView();
         needsRedraw_ = true;
 
         return "Loaded " + name + ": " +
@@ -521,7 +522,7 @@ void Application::handleAction(Action action) {
                 } else if (cmdName == "set") {
                     for (const auto& o : {"renderer", "backbone_thickness", "bt",
                                            "wireframe_thickness", "wt", "ball_radius", "br",
-                                           "pan_speed", "ps", "fog", "panel"}) {
+                                           "pan_speed", "ps", "fog", "auto_center", "panel"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
                     }
@@ -1161,10 +1162,125 @@ void Application::registerCommands() {
     }, ":color <scheme|name> [selection]", "Set coloring scheme or per-atom color");
 
     // :zoom
-    cmdRegistry_.registerCmd("zoom", [](Application& app, const ParsedCommand&) -> std::string {
-        app.tabs().currentTab().centerView();
-        return "Centered view";
-    }, ":zoom", "Center and zoom to fit");
+    // Helper: get atom indices from optional selection args
+    auto resolveAtoms = [](Application& app, const ParsedCommand& cmd, int startArg = 0)
+        -> std::pair<std::vector<int>, std::string> {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {{}, "No object selected"};
+        if (cmd.args.size() <= static_cast<size_t>(startArg)) {
+            // All atoms
+            std::vector<int> all(obj->atoms().size());
+            for (int i = 0; i < static_cast<int>(obj->atoms().size()); ++i) all[i] = i;
+            return {all, ""};
+        }
+        std::string expr;
+        for (size_t i = startArg; i < cmd.args.size(); ++i) {
+            if (i > static_cast<size_t>(startArg)) expr += " ";
+            expr += cmd.args[i];
+        }
+        auto sel = app.parseSelection(expr, *obj);
+        if (sel.empty()) return {{}, "No atoms match: " + expr};
+        return {std::vector<int>(sel.indices().begin(), sel.indices().end()), ""};
+    };
+
+    // Helper: compute center and span from atom indices
+    auto computeGeometry = [](const MolObject& obj, const std::vector<int>& indices)
+        -> std::tuple<float, float, float, float> {
+        const auto& atoms = obj.atoms();
+        float cx = 0, cy = 0, cz = 0;
+        float minX = std::numeric_limits<float>::max(), maxX = std::numeric_limits<float>::lowest();
+        float minY = minX, maxY = maxX, minZ = minX, maxZ = maxX;
+        for (int i : indices) {
+            cx += atoms[i].x; cy += atoms[i].y; cz += atoms[i].z;
+            if (atoms[i].x < minX) minX = atoms[i].x; if (atoms[i].x > maxX) maxX = atoms[i].x;
+            if (atoms[i].y < minY) minY = atoms[i].y; if (atoms[i].y > maxY) maxY = atoms[i].y;
+            if (atoms[i].z < minZ) minZ = atoms[i].z; if (atoms[i].z > maxZ) maxZ = atoms[i].z;
+        }
+        float n = static_cast<float>(indices.size());
+        cx /= n; cy /= n; cz /= n;
+        float span = std::max({maxX - minX, maxY - minY, maxZ - minZ});
+        return {cx, cy, cz, span};
+    };
+
+    // :center [selection]
+    cmdRegistry_.registerCmd("center", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto [indices, err] = resolveAtoms(app, cmd);
+        if (!err.empty()) return err;
+        auto obj = app.tabs().currentTab().currentObject();
+        auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
+        app.tabs().currentTab().camera().setCenter(cx, cy, cz);
+        return "Centered on " + std::to_string(indices.size()) + " atoms";
+    }, ":center [selection]", "Center view on selection");
+
+    // :zoom [selection]
+    cmdRegistry_.registerCmd("zoom", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto [indices, err] = resolveAtoms(app, cmd);
+        if (!err.empty()) return err;
+        auto obj = app.tabs().currentTab().currentObject();
+        auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
+        app.tabs().currentTab().camera().setCenter(cx, cy, cz);
+        if (span > 0.0f) app.tabs().currentTab().camera().setZoom(40.0f / span);
+        return "Zoomed to " + std::to_string(indices.size()) + " atoms";
+    }, ":zoom [selection]", "Center and zoom to fit selection");
+
+    // :orient [selection] — align principal axes
+    cmdRegistry_.registerCmd("orient", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto [indices, err] = resolveAtoms(app, cmd);
+        if (!err.empty()) return err;
+        auto obj = app.tabs().currentTab().currentObject();
+        auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
+        auto& cam = app.tabs().currentTab().camera();
+        cam.setCenter(cx, cy, cz);
+        if (span > 0.0f) cam.setZoom(40.0f / span);
+
+        // Compute covariance matrix of atom positions (relative to center)
+        // then find principal axis via power iteration
+        const auto& atoms = obj->atoms();
+        double cov[3][3] = {};
+        for (int i : indices) {
+            double dx = atoms[i].x - cx, dy = atoms[i].y - cy, dz = atoms[i].z - cz;
+            cov[0][0] += dx * dx; cov[0][1] += dx * dy; cov[0][2] += dx * dz;
+            cov[1][0] += dy * dx; cov[1][1] += dy * dy; cov[1][2] += dy * dz;
+            cov[2][0] += dz * dx; cov[2][1] += dz * dy; cov[2][2] += dz * dz;
+        }
+
+        // Power iteration for dominant eigenvector (longest axis)
+        double v[3] = {1.0, 0.5, 0.25};
+        for (int iter = 0; iter < 50; ++iter) {
+            double nv[3] = {
+                cov[0][0]*v[0] + cov[0][1]*v[1] + cov[0][2]*v[2],
+                cov[1][0]*v[0] + cov[1][1]*v[1] + cov[1][2]*v[2],
+                cov[2][0]*v[0] + cov[2][1]*v[1] + cov[2][2]*v[2],
+            };
+            double len = std::sqrt(nv[0]*nv[0] + nv[1]*nv[1] + nv[2]*nv[2]);
+            if (len < 1e-10) break;
+            v[0] = nv[0] / len; v[1] = nv[1] / len; v[2] = nv[2] / len;
+        }
+
+        // Build rotation matrix: align longest axis to screen X
+        // v = principal axis (longest), compute orthogonal basis
+        double ax = v[0], ay = v[1], az = v[2];
+        // Second axis: cross(principal, Z) or cross(principal, Y) if parallel
+        double bx, by, bz;
+        if (std::abs(az) < 0.9) {
+            bx = ay; by = -ax; bz = 0;
+        } else {
+            bx = 0; by = az; bz = -ay;
+        }
+        double blen = std::sqrt(bx*bx + by*by + bz*bz);
+        bx /= blen; by /= blen; bz /= blen;
+        // Third axis: cross(a, b)
+        double tx = ay*bz - az*by, ty = az*bx - ax*bz, tz = ax*by - ay*bx;
+
+        // Set rotation: row 0 = principal (X), row 1 = second (Y), row 2 = third (Z)
+        std::array<float, 9> rot;
+        rot[0] = static_cast<float>(ax); rot[1] = static_cast<float>(ay); rot[2] = static_cast<float>(az);
+        rot[3] = static_cast<float>(bx); rot[4] = static_cast<float>(by); rot[5] = static_cast<float>(bz);
+        rot[6] = static_cast<float>(tx); rot[7] = static_cast<float>(ty); rot[8] = static_cast<float>(tz);
+        cam.setRotation(rot);
+
+        return "Oriented " + std::to_string(indices.size()) + " atoms";
+    }, ":orient [selection]", "Center, zoom, and align principal axes");
 
     // :set <option> [value]
     cmdRegistry_.registerCmd("set", [](Application& app, const ParsedCommand& cmd) -> std::string {
@@ -1227,6 +1343,10 @@ void Application::registerCommands() {
             float val = std::stof(cmd.args[1]);
             app.setFogStrength(val);
             return "Fog strength set to " + std::to_string(val);
+        }
+        if (opt == "auto_center") {
+            app.setAutoCenter(!app.autoCenter());
+            return std::string("Auto-center on load: ") + (app.autoCenter() ? "on" : "off");
         }
         return "Unknown option: " + opt;
     }, ":set <option> [value]", "Set option");

@@ -157,8 +157,10 @@ void PixelCanvas::drawChar(int, int, float, char, int) {
 // ── Post-processing ─────────────────────────────────────────────────────────
 
 void PixelCanvas::applyDepthFog(float strength, uint8_t fogR, uint8_t fogG, uint8_t fogB) {
+    preFogRgb_ = rgb_;
+
     if (pixW_ <= 0 || pixH_ <= 0 || strength <= 0.0f) return;
-    if (zMax_ <= zMin_) return;  // nothing rendered or flat
+    if (zMax_ <= zMin_) return;
 
     float invRange = strength / (zMax_ - zMin_);
 
@@ -204,9 +206,10 @@ static void pngWriteChunk(std::ofstream& f, const char* type,
 bool PixelCanvas::savePNG(const std::string& path) const {
     if (pixW_ <= 0 || pixH_ <= 0) return false;
 
-    // After flush(), rgb_ may have been swapped with prevRgb_.
-    // Use whichever has actual pixel data (non-zero).
+    // Use pre-fog image for brighter PNG export.
+    // Fall back to prevRgb_ (post-fog but pre-swap), then rgb_.
     const std::vector<uint8_t>& src =
+        (!preFogRgb_.empty() && preFogRgb_.size() == static_cast<size_t>(pixW_ * pixH_ * 3)) ? preFogRgb_ :
         (!prevRgb_.empty() && prevRgb_.size() == rgb_.size()) ? prevRgb_ : rgb_;
 
     std::ofstream f(path, std::ios::binary);

@@ -48,7 +48,7 @@ public:
     void applyDepthFog(float strength = 0.35f,
                        uint8_t fogR = 30, uint8_t fogG = 35, uint8_t fogB = 50);
 
-    // Save current framebuffer as PNG
+    // Save current framebuffer as PNG (captures pre-fog on next frame)
     bool savePNG(const std::string& path) const;
 
     // Swap encoder at runtime
@@ -70,7 +70,8 @@ private:
     std::vector<uint8_t> prevRgb_;
 
     DepthBuffer zbuf_;
-    float zMin_ = 0, zMax_ = 0;  // tracked during rendering
+    float zMin_ = 0, zMax_ = 0;
+    std::vector<uint8_t> preFogRgb_;  // snapshot before fog for PNG export
 
     void queryCellSize();
 

@@ -50,7 +50,8 @@ public:
     float panYOffset() const { return panY_; }
 
     float zoom() const { return zoom_; }
-    void setZoom(float z) { zoom_ = z; }
+    void setZoom(float z) { zoom_ = z; markDirty(); }
+    void setRotation(const std::array<float, 9>& r) { rot_ = r; markDirty(); }
     float rotationSpeed() const { return rotSpeed_; }
     void setRotationSpeed(float s) { rotSpeed_ = s; }
     float panSpeed() const { return panSpeed_; }

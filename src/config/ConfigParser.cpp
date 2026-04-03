@@ -116,6 +116,8 @@ Config ConfigParser::loadConfig() {
             cfg.defaultColorScheme = *v;
         if (auto v = tbl["panel"].value<bool>())
             cfg.showPanel = *v;
+        if (auto v = tbl["auto_center"].value<bool>())
+            cfg.autoCenter = *v;
     } catch (const toml::parse_error& e) {
         std::cerr << "molterm: error in " << path << ": " << e.what() << "\n";
     } catch (...) {}

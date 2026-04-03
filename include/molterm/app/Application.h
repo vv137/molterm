@@ -73,9 +73,11 @@ public:
 
     bool running() const { return running_; }
 
-    // Fog
+    // Settings
     float fogStrength() const { return fogStrength_; }
     void setFogStrength(float s) { fogStrength_ = s; }
+    bool autoCenter() const { return autoCenter_; }
+    void setAutoCenter(bool v) { autoCenter_ = v; }
 
     // Macro recording (Phase 4)
     bool isRecordingMacro() const { return macroRecording_; }
@@ -127,6 +129,7 @@ private:
     int64_t lastFrameMs_ = 0;
     int framesToSkip_ = 0;
     float fogStrength_ = 0.35f;
+    bool autoCenter_ = true;
 
     // Macro recording state
     bool macroRecording_ = false;
