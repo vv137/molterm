@@ -13,9 +13,12 @@
 #include "molterm/repr/BackboneRepr.h"
 #include "molterm/repr/SpacefillRepr.h"
 #include "molterm/repr/CartoonRepr.h"
+#include "molterm/io/SessionExporter.h"
+#include "molterm/config/ConfigParser.h"
 
-#include <climits>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <limits>
 #include <signal.h>
 
@@ -38,10 +41,18 @@ void Application::init(int argc, char* argv[]) {
     layout_.init(screen_.height(), screen_.width());
 
     keymapMgr_.loadDefaults();
+    keymapMgr_.loadFromFile();  // Override with ~/.molterm/keymap.toml
     inputHandler_ = std::make_unique<InputHandler>(keymapMgr_.keymap());
 
-    // Default renderer: Braille
-    setRenderer(RendererType::Braille);
+    // Apply config from ~/.molterm/config.toml
+    auto cfg = ConfigParser::loadConfig();
+
+    // Default renderer from config (or Braille)
+    RendererType rt = RendererType::Braille;
+    if (cfg.defaultRenderer == "ascii")  rt = RendererType::Ascii;
+    if (cfg.defaultRenderer == "block")  rt = RendererType::Block;
+    if (cfg.defaultRenderer == "sixel")  rt = RendererType::Sixel;
+    setRenderer(rt);
     initRepresentations();
     registerCommands();
 
@@ -154,6 +165,32 @@ void Application::processInput() {
         return;
     }
 
+    // Macro register selection: awaiting a register key after 'q' or '@'
+    if (macroAwaitingRegister_) {
+        macroAwaitingRegister_ = false;
+        if (key >= 'a' && key <= 'z') {
+            if (macroRecording_) {
+                stopMacroRecord();
+            } else {
+                startMacroRecord(static_cast<char>(key));
+            }
+        } else {
+            cmdLine_.setMessage("Invalid macro register (use a-z)");
+        }
+        needsRedraw_ = true;
+        return;
+    }
+    if (macroPlayAwaitingRegister_) {
+        macroPlayAwaitingRegister_ = false;
+        if (key >= 'a' && key <= 'z') {
+            playMacro(static_cast<char>(key));
+        } else {
+            cmdLine_.setMessage("Invalid macro register (use a-z)");
+        }
+        needsRedraw_ = true;
+        return;
+    }
+
     Mode mode = inputHandler_->mode();
 
     if (mode == Mode::Command || mode == Mode::Search) {
@@ -171,6 +208,7 @@ void Application::processInput() {
         Action action = inputHandler_->processKey(key);
         if (action != Action::None) {
             handleAction(action);
+            recordAction(action);
         }
     }
 }
@@ -378,11 +416,95 @@ void Application::handleAction(Action action) {
             break;
         }
         case Action::Autocomplete: {
-            auto completions = cmdRegistry_.complete(cmdLine_.input());
-            if (completions.size() == 1) {
-                cmdLine_.clearInput();
-                for (char c : completions[0]) cmdLine_.insertChar(c);
-                cmdLine_.insertChar(' ');
+            std::string input = cmdLine_.input();
+            // Find first space — determines if completing command or argument
+            auto spacePos = input.find(' ');
+            if (spacePos == std::string::npos) {
+                // Completing command name
+                auto completions = cmdRegistry_.complete(input);
+                if (completions.size() == 1) {
+                    cmdLine_.clearInput();
+                    for (char c : completions[0]) cmdLine_.insertChar(c);
+                    cmdLine_.insertChar(' ');
+                } else if (completions.size() > 1) {
+                    std::string msg;
+                    for (const auto& c : completions) msg += c + " ";
+                    cmdLine_.setMessage(msg);
+                }
+            } else {
+                // Completing argument — context-dependent
+                std::string cmdName = input.substr(0, spacePos);
+                std::string partial = input.substr(input.rfind(' ') + 1);
+
+                std::vector<std::string> candidates;
+
+                if (cmdName == "load" || cmdName == "e" || cmdName == "export") {
+                    // Filename completion via std::filesystem
+                    namespace fs = std::filesystem;
+                    std::string dir = ".";
+                    std::string prefix = partial;
+                    auto lastSlash = partial.rfind('/');
+                    if (lastSlash != std::string::npos) {
+                        dir = partial.substr(0, lastSlash);
+                        if (dir.empty()) dir = "/";
+                        prefix = partial.substr(lastSlash + 1);
+                    }
+                    try {
+                        for (const auto& entry : fs::directory_iterator(dir)) {
+                            std::string name = entry.path().filename().string();
+                            if (name.find(prefix) == 0) {
+                                std::string full = (lastSlash != std::string::npos)
+                                    ? dir + "/" + name : name;
+                                if (entry.is_directory()) full += "/";
+                                candidates.push_back(full);
+                            }
+                        }
+                    } catch (...) {}
+                } else if (cmdName == "delete" || cmdName == "rename" ||
+                           cmdName == "align" || cmdName == "mmalign" || cmdName == "super") {
+                    // Object name completion
+                    for (const auto& n : store_.names()) {
+                        if (n.find(partial) == 0) candidates.push_back(n);
+                    }
+                } else if (cmdName == "show" || cmdName == "hide") {
+                    // Repr name completion
+                    for (const auto& r : {"wireframe", "wire", "ballstick", "sticks",
+                                           "spacefill", "spheres", "cartoon", "ribbon",
+                                           "backbone", "trace", "all"}) {
+                        std::string rs(r);
+                        if (rs.find(partial) == 0) candidates.push_back(rs);
+                    }
+                } else if (cmdName == "color") {
+                    // Color name/scheme completion
+                    for (const auto& c : {"element", "cpk", "chain", "ss", "secondary",
+                                           "bfactor", "b", "plddt", "clear",
+                                           "red", "green", "blue", "yellow", "magenta",
+                                           "cyan", "white", "orange", "pink", "lime",
+                                           "teal", "purple", "salmon", "slate", "gray"}) {
+                        std::string cs(c);
+                        if (cs.find(partial) == 0) candidates.push_back(cs);
+                    }
+                } else if (cmdName == "set") {
+                    for (const auto& o : {"renderer", "backbone_thickness", "bt",
+                                           "wireframe_thickness", "wt", "ball_radius", "br",
+                                           "panel"}) {
+                        std::string os(o);
+                        if (os.find(partial) == 0) candidates.push_back(os);
+                    }
+                }
+
+                if (candidates.size() == 1) {
+                    // Replace partial with completed word
+                    std::string base = input.substr(0, input.rfind(' ') + 1);
+                    cmdLine_.clearInput();
+                    for (char c : base) cmdLine_.insertChar(c);
+                    for (char c : candidates[0]) cmdLine_.insertChar(c);
+                    cmdLine_.insertChar(' ');
+                } else if (candidates.size() > 1) {
+                    std::string msg;
+                    for (const auto& c : candidates) msg += c + " ";
+                    cmdLine_.setMessage(msg);
+                }
             }
             break;
         }
@@ -443,6 +565,28 @@ void Application::handleAction(Action action) {
         case Action::Redo: {
             std::string msg = undoStack_.redo();
             cmdLine_.setMessage(msg.empty() ? "Nothing to redo" : msg);
+            break;
+        }
+
+        // Macro recording
+        case Action::StartMacro:
+            if (macroRecording_) {
+                // 'q' again while recording → stop (register already known)
+                stopMacroRecord();
+            } else {
+                macroAwaitingRegister_ = true;
+                cmdLine_.setMessage("Record macro: press register (a-z)");
+            }
+            break;
+        case Action::PlayMacro:
+            macroPlayAwaitingRegister_ = true;
+            cmdLine_.setMessage("Play macro: press register (a-z)");
+            break;
+
+        // pLDDT coloring
+        case Action::ColorByPLDDT: {
+            auto obj = tab.currentObject();
+            if (obj) obj->setColorScheme(ColorScheme::PLDDT);
             break;
         }
 
@@ -721,6 +865,45 @@ void Application::executeSearch(const std::string& query) {
     }
 }
 
+// ── Macro recording ─────────────────────────────────────────────────────────
+
+void Application::startMacroRecord(char reg) {
+    macroRecording_ = true;
+    macroRegister_ = reg;
+    currentMacro_.clear();
+    cmdLine_.setMessage(std::string("Recording @") + reg + "...");
+}
+
+void Application::stopMacroRecord() {
+    if (!macroRecording_) return;
+    macros_[macroRegister_] = std::move(currentMacro_);
+    cmdLine_.setMessage(std::string("Recorded @") + macroRegister_ +
+                        " (" + std::to_string(macros_[macroRegister_].size()) + " actions)");
+    macroRecording_ = false;
+    macroRegister_ = '\0';
+    currentMacro_.clear();
+}
+
+void Application::recordAction(Action action) {
+    if (!macroRecording_) return;
+    // Don't record meta-actions that control recording itself
+    if (action == Action::StartMacro || action == Action::PlayMacro) return;
+    currentMacro_.push_back(action);
+}
+
+void Application::playMacro(char reg) {
+    auto it = macros_.find(reg);
+    if (it == macros_.end() || it->second.empty()) {
+        cmdLine_.setMessage(std::string("Macro @") + reg + " is empty");
+        return;
+    }
+    for (Action a : it->second) {
+        handleAction(a);
+    }
+    cmdLine_.setMessage(std::string("Played @") + reg +
+                        " (" + std::to_string(it->second.size()) + " actions)");
+}
+
 void Application::registerCommands() {
     // :q / :quit
     cmdRegistry_.registerCmd("q", [](Application& app, const ParsedCommand& cmd) -> std::string {
@@ -847,6 +1030,11 @@ void Application::registerCommands() {
             obj->setColorScheme(ColorScheme::BFactor);
             obj->clearAtomColors();
             return "Coloring by B-factor";
+        }
+        if (first == "plddt") {
+            obj->setColorScheme(ColorScheme::PLDDT);
+            obj->clearAtomColors();
+            return "Coloring by pLDDT (AlphaFold confidence)";
         }
         if (first == "clear" || first == "reset") {
             obj->clearAtomColors();
@@ -1154,6 +1342,74 @@ void Application::registerCommands() {
     cmdRegistry_.registerCmd("super", [doAlign](Application& app, const ParsedCommand& cmd) -> std::string {
         return doAlign(app, cmd, false);
     }, ":super <obj> [sel] to <obj> [sel]", "Superpose structures (alias for align)");
+
+    // :fetch <pdb_id> — download from RCSB PDB or AlphaFold DB
+    cmdRegistry_.registerCmd("fetch", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "Usage: :fetch <pdb_id> or :fetch afdb:<uniprot_id>";
+
+        std::string id = cmd.args[0];
+        std::string url;
+        std::string filename;
+
+        // AlphaFold DB: "afdb:P12345" or "AFDB:P12345" or "AF-P12345"
+        bool isAF = false;
+        if (id.size() > 5 && (id.substr(0, 5) == "afdb:" || id.substr(0, 5) == "AFDB:")) {
+            std::string uniprotId = id.substr(5);
+            url = "https://alphafold.ebi.ac.uk/files/AF-" + uniprotId + "-F1-model_v6.cif";
+            filename = "AF-" + uniprotId + ".cif";
+            isAF = true;
+        } else if (id.size() > 3 && id.substr(0, 3) == "AF-") {
+            // Direct AF ID like AF-P12345-F1
+            url = "https://alphafold.ebi.ac.uk/files/" + id + "-model_v6.cif";
+            filename = id + ".cif";
+            isAF = true;
+        } else {
+            // RCSB PDB: 4-character PDB ID
+            std::string lower = id;
+            for (auto& c : lower) c = static_cast<char>(std::tolower(c));
+            url = "https://files.rcsb.org/download/" + lower + ".cif";
+            filename = lower + ".cif";
+        }
+
+        // Download to /tmp
+        std::string tmpPath = "/tmp/molterm_" + filename;
+        std::string curlCmd = "curl -sL -o " + tmpPath + " -w '%{http_code}' '" + url + "'";
+        FILE* pipe = popen(curlCmd.c_str(), "r");
+        if (!pipe) return "Failed to run curl";
+
+        char buf[64];
+        std::string httpCode;
+        while (fgets(buf, sizeof(buf), pipe)) httpCode += buf;
+        int ret = pclose(pipe);
+
+        if (ret != 0 || httpCode.find("200") == std::string::npos) {
+            std::string src = isAF ? "AlphaFold DB" : "RCSB PDB";
+            return "Failed to fetch " + id + " from " + src + " (HTTP " + httpCode + ")";
+        }
+
+        std::string result = app.loadFile(tmpPath);
+        std::remove(tmpPath.c_str());
+        std::string src = isAF ? "AlphaFold DB" : "RCSB PDB";
+        return "Fetched " + id + " from " + src + " | " + result;
+    }, ":fetch <pdb_id|afdb:uniprot_id>", "Download structure from RCSB PDB or AlphaFold DB");
+
+    // :export <file.pml> — export PyMOL script
+    cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "Usage: :export <file.pml>";
+        const std::string& path = cmd.args[0];
+
+        // Validate extension
+        if (path.size() < 5 || path.substr(path.size() - 4) != ".pml")
+            return "Export file must have .pml extension";
+
+        auto& tab = app.tabs().currentTab();
+        if (tab.objects().empty()) return "No objects to export";
+
+        int vpW = app.layout().viewportWidth();
+        int vpH = app.layout().viewportHeight();
+        std::string result = SessionExporter::exportPML(path, tab, vpW, vpH);
+        return result;
+    }, ":export <file.pml>", "Export session as PyMOL script");
 }
 
 } // namespace molterm

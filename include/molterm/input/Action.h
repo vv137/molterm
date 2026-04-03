@@ -88,6 +88,11 @@ enum class Action {
 
     // Search mode
     ExecuteSearch,
+
+    // Macro recording (Phase 4)
+    StartMacro,
+    PlayMacro,
+    ColorByPLDDT,
 };
 
 inline std::string actionName(Action a) {
@@ -125,10 +130,104 @@ inline std::string actionName(Action a) {
         case Action::ToggleVisible:  return "toggle_visible";
         case Action::NextObject:     return "next_object";
         case Action::PrevObject:     return "prev_object";
-        case Action::Inspect:        return "show_help";
+        case Action::Inspect:        return "inspect";
         case Action::ShowHelp:       return "show_help";
+        case Action::DeleteObject:   return "delete_object";
+        case Action::YankObject:     return "yank_object";
+        case Action::PasteObject:    return "paste_object";
+        case Action::RenameObject:   return "rename_object";
+        case Action::TogglePanel:    return "toggle_panel";
+        case Action::HideWireframe:  return "hide_wireframe";
+        case Action::HideBackbone:   return "hide_backbone";
+        case Action::MoveToTab:      return "move_to_tab";
+        case Action::CopyToTab:      return "copy_to_tab";
+        case Action::SearchNext:     return "search_next";
+        case Action::SearchPrev:     return "search_prev";
+        case Action::Undo:           return "undo";
+        case Action::Redo:           return "redo";
+        case Action::RepeatLast:     return "repeat_last";
+        case Action::CenterSelection: return "center_selection";
+        case Action::Redraw:         return "redraw";
+        case Action::ExecuteCommand: return "execute";
+        case Action::Autocomplete:   return "autocomplete";
+        case Action::HistoryPrev:    return "history_prev";
+        case Action::HistoryNext:    return "history_next";
+        case Action::DeleteWord:     return "delete_word";
+        case Action::ClearLine:      return "clear_line";
+        case Action::ExecuteSearch:  return "execute_search";
+        case Action::StartMacro:     return "start_macro";
+        case Action::PlayMacro:      return "play_macro";
+        case Action::ColorByPLDDT:   return "color_by_plddt";
+        case Action::ColorByResidue: return "color_by_residue";
+        case Action::PrevState:      return "prev_state";
+        case Action::NextState:      return "next_state";
         default:                     return "unknown";
     }
+}
+
+inline Action actionFromName(const std::string& name) {
+    if (name == "none")             return Action::None;
+    if (name == "rotate_left")      return Action::RotateLeft;
+    if (name == "rotate_right")     return Action::RotateRight;
+    if (name == "rotate_up")        return Action::RotateUp;
+    if (name == "rotate_down")      return Action::RotateDown;
+    if (name == "pan_left")         return Action::PanLeft;
+    if (name == "pan_right")        return Action::PanRight;
+    if (name == "pan_up")           return Action::PanUp;
+    if (name == "pan_down")         return Action::PanDown;
+    if (name == "zoom_in")          return Action::ZoomIn;
+    if (name == "zoom_out")         return Action::ZoomOut;
+    if (name == "reset_view")       return Action::ResetView;
+    if (name == "center_selection") return Action::CenterSelection;
+    if (name == "redraw")           return Action::Redraw;
+    if (name == "next_object")      return Action::NextObject;
+    if (name == "prev_object")      return Action::PrevObject;
+    if (name == "toggle_visible")   return Action::ToggleVisible;
+    if (name == "delete_object")    return Action::DeleteObject;
+    if (name == "yank_object")      return Action::YankObject;
+    if (name == "paste_object")     return Action::PasteObject;
+    if (name == "rename_object")    return Action::RenameObject;
+    if (name == "toggle_panel")     return Action::TogglePanel;
+    if (name == "show_wireframe")   return Action::ShowWireframe;
+    if (name == "show_ballstick")   return Action::ShowBallStick;
+    if (name == "show_spacefill")   return Action::ShowSpacefill;
+    if (name == "show_cartoon")     return Action::ShowCartoon;
+    if (name == "show_backbone")    return Action::ShowBackbone;
+    if (name == "hide_wireframe")   return Action::HideWireframe;
+    if (name == "hide_backbone")    return Action::HideBackbone;
+    if (name == "hide_all")         return Action::HideAll;
+    if (name == "next_tab")         return Action::NextTab;
+    if (name == "prev_tab")         return Action::PrevTab;
+    if (name == "new_tab")          return Action::NewTab;
+    if (name == "close_tab")        return Action::CloseTab;
+    if (name == "move_to_tab")      return Action::MoveToTab;
+    if (name == "copy_to_tab")      return Action::CopyToTab;
+    if (name == "color_by_element") return Action::ColorByElement;
+    if (name == "color_by_chain")   return Action::ColorByChain;
+    if (name == "color_by_ss")      return Action::ColorBySS;
+    if (name == "color_by_bfactor") return Action::ColorByBFactor;
+    if (name == "color_by_plddt")   return Action::ColorByPLDDT;
+    if (name == "enter_command")    return Action::EnterCommand;
+    if (name == "enter_visual")     return Action::EnterVisual;
+    if (name == "enter_search")     return Action::EnterSearch;
+    if (name == "exit_to_normal")   return Action::ExitToNormal;
+    if (name == "search_next")      return Action::SearchNext;
+    if (name == "search_prev")      return Action::SearchPrev;
+    if (name == "inspect")          return Action::Inspect;
+    if (name == "show_help")        return Action::ShowHelp;
+    if (name == "undo")             return Action::Undo;
+    if (name == "redo")             return Action::Redo;
+    if (name == "repeat_last")      return Action::RepeatLast;
+    if (name == "execute")          return Action::ExecuteCommand;
+    if (name == "autocomplete")     return Action::Autocomplete;
+    if (name == "history_prev")     return Action::HistoryPrev;
+    if (name == "history_next")     return Action::HistoryNext;
+    if (name == "delete_word")      return Action::DeleteWord;
+    if (name == "clear_line")       return Action::ClearLine;
+    if (name == "execute_search")   return Action::ExecuteSearch;
+    if (name == "start_macro")      return Action::StartMacro;
+    if (name == "play_macro")       return Action::PlayMacro;
+    return Action::None;
 }
 
 } // namespace molterm

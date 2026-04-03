@@ -90,9 +90,9 @@ public:
         }
         if (ch == '-') { ++pos_; return {Token::Dash, "-"}; }
 
-        if (ch == '@') {
+        if (ch == '$') {
             ++pos_;
-            // Read the name after @
+            // Read the name after $
             auto word = readWord();
             return {Token::AtRef, word.value};
         }
@@ -215,7 +215,7 @@ private:
             return inner;
         }
 
-        // @name — reference a named selection
+        // $name — reference a named selection
         if (current_.type == Token::AtRef) {
             std::string name = current_.value;
             advance();
@@ -223,7 +223,7 @@ private:
                 const Selection* sel = resolver_(name);
                 if (sel) return *sel;
             }
-            return Selection({}, "@" + name);  // unresolved → empty
+            return Selection({}, "$" + name);  // unresolved → empty
         }
 
         if (current_.type != Token::Word)

@@ -2,6 +2,8 @@
 
 #include "molterm/input/Keymap.h"
 
+#include <string>
+
 namespace molterm {
 
 class KeymapManager {
@@ -14,8 +16,8 @@ public:
     // Load defaults
     void loadDefaults();
 
-    // TODO Phase 4: load from TOML
-    // void loadFromFile(const std::string& path);
+    // Load overrides from ~/.molterm/keymap.toml (Phase 4)
+    void loadFromFile();
 
 private:
     Keymap keymap_;
@@ -23,6 +25,8 @@ private:
     void bindNormalDefaults();
     void bindCommandDefaults();
     void bindVisualDefaults();
+
+    static Mode modeFromName(const std::string& name);
 };
 
 } // namespace molterm

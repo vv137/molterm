@@ -1,6 +1,7 @@
 #include "molterm/io/CifLoader.h"
 
 #include <gemmi/mmread.hpp>
+#include <gemmi/mmread_gz.hpp>
 #include <gemmi/model.hpp>
 
 #include <algorithm>
@@ -87,11 +88,12 @@ std::unique_ptr<MolObject> CifLoader::loadAuto(const std::string& filepath) {
 }
 
 std::unique_ptr<MolObject> CifLoader::loadCif(const std::string& filepath) {
-    gemmi::Structure st = gemmi::read_structure_file(filepath);
+    gemmi::Structure st = gemmi::read_structure_gz(filepath);
     if (st.models.empty())
         throw std::runtime_error("No models found in " + filepath);
 
     auto obj = std::make_unique<MolObject>(baseNameFromPath(filepath));
+    obj->setSourcePath(filepath);
     auto& model = st.models[0];
 
     // Load atoms
@@ -235,10 +237,20 @@ std::unique_ptr<MolObject> CifLoader::loadPdb(const std::string& filepath) {
     return loadCif(filepath);
 }
 
+static std::string stripGzSuffix(const std::string& s) {
+    if (s.size() > 3) {
+        std::string tail = s.substr(s.size() - 3);
+        std::transform(tail.begin(), tail.end(), tail.begin(), ::tolower);
+        if (tail == ".gz") return s.substr(0, s.size() - 3);
+    }
+    return s;
+}
+
 std::string CifLoader::detectFormat(const std::string& filepath) {
-    auto dot = filepath.rfind('.');
+    std::string path = stripGzSuffix(filepath);
+    auto dot = path.rfind('.');
     if (dot != std::string::npos) {
-        std::string ext = filepath.substr(dot + 1);
+        std::string ext = path.substr(dot + 1);
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext == "cif" || ext == "mmcif") return "cif";
         if (ext == "pdb" || ext == "ent") return "pdb";
@@ -252,6 +264,7 @@ std::string CifLoader::baseNameFromPath(const std::string& filepath) {
     std::string filename = (slash != std::string::npos)
         ? filepath.substr(slash + 1)
         : filepath;
+    filename = stripGzSuffix(filename);
     auto dot = filename.rfind('.');
     if (dot != std::string::npos) filename = filename.substr(0, dot);
     return filename;

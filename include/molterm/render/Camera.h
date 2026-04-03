@@ -34,6 +34,14 @@ public:
                   float& sx, float& sy, float& depth,
                   float aspectYX = 1.0f) const;
 
+    // Access internal state (for export)
+    const std::array<float, 9>& rotation() const { return rot_; }
+    float centerX() const { return centerX_; }
+    float centerY() const { return centerY_; }
+    float centerZ() const { return centerZ_; }
+    float panXOffset() const { return panX_; }
+    float panYOffset() const { return panY_; }
+
     float zoom() const { return zoom_; }
     void setZoom(float z) { zoom_ = z; }
     float rotationSpeed() const { return rotSpeed_; }

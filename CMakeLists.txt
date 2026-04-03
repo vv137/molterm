@@ -19,6 +19,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(gemmi)
 
+# toml++ — TOML config parser (header-only)
+FetchContent_Declare(
+    tomlplusplus
+    GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+    GIT_TAG        v3.4.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(tomlplusplus)
+
 # USalign — structural alignment
 FetchContent_Declare(
     usalign
@@ -99,6 +108,10 @@ set(MOLTERM_SOURCES
     src/app/Tab.cpp
     src/app/TabManager.cpp
     src/app/Application.cpp
+    # Config
+    src/config/ConfigParser.cpp
+    # Export
+    src/io/SessionExporter.cpp
 )
 
 # ── Target ───────────────────────────────────────────────────────────────────
@@ -112,6 +125,7 @@ target_include_directories(molterm PRIVATE
 
 target_link_libraries(molterm PRIVATE
     gemmi::gemmi_cpp
+    tomlplusplus::tomlplusplus
     $<IF:$<BOOL:${NCURSESW_FOUND}>,PkgConfig::NCURSESW,${CURSES_LIBRARIES}>
 )
 
@@ -119,9 +133,34 @@ target_compile_options(molterm PRIVATE
     -Wall -Wextra -Wpedantic
 )
 
+# Get version string: use git tag if on one, otherwise dev+hash
+execute_process(
+    COMMAND git describe --tags --exact-match
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_TAG
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE GIT_TAG_RESULT
+)
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(GIT_TAG_RESULT EQUAL 0 AND GIT_TAG)
+    set(MOLTERM_VERSION_STRING "${GIT_TAG}")
+elseif(GIT_HASH)
+    set(MOLTERM_VERSION_STRING "dev+${GIT_HASH}")
+else()
+    set(MOLTERM_VERSION_STRING "dev")
+endif()
+
 target_compile_definitions(molterm PRIVATE
     USALIGN_PATH="${CMAKE_BINARY_DIR}/USalign"
     NCURSES_WIDECHAR=1
+    MOLTERM_VERSION="${MOLTERM_VERSION_STRING}"
 )
 
 # molterm depends on USalign binary being built

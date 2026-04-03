@@ -16,18 +16,16 @@ MolTerm renders 3D molecular structures in the terminal using Unicode Braille ch
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
-./molterm [file.cif] [file.pdb] ...
+./molterm [file.cif] [file.pdb] [file.pdb.gz] ...
+./molterm --version    # prints version + git hash
 ```
 
 ### Dependencies
 
-- **gemmi** v0.7.0 — mmCIF/PDB parser (fetched by CMake FetchContent)
+- **gemmi** v0.7.0 — mmCIF/PDB parser with gzip support (fetched by CMake FetchContent)
 - **USalign** — structural alignment TM-align/MM-align (fetched + compiled by CMake FetchContent)
+- **toml++** v3.4.0 — TOML config parser (fetched by CMake FetchContent)
 - **ncurses** — system package (`apt install libncurses-dev` / `brew install ncurses`)
-
-Future:
-
-- **toml++** — TOML config parser for Phase 4 customization
 
 ---
 
@@ -141,6 +139,7 @@ Each `Representation` subclass knows what to draw; the `Canvas` knows how.
 | Chain | `cc` | A=green B=cyan C=magenta D=yellow E=red F=blue (cycled) |
 | Secondary structure | `cs` | Helix=red Sheet=yellow Loop=green |
 | B-factor | `cb` | Blue→Green→Red gradient |
+| pLDDT | `cp` | AlphaFold confidence: >90 deep blue, 70-90 light blue, 50-70 yellow, <50 orange |
 
 ### Named Color Palette
 
@@ -181,21 +180,21 @@ Used by `:select`, `:count`, and `/` search. Recursive descent parser with opera
 | `hydro` | `hydro` | Hydrogen atoms |
 | `water` | `water` | HOH/WAT/DOD residues |
 | `obj` | `obj myprotein` | All atoms if current object name matches |
-| `@name` | `@ala and chain B` | Reference a named selection |
+| `$name` | `$ala and chain B` | Reference a named selection |
 
 **Operators:** `and`, `or`, `not`, `( )` — precedence: `or` < `and` < `not`
 
-**Auto-selection:** Every selection operation auto-saves the result as `sele`. Use `@sele` to reference the last result.
+**Auto-selection:** Every selection operation auto-saves the result as `sele`. Use `$sele` to reference the last result.
 
 **Examples:**
 
 ```
 :select chain A and resn ALA        # → auto-saved as "sele"
 :select ala = resn ALA              # named selection
-:color red @ala                     # use named selection in color command
+:color red $ala                     # use named selection in color command
 :select active = resi 50-60 and chain A
-:count @active and helix            # reference named selection
-:color salmon @sele                 # color latest selection result
+:count $active and helix            # reference named selection
+:color salmon $sele                 # color latest selection result
 :sele                               # list: sele(25) ala(25) active(42)
 /helix and chain B                  # search mode with n/N navigation
 ```
@@ -284,6 +283,7 @@ Mnemonic: **s**how → `s` prefix, e**x**it/remove → `x` prefix.
 | `c` `c` | `color_by_chain` | Color by chain |
 | `c` `s` | `color_by_ss` | Color by secondary structure |
 | `c` `b` | `color_by_bfactor` | Color by B-factor (heat map) |
+| `c` `p` | `color_by_plddt` | Color by pLDDT (AlphaFold confidence) |
 
 #### Normal Mode — Quick Actions
 
@@ -298,6 +298,8 @@ Mnemonic: **s**how → `s` prefix, e**x**it/remove → `x` prefix.
 | `?` | `show_help` | Show keybinding help |
 | `u` | `undo` | Undo last action |
 | `Ctrl+R` | `redo` | Redo |
+| `q` | `start_macro` | Start/stop macro recording (then press a-z for register) |
+| `@` | `play_macro` | Play macro (then press a-z for register) |
 
 #### Command Mode (`:`)
 
@@ -333,14 +335,14 @@ History: `↑` / `↓` arrow keys cycle through previous commands. Pressing `:` 
 | `:align <obj> [sel] to <obj> [sel]` | TM-align via USalign (sel filters alignment, transforms whole object) |
 | `:mmalign <obj> [sel] to <obj> [sel]` | MM-align for multi-chain complexes (`-mm 1`) |
 | `:super <obj> [sel] to <obj> [sel]` | Alias for `:align` |
+| `:fetch <pdb_id\|afdb:uniprot_id>` | Download from RCSB PDB or AlphaFold DB |
+| `:export <file.pml>` | Export session as PyMOL script |
 | `:help` | List available commands |
 
-**Planned commands (Phase 4–5):**
+**Planned commands (Phase 5):**
 
 ```
 :save <file>                    Save current state
-:export <file.pml>              Export as PyMOL script (.pml)
-:fetch <pdb_id>                 Download from RCSB PDB
 :map <mode> <key> <action>      Map key to action in mode
 :unmap <mode> <key>             Remove key mapping
 :keybindings                    Show all current bindings
@@ -533,7 +535,7 @@ set_view (\
 - [x] **Commands** — `:select <expr>`, `:select name = expr`, `:count <expr>`, `:sele`
 - [x] **Named selections** — stored in map, `:sele` lists with atom counts
 - [x] **Per-atom coloring** — 15-color palette, `:color <name> <selection>`, overrides scheme
-- [x] **@name references** — `@sele`, `@ala` etc. in selection expressions
+- [x] **$name references** — `$sele`, `$ala` etc. in selection expressions
 - [x] **Auto-sele** — every selection result auto-saved as `sele`
 - [x] **`obj` keyword** — `obj myprotein` selects all atoms if object name matches
 - [x] **Inspect mode** — `i` toggles crosshair cursor, mouse click picks atoms, shows chain/resn/name/element/B/occ/xyz
@@ -541,16 +543,17 @@ set_view (\
 - [x] **USalign integration** — `:align`, `:mmalign`, `:super` with per-side selection and `-ter 0`
 - [ ] **Visual mode** — atom/residue selection extension with hjkl (deferred to Phase 4)
 
-### Phase 4: Customization + Export
+### Phase 4: Customization + Export — DONE
 
-- [ ] **ConfigParser** — TOML config loading from `~/.molterm/`
-- [ ] **KeymapManager TOML** — fully customizable keybindings from file
-- [ ] **Color schemes** — user-defined color themes from `colors.toml`
-- [ ] **SessionExporter** — .pml script generation
-- [ ] **`:fetch`** — download structures from RCSB PDB and AFDB
-- [ ] **pLDDT** - pLDDT color scheme
-- [ ] **Macro recording** — `q`/`@` VIM-style macros
-- [ ] **Tab completion** — for commands, filenames, object names
+- [x] **ConfigParser** — TOML config loading from `~/.molterm/` via toml++ v3.4.0
+- [x] **KeymapManager TOML** — fully customizable keybindings from `keymap.toml` with key notation (`<C-t>`, `<S-Tab>`, etc.)
+- [x] **Color schemes** — user-defined color themes from `colors.toml`
+- [x] **SessionExporter** — `.pml` script generation with `set_view`, repr, coloring
+- [x] **`:fetch`** — download structures from RCSB PDB (`fetch 1abc`) and AlphaFold DB (`fetch afdb:P12345`)
+- [x] **pLDDT** — AlphaFold confidence color scheme (very high/high/low/very low), `cp` keybinding, `:color plddt`
+- [x] **Macro recording** — `q` + register (a-z) to record, `@` + register to play
+- [x] **Tab completion** — context-aware for commands, filenames, object names, repr names, color names, settings
+- [x] **`$` selection prefix** — `$sele`, `$ala` etc. (changed from `@`)
 
 ### Phase 5: Polish
 

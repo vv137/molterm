@@ -51,6 +51,13 @@ void ColorMapper::initColors() {
     init_pair(kColorMagenta, COLOR_MAGENTA, -1);
     init_pair(kColorCyan,    COLOR_CYAN,    -1);
     init_pair(kColorWhite,   COLOR_WHITE,   -1);
+    // pLDDT confidence gradient (AlphaFold)
+    // Default 8-color approximations; overridden below for 256-color
+    init_pair(kColorPLDDTVeryHigh, COLOR_BLUE,    -1);
+    init_pair(kColorPLDDTHigh,     COLOR_CYAN,    -1);
+    init_pair(kColorPLDDTLow,      COLOR_YELLOW,  -1);
+    init_pair(kColorPLDDTVeryLow,  COLOR_RED,     -1);
+
     // Extended colors (require 256-color terminal)
     if (COLORS >= 256) {
         init_pair(kColorOrange,  208, -1);  // orange
@@ -70,6 +77,11 @@ void ColorMapper::initColors() {
         init_pair(kColorSalmon,  COLOR_RED,     -1);
         init_pair(kColorSlate,   COLOR_BLUE,    -1);
         init_pair(kColorGray,    COLOR_WHITE,   -1);
+        // pLDDT with 256-color precision
+        init_pair(kColorPLDDTVeryHigh, 21,  -1);  // deep blue
+        init_pair(kColorPLDDTHigh,     75,  -1);  // light blue
+        init_pair(kColorPLDDTLow,      178, -1);  // yellow
+        init_pair(kColorPLDDTVeryLow,  208, -1);  // orange
     }
 }
 
@@ -85,6 +97,14 @@ int ColorMapper::colorForAtom(const AtomData& atom, ColorScheme scheme,
             if (atom.bFactor < 20.0f) return kColorBFactorLow;
             if (atom.bFactor < 50.0f) return kColorBFactorMid;
             return kColorBFactorHigh;
+        }
+        case ColorScheme::PLDDT: {
+            // AlphaFold pLDDT stored in B-factor field
+            float plddt = atom.bFactor;
+            if (plddt >= 90.0f) return kColorPLDDTVeryHigh;
+            if (plddt >= 70.0f) return kColorPLDDTHigh;
+            if (plddt >= 50.0f) return kColorPLDDTLow;
+            return kColorPLDDTVeryLow;
         }
         default: return kColorOther;
     }

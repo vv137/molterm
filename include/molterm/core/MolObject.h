@@ -22,6 +22,7 @@ enum class ColorScheme {
     Chain,
     SecondaryStructure,
     BFactor,
+    PLDDT,
     Residue,
     Uniform,
 };
@@ -33,6 +34,9 @@ public:
 
     const std::string& name() const { return name_; }
     void setName(const std::string& name) { name_ = name; }
+
+    const std::string& sourcePath() const { return sourcePath_; }
+    void setSourcePath(const std::string& p) { sourcePath_ = p; }
 
     // Atom/bond access
     std::vector<AtomData>& atoms() { return atoms_; }
@@ -76,6 +80,7 @@ public:
 
 private:
     std::string name_;
+    std::string sourcePath_;
     std::vector<AtomData> atoms_;
     std::vector<BondData> bonds_;
     bool visible_ = true;

@@ -56,6 +56,11 @@ enum ColorPairId : int {
     kColorSalmon = 62,
     kColorSlate = 63,
     kColorGray = 64,
+    // pLDDT confidence gradient (AlphaFold)
+    kColorPLDDTVeryHigh = 70,  // >90: dark blue
+    kColorPLDDTHigh = 71,      // 70-90: light blue
+    kColorPLDDTLow = 72,       // 50-70: yellow
+    kColorPLDDTVeryLow = 73,   // <50: orange
 };
 
 class ColorMapper {

@@ -1,4 +1,6 @@
 #include "molterm/input/KeymapManager.h"
+#include "molterm/config/ConfigParser.h"
+
 #include <ncurses.h>
 
 namespace molterm {
@@ -11,6 +13,29 @@ void KeymapManager::loadDefaults() {
     bindNormalDefaults();
     bindCommandDefaults();
     bindVisualDefaults();
+}
+
+void KeymapManager::loadFromFile() {
+    auto keymapEntries = ConfigParser::loadKeymap();
+    if (keymapEntries.empty()) return;
+
+    for (const auto& [modeName, entries] : keymapEntries) {
+        Mode mode = modeFromName(modeName);
+        for (const auto& entry : entries) {
+            Action action = actionFromName(entry.actionName);
+            if (action != Action::None && !entry.keys.empty()) {
+                keymap_.bind(mode, entry.keys, action);
+            }
+        }
+    }
+}
+
+Mode KeymapManager::modeFromName(const std::string& name) {
+    if (name == "normal")  return Mode::Normal;
+    if (name == "command") return Mode::Command;
+    if (name == "visual")  return Mode::Visual;
+    if (name == "search")  return Mode::Search;
+    return Mode::Normal;
 }
 
 void KeymapManager::bindNormalDefaults() {
@@ -58,6 +83,7 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'c', 'c'},  Action::ColorByChain,   "Color by chain");
     km.bind(Mode::Normal, {'c', 's'},  Action::ColorBySS,      "Color by SS");
     km.bind(Mode::Normal, {'c', 'b'},  Action::ColorByBFactor, "Color by B-factor");
+    km.bind(Mode::Normal, {'c', 'p'},  Action::ColorByPLDDT,   "Color by pLDDT");
 
     // Tabs
     km.bind(Mode::Normal, {'g', 't'},  Action::NextTab,     "Next tab");
@@ -84,6 +110,10 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'y', 'y'},  Action::YankObject,   "Yank object");
     km.bind(Mode::Normal, {'p'},       Action::PasteObject,  "Paste object");
     km.bind(Mode::Normal, {'r'},       Action::RenameObject, "Rename object");
+
+    // Macro recording
+    km.bind(Mode::Normal, {'q'},       Action::StartMacro,  "Record/stop macro");
+    km.bind(Mode::Normal, {'@'},       Action::PlayMacro,   "Play macro");
 }
 
 void KeymapManager::bindCommandDefaults() {

@@ -69,6 +69,14 @@ public:
 
     bool running() const { return running_; }
 
+    // Macro recording (Phase 4)
+    bool isRecordingMacro() const { return macroRecording_; }
+    char macroRegister() const { return macroRegister_; }
+    void startMacroRecord(char reg);
+    void stopMacroRecord();
+    void playMacro(char reg);
+    void recordAction(Action action);
+
 private:
     // Subsystems
     Screen screen_;
@@ -108,6 +116,14 @@ private:
 
     bool running_ = false;
     bool needsRedraw_ = true;
+
+    // Macro recording state
+    bool macroRecording_ = false;
+    char macroRegister_ = '\0';
+    bool macroAwaitingRegister_ = false;       // waiting for next key to select register
+    bool macroPlayAwaitingRegister_ = false;    // waiting for next key for @ playback
+    std::unordered_map<char, std::vector<Action>> macros_;
+    std::vector<Action> currentMacro_;
 
     // Main loop internals
     void processInput();
