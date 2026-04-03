@@ -43,6 +43,7 @@ enum class Action {
     ShowBallStick,
     ShowSpacefill,
     ShowCartoon,
+    ShowRibbon,
     ShowBackbone,
     HideWireframe,
     HideBackbone,
@@ -127,6 +128,7 @@ inline std::string actionName(Action a) {
         case Action::ShowBallStick:  return "show_ballstick";
         case Action::ShowSpacefill:  return "show_spacefill";
         case Action::ShowCartoon:    return "show_cartoon";
+        case Action::ShowRibbon:     return "show_ribbon";
         case Action::ShowBackbone:   return "show_backbone";
         case Action::HideAll:        return "hide_all";
         case Action::ColorByElement: return "color_by_element";
@@ -202,6 +204,7 @@ inline Action actionFromName(const std::string& name) {
     if (name == "show_ballstick")   return Action::ShowBallStick;
     if (name == "show_spacefill")   return Action::ShowSpacefill;
     if (name == "show_cartoon")     return Action::ShowCartoon;
+    if (name == "show_ribbon")      return Action::ShowRibbon;
     if (name == "show_backbone")    return Action::ShowBackbone;
     if (name == "hide_wireframe")   return Action::HideWireframe;
     if (name == "hide_backbone")    return Action::HideBackbone;

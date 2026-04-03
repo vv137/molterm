@@ -96,9 +96,10 @@ std::unique_ptr<MolObject> CifLoader::loadCif(const std::string& filepath) {
     obj->setSourcePath(filepath);
     auto& model = st.models[0];
 
-    // Load atoms
+    // Load atoms (skip water residues)
     for (const auto& chain : model.chains) {
         for (const auto& res : chain.residues) {
+            if (res.name == "HOH" || res.name == "WAT" || res.name == "DOD") continue;
             for (const auto& atom : res.atoms) {
                 AtomData ad;
                 ad.x = static_cast<float>(atom.pos.x);

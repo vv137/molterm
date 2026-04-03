@@ -96,7 +96,7 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
             out << "show sticks, " << name << "\n";
         if (obj->reprVisible(ReprType::Spacefill))
             out << "show spheres, " << name << "\n";
-        if (obj->reprVisible(ReprType::Cartoon))
+        if (obj->reprVisible(ReprType::Cartoon) || obj->reprVisible(ReprType::Ribbon))
             out << "show cartoon, " << name << "\n";
         if (obj->reprVisible(ReprType::Backbone)) {
             out << "# backbone trace approximated as cartoon\n";

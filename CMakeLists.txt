@@ -100,6 +100,7 @@ set(MOLTERM_SOURCES
     src/repr/BackboneRepr.cpp
     src/repr/SpacefillRepr.cpp
     src/repr/CartoonRepr.cpp
+    src/repr/RibbonRepr.cpp
     # Input
     src/input/Keymap.cpp
     src/input/KeymapManager.cpp

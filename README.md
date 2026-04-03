@@ -138,7 +138,8 @@ Each `Representation` subclass knows what to draw; the `Canvas` knows how.
 | **BallStickRepr** | `sb`/— | off | Filled circles + thin bonds. `:set br <n>` |
 | **BackboneRepr** | `sk`/`xk` | ON | Cα–Cα trace. `:set bt <n>` |
 | **SpacefillRepr** | `ss`/— | off | VDW spheres (back-to-front sorted). Scale adjustable |
-| **CartoonRepr** | `sc`/— | off | SS-aware Cα trace: thick helix, wide sheet, thin loop |
+| **CartoonRepr** | `sc`/— | off | 3D cartoon: Catmull-Rom spline + parallel-transport frame, triangle-rasterized cross-sections (flat helix/sheet, circular coil tube), Lambert shading. Nucleic acid P-atom backbone |
+| **RibbonRepr** | `sr`/— | off | Flat ribbon: C→O guide vectors, sheet arrowheads, cross-fill between edges |
 
 ### Color Schemes
 

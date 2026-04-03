@@ -1,14 +1,11 @@
 #pragma once
 
 #include "molterm/repr/Representation.h"
-#include "molterm/render/ColorMapper.h"
 
 namespace molterm {
 
-// Cartoon: secondary structure-aware backbone trace
-// - Helices: thick trace
-// - Sheets: wide arrows
-// - Loops: thin trace
+// Cartoon: chunky Catmull-Rom spline tube with SS-dependent radius.
+// Helices and sheets are fat; coils are thin. Uses filled circles for 3D effect.
 class CartoonRepr : public Representation {
 public:
     ReprType type() const override { return ReprType::Cartoon; }
@@ -16,17 +13,13 @@ public:
     void render(const MolObject& mol, const Camera& cam,
                 Canvas& canvas) override;
 
-    float helixWidth() const { return helixWidth_; }
-    void setHelixWidth(float w) { helixWidth_ = w; }
-    float sheetWidth() const { return sheetWidth_; }
-    void setSheetWidth(float w) { sheetWidth_ = w; }
-    float loopWidth() const { return loopWidth_; }
-    void setLoopWidth(float w) { loopWidth_ = w; }
-
 private:
-    float helixWidth_ = 3.0f;   // sub-pixel thickness
-    float sheetWidth_ = 3.5f;
-    float loopWidth_ = 1.0f;
+    float helixRadius_ = 0.8f;   // Å — chunky helix
+    float sheetRadius_ = 0.7f;   // Å — chunky sheet
+    float loopRadius_ = 0.25f;   // Å — thin coil
+    int subdivisions_ = 8;
+
+    static float catmullRom(float p0, float p1, float p2, float p3, float t);
 };
 
 } // namespace molterm

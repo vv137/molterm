@@ -14,6 +14,7 @@
 #include "molterm/repr/BackboneRepr.h"
 #include "molterm/repr/SpacefillRepr.h"
 #include "molterm/repr/CartoonRepr.h"
+#include "molterm/repr/RibbonRepr.h"
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
 
@@ -90,6 +91,7 @@ void Application::initRepresentations() {
     representations_[ReprType::Backbone]  = std::make_unique<BackboneRepr>();
     representations_[ReprType::Spacefill] = std::make_unique<SpacefillRepr>();
     representations_[ReprType::Cartoon]   = std::make_unique<CartoonRepr>();
+    representations_[ReprType::Ribbon]    = std::make_unique<RibbonRepr>();
 }
 
 Representation* Application::getRepr(ReprType type) {
@@ -367,6 +369,11 @@ void Application::handleAction(Action action) {
         case Action::ShowCartoon: {
             auto obj = tab.currentObject();
             if (obj) obj->showRepr(ReprType::Cartoon);
+            break;
+        }
+        case Action::ShowRibbon: {
+            auto obj = tab.currentObject();
+            if (obj) obj->showRepr(ReprType::Ribbon);
             break;
         }
         case Action::ShowBackbone: {
@@ -1053,8 +1060,10 @@ void Application::registerCommands() {
             obj->showRepr(ReprType::BallStick);
         else if (repr == "spacefill" || repr == "spheres" || repr == "cpk")
             obj->showRepr(ReprType::Spacefill);
-        else if (repr == "cartoon" || repr == "ribbon")
+        else if (repr == "cartoon" || repr == "tube")
             obj->showRepr(ReprType::Cartoon);
+        else if (repr == "ribbon")
+            obj->showRepr(ReprType::Ribbon);
         else if (repr == "backbone" || repr == "trace" || repr == "ca")
             obj->showRepr(ReprType::Backbone);
         else return "Unknown representation: " + repr;
@@ -1076,8 +1085,10 @@ void Application::registerCommands() {
             obj->hideRepr(ReprType::BallStick);
         else if (repr == "spacefill" || repr == "spheres" || repr == "cpk")
             obj->hideRepr(ReprType::Spacefill);
-        else if (repr == "cartoon" || repr == "ribbon")
+        else if (repr == "cartoon" || repr == "tube")
             obj->hideRepr(ReprType::Cartoon);
+        else if (repr == "ribbon")
+            obj->hideRepr(ReprType::Ribbon);
         else if (repr == "backbone" || repr == "trace" || repr == "ca")
             obj->hideRepr(ReprType::Backbone);
         else return "Unknown representation: " + repr;

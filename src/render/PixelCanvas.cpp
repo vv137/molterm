@@ -150,6 +150,76 @@ void PixelCanvas::drawCircle(int cx, int cy, float depth,
     }
 }
 
+void PixelCanvas::drawTriangle(float x0, float y0, float z0,
+                                float x1, float y1, float z1,
+                                float x2, float y2, float z2,
+                                int colorPair) {
+    // Bounding box (clamped to canvas)
+    int minX = std::max(0, static_cast<int>(std::min({x0, x1, x2})));
+    int maxX = std::min(pixW_ - 1, static_cast<int>(std::max({x0, x1, x2})) + 1);
+    int minY = std::max(0, static_cast<int>(std::min({y0, y1, y2})));
+    int maxY = std::min(pixH_ - 1, static_cast<int>(std::max({y0, y1, y2})) + 1);
+
+    // Edge vectors
+    float ex0 = x1 - x0, ey0 = y1 - y0;
+    float ex1 = x2 - x1, ey1 = y2 - y1;
+    float ex2 = x0 - x2, ey2 = y0 - y2;
+
+    // Triangle normal for shading (flat per-triangle)
+    float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
+    float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
+    float nx = ay * bz - az * by;
+    float ny = az * bx - ax * bz;
+    float nz = ax * by - ay * bx;
+    float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
+    if (nLen > 1e-6f) { nx /= nLen; ny /= nLen; nz /= nLen; }
+
+    // Two-sided half-Lambert: light from upper-left-front
+    float dot = -0.4f * nx - 0.4f * ny + 0.82f * nz;
+    float halfLambert = std::abs(dot) * 0.4f + 0.6f;
+    float intensity = 0.55f + 0.45f * halfLambert;
+
+    auto base = colorPairToRGB(colorPair);
+    uint8_t cr = static_cast<uint8_t>(std::min(255.0f, base.r * intensity));
+    uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
+    uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
+
+    // Barycentric denominator
+    float denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+    if (std::abs(denom) < 1e-6f) return;  // degenerate
+    float invDenom = 1.0f / denom;
+
+    for (int py = minY; py <= maxY; ++py) {
+        for (int px = minX; px <= maxX; ++px) {
+            float fpx = static_cast<float>(px) + 0.5f;
+            float fpy = static_cast<float>(py) + 0.5f;
+
+            // Edge tests (half-plane)
+            float e0 = ex0 * (fpy - y0) - ey0 * (fpx - x0);
+            float e1 = ex1 * (fpy - y1) - ey1 * (fpx - x1);
+            float e2 = ex2 * (fpy - y2) - ey2 * (fpx - x2);
+
+            // All same sign → inside (with small epsilon for edge)
+            if ((e0 >= -0.5f && e1 >= -0.5f && e2 >= -0.5f) ||
+                (e0 <= 0.5f && e1 <= 0.5f && e2 <= 0.5f)) {
+
+                // Barycentric interpolation for depth
+                float w0 = ((y1 - y2) * (fpx - x2) + (x2 - x1) * (fpy - y2)) * invDenom;
+                float w1 = ((y2 - y0) * (fpx - x2) + (x0 - x2) * (fpy - y2)) * invDenom;
+                float w2 = 1.0f - w0 - w1;
+                float depth = w0 * z0 + w1 * z1 + w2 * z2;
+
+                if (!zbuf_.testAndSet(px, py, depth)) continue;
+                if (depth < zMin_) zMin_ = depth;
+                if (depth > zMax_) zMax_ = depth;
+
+                setPixel(px, py, cr, cg, cb);
+                colorIds_[static_cast<size_t>(py) * pixW_ + px] = static_cast<int8_t>(colorPair);
+            }
+        }
+    }
+}
+
 void PixelCanvas::drawChar(int, int, float, char, int) {
     // No glyph rasterizer — labels not rendered in pixel mode
 }

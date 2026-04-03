@@ -31,6 +31,12 @@ public:
                   int x1, int y1, float d1, int colorPair) override;
     void drawCircle(int cx, int cy, float depth,
                     int radius, int colorPair, bool filled) override;
+
+    // Shaded triangle rasterization (barycentric, z-buffered, Lambert-lit)
+    void drawTriangle(float x0, float y0, float z0,
+                      float x1, float y1, float z1,
+                      float x2, float y2, float z2,
+                      int colorPair);
     void drawChar(int termX, int termY, float depth,
                   char ch, int colorPair) override;
 

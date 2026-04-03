@@ -73,6 +73,7 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'s', 'b'},  Action::ShowBallStick, "Show ball-and-stick");
     km.bind(Mode::Normal, {'s', 's'},  Action::ShowSpacefill, "Show spacefill");
     km.bind(Mode::Normal, {'s', 'c'},  Action::ShowCartoon,   "Show cartoon");
+    km.bind(Mode::Normal, {'s', 'r'},  Action::ShowRibbon,    "Show ribbon");
     km.bind(Mode::Normal, {'s', 'k'},  Action::ShowBackbone,  "Show backbone");
 
     // Hide
