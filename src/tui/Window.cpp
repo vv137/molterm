@@ -36,7 +36,7 @@ void Window::resize(int h, int w, int y, int x) {
 }
 
 void Window::clear() { wclear(win_); }
-void Window::refresh() { wrefresh(win_); }
+void Window::refresh() { wnoutrefresh(win_); }
 void Window::erase() { werase(win_); }
 void Window::box() { ::box(win_, 0, 0); }
 
