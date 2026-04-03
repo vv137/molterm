@@ -43,8 +43,8 @@ GraphicsProtocol ProtocolPicker::detect() {
             tp == "contour") return GraphicsProtocol::Sixel;
     }
 
-    // Fallback: no pixel graphics
-    return GraphicsProtocol::None;
+    // Fallback: try Sixel (widely supported)
+    return GraphicsProtocol::Sixel;
 }
 
 std::unique_ptr<GraphicsEncoder> ProtocolPicker::createEncoder(GraphicsProtocol proto) {

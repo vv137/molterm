@@ -54,10 +54,15 @@ void Application::init(int argc, char* argv[]) {
     RendererType rt = RendererType::Braille;
     if (cfg.defaultRenderer == "ascii")  rt = RendererType::Ascii;
     if (cfg.defaultRenderer == "block")  rt = RendererType::Block;
-    if (cfg.defaultRenderer == "pixel" || cfg.defaultRenderer == "auto" ||
-        cfg.defaultRenderer == "sixel" || cfg.defaultRenderer == "kitty" ||
-        cfg.defaultRenderer == "iterm2")
+    if (cfg.defaultRenderer == "pixel" || cfg.defaultRenderer == "auto") {
         rt = RendererType::Pixel;
+    } else if (cfg.defaultRenderer == "sixel") {
+        forcedProtocol_ = GraphicsProtocol::Sixel; rt = RendererType::Pixel;
+    } else if (cfg.defaultRenderer == "kitty") {
+        forcedProtocol_ = GraphicsProtocol::Kitty; rt = RendererType::Pixel;
+    } else if (cfg.defaultRenderer == "iterm2") {
+        forcedProtocol_ = GraphicsProtocol::ITerm2; rt = RendererType::Pixel;
+    }
     setRenderer(rt);
     autoCenter_ = cfg.autoCenter;
     initRepresentations();
@@ -112,12 +117,12 @@ void Application::setRenderer(RendererType type) {
             canvas_ = std::make_unique<BlockCanvas>();
             break;
         case RendererType::Pixel: {
-            auto proto = ProtocolPicker::detect();
+            auto proto = forcedProtocol_ != GraphicsProtocol::None
+                ? forcedProtocol_ : ProtocolPicker::detect();
             auto encoder = ProtocolPicker::createEncoder(proto);
             if (encoder) {
                 canvas_ = std::make_unique<PixelCanvas>(std::move(encoder));
             } else {
-                // Fallback to braille if no pixel protocol available
                 rendererType_ = RendererType::Braille;
                 canvas_ = std::make_unique<BrailleCanvas>();
             }
@@ -1329,9 +1334,19 @@ void Application::registerCommands() {
             if (val == "ascii")        app.setRenderer(RendererType::Ascii);
             else if (val == "braille") app.setRenderer(RendererType::Braille);
             else if (val == "block")   app.setRenderer(RendererType::Block);
-            else if (val == "pixel" || val == "auto" || val == "sixel" ||
-                     val == "kitty" || val == "iterm2")
+            else if (val == "pixel" || val == "auto") {
+                app.setForcedProtocol(GraphicsProtocol::None);
                 app.setRenderer(RendererType::Pixel);
+            } else if (val == "sixel") {
+                app.setForcedProtocol(GraphicsProtocol::Sixel);
+                app.setRenderer(RendererType::Pixel);
+            } else if (val == "kitty") {
+                app.setForcedProtocol(GraphicsProtocol::Kitty);
+                app.setRenderer(RendererType::Pixel);
+            } else if (val == "iterm2") {
+                app.setForcedProtocol(GraphicsProtocol::ITerm2);
+                app.setRenderer(RendererType::Pixel);
+            }
             else return "Unknown renderer: " + val;
             return "Renderer set to " + val;
         }

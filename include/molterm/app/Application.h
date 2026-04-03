@@ -14,6 +14,7 @@
 #include "molterm/input/InputHandler.h"
 #include "molterm/input/KeymapManager.h"
 #include "molterm/render/Canvas.h"
+#include "molterm/render/ProtocolPicker.h"
 #include "molterm/repr/Representation.h"
 #include "molterm/tui/CommandLine.h"
 #include "molterm/tui/Layout.h"
@@ -77,6 +78,7 @@ public:
     float fogStrength() const { return fogStrength_; }
     void setFogStrength(float s) { fogStrength_ = s; }
     bool autoCenter() const { return autoCenter_; }
+    void setForcedProtocol(GraphicsProtocol p) { forcedProtocol_ = p; }
     void setAutoCenter(bool v) { autoCenter_ = v; }
 
     // Macro recording (Phase 4)
@@ -130,6 +132,7 @@ private:
     int framesToSkip_ = 0;
     float fogStrength_ = 0.35f;
     bool autoCenter_ = true;
+    GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
 
     // Macro recording state
     bool macroRecording_ = false;
