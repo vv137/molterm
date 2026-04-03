@@ -23,7 +23,7 @@ enum class ColorScheme {
     SecondaryStructure,
     BFactor,
     PLDDT,
-    Residue,
+    Rainbow,
     Uniform,
 };
 
@@ -70,6 +70,9 @@ public:
     void setAtomColors(const std::vector<int>& indices, int colorPair);
     void clearAtomColors();
 
+    // Per-chain rainbow fractions [0,1] for each atom (N→C terminus)
+    const std::vector<float>& rainbowFractions() const;
+
     // Geometry helpers
     void computeBoundingBox(float& minX, float& minY, float& minZ,
                             float& maxX, float& maxY, float& maxZ) const;
@@ -90,6 +93,7 @@ private:
     };
     ColorScheme colorScheme_ = ColorScheme::Element;
     std::vector<int> atomColors_;  // per-atom override, -1 = use scheme
+    mutable std::vector<float> rainbowCache_;
 };
 
 } // namespace molterm

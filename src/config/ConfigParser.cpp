@@ -99,6 +99,7 @@ void ConfigParser::ensureConfigDir() {
 Config ConfigParser::loadConfig() {
     Config cfg;
     std::string path = configDir() + "/config.toml";
+    if (!fs::exists(path)) return cfg;
 
     try {
         auto tbl = toml::parse_file(path);
@@ -128,6 +129,7 @@ std::unordered_map<std::string, std::vector<ConfigParser::KeymapEntry>>
 ConfigParser::loadKeymap() {
     std::unordered_map<std::string, std::vector<KeymapEntry>> result;
     std::string path = configDir() + "/keymap.toml";
+    if (!fs::exists(path)) return result;
 
     try {
         auto tbl = toml::parse_file(path);
@@ -157,6 +159,7 @@ ConfigParser::loadKeymap() {
 ConfigParser::ColorSchemeConfig ConfigParser::loadColors() {
     ColorSchemeConfig cfg;
     std::string path = configDir() + "/colors.toml";
+    if (!fs::exists(path)) return cfg;
 
     try {
         auto tbl = toml::parse_file(path);

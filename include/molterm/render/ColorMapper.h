@@ -61,6 +61,12 @@ enum ColorPairId : int {
     kColorPLDDTHigh = 71,      // 70-90: light blue
     kColorPLDDTLow = 72,       // 50-70: yellow
     kColorPLDDTVeryLow = 73,   // <50: orange
+    // Rainbow gradient (N→C terminus): blue → cyan → green → yellow → red
+    kColorRainbow0 = 80,  // blue
+    kColorRainbow1 = 81,  // cyan
+    kColorRainbow2 = 82,  // green
+    kColorRainbow3 = 83,  // yellow
+    kColorRainbow4 = 84,  // red
 };
 
 class ColorMapper {
@@ -68,9 +74,10 @@ public:
     // Initialize ncurses color pairs
     static void initColors();
 
-    // Get color pair for an atom given a color scheme + per-atom override
+    // Get color pair for an atom given a color scheme + per-atom override.
+    // rainbowFrac: [0,1] position along chain for Rainbow scheme (-1 = unused)
     static int colorForAtom(const AtomData& atom, ColorScheme scheme,
-                            int overrideColor = -1);
+                            int overrideColor = -1, float rainbowFrac = -1.0f);
 
     // Get color pair for an element
     static int colorForElement(const std::string& element);
@@ -80,6 +87,9 @@ public:
 
     // Get color pair for secondary structure
     static int colorForSS(SSType ss);
+
+    // Get rainbow color for a fraction [0,1] (blue→red)
+    static int colorForRainbow(float fraction);
 
     // Resolve named color string to color pair ID. Returns -1 if unknown.
     static int colorByName(const std::string& name);

@@ -12,6 +12,8 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     const auto& atoms = mol.atoms();
     const auto& bonds = mol.bonds();
     auto scheme = mol.colorScheme();
+    const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
+    auto rf = [&](int i) { return rbw ? (*rbw)[i] : -1.0f; };
 
     int r = static_cast<int>(thickness_ * static_cast<float>(canvas.scaleX()) + 0.5f);
     if (r < 1) r = 1;
@@ -55,8 +57,8 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         int mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
         float md = (p1.depth + p2.depth) / 2.0f;
 
-        int c1 = ColorMapper::colorForAtom(atoms[bond.atom1], scheme, mol.atomColor(bond.atom1));
-        int c2 = ColorMapper::colorForAtom(atoms[bond.atom2], scheme, mol.atomColor(bond.atom2));
+        int c1 = ColorMapper::colorForAtom(atoms[bond.atom1], scheme, mol.atomColor(bond.atom1), rf(bond.atom1));
+        int c2 = ColorMapper::colorForAtom(atoms[bond.atom2], scheme, mol.atomColor(bond.atom2), rf(bond.atom2));
         drawSeg(x0, y0, p1.depth, mx, my, md, c1);
         drawSeg(mx, my, md, x1, y1, p2.depth, c2);
     }
@@ -66,7 +68,7 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         if (!proj[i].valid) continue;
         int sx = static_cast<int>(std::round(proj[i].sx));
         int sy = static_cast<int>(std::round(proj[i].sy));
-        int color = ColorMapper::colorForAtom(atoms[i], scheme, mol.atomColor(static_cast<int>(i)));
+        int color = ColorMapper::colorForAtom(atoms[i], scheme, mol.atomColor(static_cast<int>(i)), rf(static_cast<int>(i)));
         if (thick) {
             canvas.drawCircle(sx, sy, proj[i].depth, r, color, true);
         } else {

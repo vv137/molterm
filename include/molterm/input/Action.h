@@ -59,7 +59,7 @@ enum class Action {
     ColorByChain,
     ColorBySS,
     ColorByBFactor,
-    ColorByResidue,
+    ColorByRainbow,
 
     // Mode transitions
     EnterCommand,
@@ -158,7 +158,7 @@ inline std::string actionName(Action a) {
         case Action::StartMacro:     return "start_macro";
         case Action::PlayMacro:      return "play_macro";
         case Action::ColorByPLDDT:   return "color_by_plddt";
-        case Action::ColorByResidue: return "color_by_residue";
+        case Action::ColorByRainbow: return "color_by_rainbow";
         case Action::PrevState:      return "prev_state";
         case Action::NextState:      return "next_state";
         default:                     return "unknown";
@@ -207,6 +207,7 @@ inline Action actionFromName(const std::string& name) {
     if (name == "color_by_ss")      return Action::ColorBySS;
     if (name == "color_by_bfactor") return Action::ColorByBFactor;
     if (name == "color_by_plddt")   return Action::ColorByPLDDT;
+    if (name == "color_by_rainbow") return Action::ColorByRainbow;
     if (name == "enter_command")    return Action::EnterCommand;
     if (name == "enter_visual")     return Action::EnterVisual;
     if (name == "enter_search")     return Action::EnterSearch;

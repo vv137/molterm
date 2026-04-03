@@ -140,6 +140,7 @@ Each `Representation` subclass knows what to draw; the `Canvas` knows how.
 | Secondary structure | `cs` | Helix=red Sheet=yellow Loop=green |
 | B-factor | `cb` | Blue→Green→Red gradient |
 | pLDDT | `cp` | AlphaFold confidence: >90 deep blue, 70-90 light blue, 50-70 yellow, <50 orange |
+| Rainbow | `cr` | N-terminus (blue) → C-terminus (red), per-chain gradient |
 
 ### Named Color Palette
 
@@ -284,6 +285,7 @@ Mnemonic: **s**how → `s` prefix, e**x**it/remove → `x` prefix.
 | `c` `s` | `color_by_ss` | Color by secondary structure |
 | `c` `b` | `color_by_bfactor` | Color by B-factor (heat map) |
 | `c` `p` | `color_by_plddt` | Color by pLDDT (AlphaFold confidence) |
+| `c` `r` | `color_by_rainbow` | Color rainbow N→C terminus |
 
 #### Normal Mode — Quick Actions
 
@@ -314,7 +316,7 @@ History: `↑` / `↓` arrow keys cycle through previous commands. Pressing `:` 
 | `:q[!]` / `:quit[!]` / `:qa` | Quit |
 | `:show <repr>` | Show repr (wireframe/wire, ballstick/sticks/bs, backbone/trace/ca, spacefill/spheres/cpk, cartoon/ribbon) |
 | `:hide <repr\|all>` | Hide repr or all |
-| `:color <scheme>` | Color by element/cpk, chain, ss/secondary, bfactor/b, clear |
+| `:color <scheme>` | Color by element/cpk, chain, ss/secondary, bfactor/b, plddt, rainbow, clear |
 | `:color <name> [selection]` | Per-atom color: `:color red chain A` (see Named Color Palette) |
 | `:zoom` | Center and zoom to fit |
 | `:set renderer <type>` | Switch renderer (ascii, braille, block) |

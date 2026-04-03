@@ -477,7 +477,7 @@ void Application::handleAction(Action action) {
                 } else if (cmdName == "color") {
                     // Color name/scheme completion
                     for (const auto& c : {"element", "cpk", "chain", "ss", "secondary",
-                                           "bfactor", "b", "plddt", "clear",
+                                           "bfactor", "b", "plddt", "rainbow", "clear",
                                            "red", "green", "blue", "yellow", "magenta",
                                            "cyan", "white", "orange", "pink", "lime",
                                            "teal", "purple", "salmon", "slate", "gray"}) {
@@ -587,6 +587,11 @@ void Application::handleAction(Action action) {
         case Action::ColorByPLDDT: {
             auto obj = tab.currentObject();
             if (obj) obj->setColorScheme(ColorScheme::PLDDT);
+            break;
+        }
+        case Action::ColorByRainbow: {
+            auto obj = tab.currentObject();
+            if (obj) obj->setColorScheme(ColorScheme::Rainbow);
             break;
         }
 
@@ -1035,6 +1040,11 @@ void Application::registerCommands() {
             obj->setColorScheme(ColorScheme::PLDDT);
             obj->clearAtomColors();
             return "Coloring by pLDDT (AlphaFold confidence)";
+        }
+        if (first == "rainbow") {
+            obj->setColorScheme(ColorScheme::Rainbow);
+            obj->clearAtomColors();
+            return "Coloring rainbow (N→C terminus)";
         }
         if (first == "clear" || first == "reset") {
             obj->clearAtomColors();

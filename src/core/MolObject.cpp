@@ -38,6 +38,29 @@ void MolObject::computeCenter(float& cx, float& cy, float& cz) const {
     cx /= n; cy /= n; cz /= n;
 }
 
+const std::vector<float>& MolObject::rainbowFractions() const {
+    if (rainbowCache_.size() == atoms_.size()) return rainbowCache_;
+
+    int n = static_cast<int>(atoms_.size());
+    rainbowCache_.resize(n, 0.0f);
+    if (n == 0) return rainbowCache_;
+
+    // Single pass: find chain boundaries and assign fractions
+    int chainStart = 0;
+    for (int i = 1; i <= n; ++i) {
+        if (i == n || atoms_[i].chainId != atoms_[chainStart].chainId) {
+            int chainLen = i - chainStart;
+            for (int j = chainStart; j < i; ++j) {
+                rainbowCache_[j] = (chainLen <= 1)
+                    ? 0.5f
+                    : static_cast<float>(j - chainStart) / static_cast<float>(chainLen - 1);
+            }
+            chainStart = i;
+        }
+    }
+    return rainbowCache_;
+}
+
 void MolObject::setAtomColor(int idx, int colorPair) {
     if (idx < 0 || idx >= static_cast<int>(atoms_.size())) return;
     if (atomColors_.size() != atoms_.size())

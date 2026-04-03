@@ -29,6 +29,8 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
     float aspect = canvas.aspectYX();
     const auto& atoms = mol.atoms();
     auto scheme = mol.colorScheme();
+    const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
+    auto rf = [&](int i) { return rbw ? (*rbw)[i] : -1.0f; };
 
     // Project and sort by depth (back to front for proper occlusion with filled circles)
     struct ProjAtom { int idx; int sx, sy; float depth; int radius; int color; };
@@ -46,7 +48,7 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
         int r = static_cast<int>(vdw * scale_ * static_cast<float>(canvas.scaleX()) * cam.zoom() + 0.5f);
         if (r < 1) r = 1;
 
-        int color = ColorMapper::colorForAtom(a, scheme, mol.atomColor(i));
+        int color = ColorMapper::colorForAtom(a, scheme, mol.atomColor(i), rf(i));
         projected.push_back({i,
             static_cast<int>(std::round(fsx)),
             static_cast<int>(std::round(fsy)),

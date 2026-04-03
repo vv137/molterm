@@ -58,6 +58,13 @@ void ColorMapper::initColors() {
     init_pair(kColorPLDDTLow,      COLOR_YELLOW,  -1);
     init_pair(kColorPLDDTVeryLow,  COLOR_RED,     -1);
 
+    // Rainbow gradient (8-color fallback)
+    init_pair(kColorRainbow0, COLOR_BLUE,    -1);
+    init_pair(kColorRainbow1, COLOR_CYAN,    -1);
+    init_pair(kColorRainbow2, COLOR_GREEN,   -1);
+    init_pair(kColorRainbow3, COLOR_YELLOW,  -1);
+    init_pair(kColorRainbow4, COLOR_RED,     -1);
+
     // Extended colors (require 256-color terminal)
     if (COLORS >= 256) {
         init_pair(kColorOrange,  208, -1);  // orange
@@ -68,6 +75,17 @@ void ColorMapper::initColors() {
         init_pair(kColorSalmon,  209, -1);  // salmon
         init_pair(kColorSlate,   67,  -1);  // slate
         init_pair(kColorGray,    245, -1);  // gray
+        // pLDDT with 256-color precision
+        init_pair(kColorPLDDTVeryHigh, 21,  -1);  // deep blue
+        init_pair(kColorPLDDTHigh,     75,  -1);  // light blue
+        init_pair(kColorPLDDTLow,      178, -1);  // yellow
+        init_pair(kColorPLDDTVeryLow,  208, -1);  // orange
+        // Rainbow with 256-color precision
+        init_pair(kColorRainbow0, 21,  -1);  // blue
+        init_pair(kColorRainbow1, 51,  -1);  // cyan
+        init_pair(kColorRainbow2, 46,  -1);  // green
+        init_pair(kColorRainbow3, 226, -1);  // yellow
+        init_pair(kColorRainbow4, 196, -1);  // red
     } else {
         init_pair(kColorOrange,  COLOR_YELLOW,  -1);
         init_pair(kColorPink,    COLOR_MAGENTA, -1);
@@ -77,16 +95,18 @@ void ColorMapper::initColors() {
         init_pair(kColorSalmon,  COLOR_RED,     -1);
         init_pair(kColorSlate,   COLOR_BLUE,    -1);
         init_pair(kColorGray,    COLOR_WHITE,   -1);
-        // pLDDT with 256-color precision
-        init_pair(kColorPLDDTVeryHigh, 21,  -1);  // deep blue
-        init_pair(kColorPLDDTHigh,     75,  -1);  // light blue
-        init_pair(kColorPLDDTLow,      178, -1);  // yellow
-        init_pair(kColorPLDDTVeryLow,  208, -1);  // orange
     }
 }
 
+int ColorMapper::colorForRainbow(float fraction) {
+    int idx = static_cast<int>(fraction * 5.0f);
+    if (idx < 0) idx = 0;
+    if (idx > 4) idx = 4;
+    return kColorRainbow0 + idx;
+}
+
 int ColorMapper::colorForAtom(const AtomData& atom, ColorScheme scheme,
-                               int overrideColor) {
+                               int overrideColor, float rainbowFrac) {
     if (overrideColor >= 0) return overrideColor;
 
     switch (scheme) {
@@ -99,13 +119,14 @@ int ColorMapper::colorForAtom(const AtomData& atom, ColorScheme scheme,
             return kColorBFactorHigh;
         }
         case ColorScheme::PLDDT: {
-            // AlphaFold pLDDT stored in B-factor field
             float plddt = atom.bFactor;
             if (plddt >= 90.0f) return kColorPLDDTVeryHigh;
             if (plddt >= 70.0f) return kColorPLDDTHigh;
             if (plddt >= 50.0f) return kColorPLDDTLow;
             return kColorPLDDTVeryLow;
         }
+        case ColorScheme::Rainbow:
+            return (rainbowFrac >= 0.0f) ? colorForRainbow(rainbowFrac) : kColorRainbow2;
         default: return kColorOther;
     }
 }

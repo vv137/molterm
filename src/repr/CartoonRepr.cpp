@@ -12,6 +12,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     float aspect = canvas.aspectYX();
     const auto& atoms = mol.atoms();
     auto scheme = mol.colorScheme();
+    const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
+    auto rf = [&](int i) { return rbw ? (*rbw)[i] : -1.0f; };
 
     int scaleX = canvas.scaleX();
 
@@ -61,7 +63,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         if (r < 1) r = 1;
 
         int color = ColorMapper::colorForAtom(atoms[cas[i-1].atomIdx], scheme,
-                                                mol.atomColor(static_cast<int>(cas[i-1].atomIdx)));
+                                                mol.atomColor(static_cast<int>(cas[i-1].atomIdx)),
+                                                rf(static_cast<int>(cas[i-1].atomIdx)));
 
         int x0 = cas[i-1].sx, y0 = cas[i-1].sy;
         int x1 = cas[i].sx, y1 = cas[i].sy;
@@ -91,7 +94,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         if (r < 1) r = 1;
 
         int color = ColorMapper::colorForAtom(atoms[ca.atomIdx], scheme,
-                                                mol.atomColor(static_cast<int>(ca.atomIdx)));
+                                                mol.atomColor(static_cast<int>(ca.atomIdx)),
+                                                rf(static_cast<int>(ca.atomIdx)));
         canvas.drawCircle(ca.sx, ca.sy, ca.depth, r, color, true);
     }
 }
