@@ -6,6 +6,7 @@
 #include "molterm/render/AsciiCanvas.h"
 #include "molterm/render/BrailleCanvas.h"
 #include "molterm/render/BlockCanvas.h"
+#include "molterm/render/SixelCanvas.h"
 #include "molterm/render/ColorMapper.h"
 #include "molterm/repr/WireframeRepr.h"
 #include "molterm/repr/BallStickRepr.h"
@@ -90,6 +91,9 @@ void Application::setRenderer(RendererType type) {
             break;
         case RendererType::Block:
             canvas_ = std::make_unique<BlockCanvas>();
+            break;
+        case RendererType::Sixel:
+            canvas_ = std::make_unique<SixelCanvas>();
             break;
     }
 }
@@ -588,6 +592,7 @@ void Application::updateStatusBar() {
         case RendererType::Ascii:   rendererName = "ASCII"; break;
         case RendererType::Braille: rendererName = "BRAILLE"; break;
         case RendererType::Block:   rendererName = "BLOCK"; break;
+        case RendererType::Sixel:  rendererName = "SIXEL"; break;
     }
     rightInfo = rendererName + " | " + tab.name();
 
@@ -890,11 +895,12 @@ void Application::registerCommands() {
             return app.layout().panelVisible() ? "Panel visible" : "Panel hidden";
         }
         if (opt == "renderer" || opt == "render") {
-            if (cmd.args.size() < 2) return "Usage: :set renderer <ascii|braille|block>";
+            if (cmd.args.size() < 2) return "Usage: :set renderer <ascii|braille|block|sixel>";
             const auto& val = cmd.args[1];
             if (val == "ascii")        app.setRenderer(RendererType::Ascii);
             else if (val == "braille") app.setRenderer(RendererType::Braille);
             else if (val == "block")   app.setRenderer(RendererType::Block);
+            else if (val == "sixel")   app.setRenderer(RendererType::Sixel);
             else return "Unknown renderer: " + val;
             return "Renderer set to " + val;
         }

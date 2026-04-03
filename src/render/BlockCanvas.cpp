@@ -23,6 +23,10 @@ void BlockCanvas::clear() {
 }
 
 void BlockCanvas::flush(Window& win) {
+    static constexpr char32_t FULL_BLOCK  = 0x2588; // █
+    static constexpr char32_t UPPER_HALF  = 0x2580; // ▀
+    static constexpr char32_t LOWER_HALF  = 0x2584; // ▄
+
     for (int ty = 0; ty < termH_; ++ty) {
         for (int tx = 0; tx < termW_; ++tx) {
             auto& c = cell(tx, ty);
@@ -30,26 +34,15 @@ void BlockCanvas::flush(Window& win) {
 
             if (c.topFilled && c.botFilled) {
                 if (c.topColor == c.botColor) {
-                    // Full block, same color
-                    wattron(win.raw(), COLOR_PAIR(c.topColor));
-                    mvwprintw(win.raw(), ty, tx, "\xe2\x96\x88"); // █
-                    wattroff(win.raw(), COLOR_PAIR(c.topColor));
+                    win.addWideChar(ty, tx, FULL_BLOCK, c.topColor);
                 } else {
-                    // Upper half block with top color, background would be bottom
                     // ncurses can't easily do fg+bg per char with arbitrary colors
-                    // Use upper half with top color
-                    wattron(win.raw(), COLOR_PAIR(c.topColor));
-                    mvwprintw(win.raw(), ty, tx, "\xe2\x96\x80"); // ▀
-                    wattroff(win.raw(), COLOR_PAIR(c.topColor));
+                    win.addWideChar(ty, tx, UPPER_HALF, c.topColor);
                 }
             } else if (c.topFilled) {
-                wattron(win.raw(), COLOR_PAIR(c.topColor));
-                mvwprintw(win.raw(), ty, tx, "\xe2\x96\x80"); // ▀
-                wattroff(win.raw(), COLOR_PAIR(c.topColor));
+                win.addWideChar(ty, tx, UPPER_HALF, c.topColor);
             } else {
-                wattron(win.raw(), COLOR_PAIR(c.botColor));
-                mvwprintw(win.raw(), ty, tx, "\xe2\x96\x84"); // ▄
-                wattroff(win.raw(), COLOR_PAIR(c.botColor));
+                win.addWideChar(ty, tx, LOWER_HALF, c.botColor);
             }
         }
     }

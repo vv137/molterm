@@ -38,8 +38,21 @@ set_target_properties(USalign PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-# ncurses — system package
-find_package(Curses REQUIRED)
+# ncurses — prefer wide-character build (ncursesw) for Unicode support.
+# On macOS the system curses already includes wide-char support.
+# On Linux we must link against ncursesw explicitly.
+if(NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(NCURSESW QUIET ncursesw)
+    endif()
+endif()
+if(NCURSESW_FOUND)
+    set(CURSES_INCLUDE_DIR  ${NCURSESW_INCLUDE_DIRS})
+    set(CURSES_LIBRARIES    ${NCURSESW_LIBRARIES})
+else()
+    find_package(Curses REQUIRED)
+endif()
 
 # ── Sources ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +80,7 @@ set(MOLTERM_SOURCES
     src/render/AsciiCanvas.cpp
     src/render/BrailleCanvas.cpp
     src/render/BlockCanvas.cpp
+    src/render/SixelCanvas.cpp
     src/render/AsciiRenderer.cpp
     # Repr
     src/repr/WireframeRepr.cpp
@@ -108,6 +122,7 @@ target_compile_options(molterm PRIVATE
 
 target_compile_definitions(molterm PRIVATE
     USALIGN_PATH="${CMAKE_BINARY_DIR}/USalign"
+    NCURSES_WIDECHAR=1
 )
 
 # molterm depends on USalign binary being built

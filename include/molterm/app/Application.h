@@ -27,6 +27,7 @@ enum class RendererType {
     Ascii,
     Braille,
     Block,
+    Sixel,
 };
 
 class Application {

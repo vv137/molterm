@@ -30,6 +30,10 @@ public:
     void fillRow(int y, char ch, int colorPair);
     void horizontalLine(int y, int x, int len);
 
+    // Output a single Unicode codepoint using the wide-char ncurses API.
+    // Required on Linux where narrow mvwprintw mangles multi-byte UTF-8.
+    void addWideChar(int y, int x, char32_t codepoint, int colorPair);
+
     // Attributes
     void setAttr(int attr);
     void unsetAttr(int attr);

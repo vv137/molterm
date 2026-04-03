@@ -71,6 +71,13 @@ void Window::horizontalLine(int y, int x, int len) {
     mvwhline(win_, y, x, ACS_HLINE, len);
 }
 
+void Window::addWideChar(int y, int x, char32_t codepoint, int colorPair) {
+    cchar_t cc;
+    wchar_t wch[2] = {static_cast<wchar_t>(codepoint), L'\0'};
+    setcchar(&cc, wch, 0, static_cast<short>(colorPair), nullptr);
+    mvwadd_wch(win_, y, x, &cc);
+}
+
 void Window::setAttr(int attr) { wattron(win_, attr); }
 void Window::unsetAttr(int attr) { wattroff(win_, attr); }
 

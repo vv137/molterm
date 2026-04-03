@@ -41,16 +41,7 @@ void BrailleCanvas::flush(Window& win) {
             if (c.dots == 0) continue;
 
             char32_t cp = BRAILLE_BASE | c.dots;
-            // Encode UTF-8 (braille is in U+2800..U+28FF, 3-byte UTF-8)
-            char utf8[4];
-            utf8[0] = static_cast<char>(0xE0 | ((cp >> 12) & 0x0F));
-            utf8[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-            utf8[2] = static_cast<char>(0x80 | (cp & 0x3F));
-            utf8[3] = '\0';
-
-            wattron(win.raw(), COLOR_PAIR(c.color));
-            mvwprintw(win.raw(), ty, tx, "%s", utf8);
-            wattroff(win.raw(), COLOR_PAIR(c.color));
+            win.addWideChar(ty, tx, cp, c.color);
         }
     }
 }
