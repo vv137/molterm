@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <unordered_map>
 
 namespace molterm {
@@ -115,9 +116,19 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
                 out << "color cyan, " << name << " and elem Fe\n";
                 out << "color white, " << name << " and not (elem C+N+O+S+P+H+Fe)\n";
                 break;
-            case ColorScheme::Chain:
-                out << "util.color_chains(\"" << name << "\")\n";
+            case ColorScheme::Chain: {
+                // Match MolTerm's chain color cycle: A=green, B=cyan, C=magenta, D=yellow, E=red, F=blue
+                static const char* kChainColors[] = {"green", "cyan", "magenta", "yellow", "red", "blue"};
+                // Collect unique chain IDs
+                std::set<std::string> chains;
+                for (const auto& a : obj->atoms()) chains.insert(a.chainId);
+                for (const auto& ch : chains) {
+                    int idx = ch.empty() ? 0 : ((ch[0] - 'A') % 6);
+                    if (idx < 0) idx = 0;
+                    out << "color " << kChainColors[idx] << ", " << name << " and chain " << ch << "\n";
+                }
                 break;
+            }
             case ColorScheme::SecondaryStructure:
                 out << "color red, " << name << " and ss H\n";
                 out << "color yellow, " << name << " and ss S\n";
@@ -132,6 +143,9 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
                 out << "color 0x65CBF3, " << name << " and b > 70 and b <= 90  # high\n";
                 out << "color 0xFFDB13, " << name << " and b > 50 and b <= 70  # low\n";
                 out << "color 0xFF7D45, " << name << " and b <= 50  # very low\n";
+                break;
+            case ColorScheme::Rainbow:
+                out << "spectrum count, blue_cyan_green_yellow_red, " << name << "\n";
                 break;
             default:
                 break;
@@ -219,6 +233,7 @@ std::string SessionExporter::pymolReprName(ReprType r) {
         case ReprType::BallStick: return "sticks";
         case ReprType::Spacefill: return "spheres";
         case ReprType::Cartoon:   return "cartoon";
+        case ReprType::Ribbon:    return "ribbon";
         case ReprType::Backbone:  return "cartoon";
     }
     return "lines";

@@ -336,7 +336,7 @@ History: `↑` / `↓` arrow keys cycle through previous commands. Pressing `:` 
 | `:zoom [selection]` | Center and zoom to fit selection |
 | `:orient [selection]` | Align principal axes + center + zoom |
 | `:screenshot [file.png]` | Save viewport as PNG (pixel renderer, transparent bg) |
-| `:set renderer <type>` | Switch renderer: ascii, braille, block, pixel/auto (Sixel/Kitty/iTerm2) |
+| `:set renderer <type>` | Switch renderer: ascii, braille, block, pixel/auto, kitty, sixel, iterm2 |
 | `:set backbone_thickness <n>` | Backbone trace thickness, float (alias: `bt`) |
 | `:set wireframe_thickness <n>` | Wireframe line thickness, float (alias: `wt`) |
 | `:set ball_radius <n>` | Ball-and-stick atom radius (alias: `br`) |
