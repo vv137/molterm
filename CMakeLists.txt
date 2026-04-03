@@ -70,6 +70,7 @@ set(MOLTERM_SOURCES
     src/core/MolObject.cpp
     src/core/ObjectStore.cpp
     src/core/Selection.cpp
+    src/core/Logger.cpp
     # IO
     src/io/CifLoader.cpp
     src/io/Aligner.cpp

@@ -3,6 +3,8 @@
 #include <gemmi/mmread.hpp>
 #include <gemmi/mmread_gz.hpp>
 #include <gemmi/model.hpp>
+#include <gemmi/assembly.hpp>
+#include <gemmi/logger.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -87,16 +89,10 @@ std::unique_ptr<MolObject> CifLoader::loadAuto(const std::string& filepath) {
     return loadCif(filepath);
 }
 
-std::unique_ptr<MolObject> CifLoader::loadCif(const std::string& filepath) {
-    gemmi::Structure st = gemmi::read_structure_gz(filepath);
-    if (st.models.empty())
-        throw std::runtime_error("No models found in " + filepath);
+// ── Shared helpers ──────────────────────────────────────────────────────────
 
-    auto obj = std::make_unique<MolObject>(baseNameFromPath(filepath));
-    obj->setSourcePath(filepath);
-    auto& model = st.models[0];
-
-    // Load atoms (skip water residues)
+static std::vector<AtomData> convertModel(const gemmi::Model& model) {
+    std::vector<AtomData> result;
     for (const auto& chain : model.chains) {
         for (const auto& res : chain.residues) {
             if (res.name == "HOH" || res.name == "WAT" || res.name == "DOD") continue;
@@ -116,103 +112,104 @@ std::unique_ptr<MolObject> CifLoader::loadCif(const std::string& filepath) {
                 ad.serial = atom.serial;
                 ad.formalCharge = static_cast<int8_t>(atom.charge);
                 ad.isHet = (res.het_flag == 'H');
-                obj->atoms().push_back(std::move(ad));
+                result.push_back(std::move(ad));
             }
         }
     }
+    return result;
+}
 
-    // Assign secondary structure from HELIX/SHEET records
-    auto resInRange = [](const std::string& chain, int resSeq,
-                         const gemmi::AtomAddress& start,
-                         const gemmi::AtomAddress& end) -> bool {
-        if (chain != start.chain_name) return false;
-        int s = start.res_id.seqid.num.value;
-        int e = end.res_id.seqid.num.value;
-        return resSeq >= s && resSeq <= e;
-    };
-
-    auto& molAtoms = obj->atoms();
-    for (auto& ad : molAtoms) {
+static void assignSS(std::vector<AtomData>& atoms, const gemmi::Structure& st) {
+    for (auto& ad : atoms) {
         for (const auto& helix : st.helices) {
-            if (resInRange(ad.chainId, ad.resSeq, helix.start, helix.end)) {
-                ad.ssType = SSType::Helix;
-                break;
+            if (ad.chainId == helix.start.chain_name) {
+                int s = helix.start.res_id.seqid.num.value;
+                int e = helix.end.res_id.seqid.num.value;
+                if (ad.resSeq >= s && ad.resSeq <= e) { ad.ssType = SSType::Helix; break; }
             }
         }
         if (ad.ssType != SSType::Loop) continue;
         for (const auto& sheet : st.sheets) {
             for (const auto& strand : sheet.strands) {
-                if (resInRange(ad.chainId, ad.resSeq, strand.start, strand.end)) {
-                    ad.ssType = SSType::Sheet;
-                    break;
+                if (ad.chainId == strand.start.chain_name) {
+                    int s = strand.start.res_id.seqid.num.value;
+                    int e = strand.end.res_id.seqid.num.value;
+                    if (ad.resSeq >= s && ad.resSeq <= e) { ad.ssType = SSType::Sheet; break; }
                 }
             }
             if (ad.ssType != SSType::Loop) break;
         }
     }
+}
 
-    // Build bonds using spatial hash — robust, no unit cell dependency
-    const auto& atoms = obj->atoms();
+static void buildBonds(MolObject& obj) {
+    const auto& atoms = obj.atoms();
     int n = static_cast<int>(atoms.size());
-
-    // Build spatial hash with 2.5 Å cell size
     SpatialHash grid(2.5f, n);
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < n; ++i)
         grid.insert(i, atoms[i].x, atoms[i].y, atoms[i].z);
-    }
 
-    // Find bonds: two atoms are bonded if distance < sum of covalent radii + tolerance
     constexpr float tolerance = 0.5f;
     constexpr float minDist = 0.4f;
-    constexpr float maxSearchDist = 2.5f;  // generous search radius
-
-    std::set<std::pair<int,int>> bondSet;
+    constexpr float maxSearchDist = 2.5f;
 
     for (int i = 0; i < n; ++i) {
         float r1 = covalentRadius(atoms[i].element);
-
         grid.forEachNeighbor(atoms[i].x, atoms[i].y, atoms[i].z, maxSearchDist,
             [&](int j) {
-                if (j <= i) return;  // avoid duplicates and self
-
+                if (j <= i) return;
                 float dx = atoms[i].x - atoms[j].x;
                 float dy = atoms[i].y - atoms[j].y;
                 float dz = atoms[i].z - atoms[j].z;
                 float dist2 = dx*dx + dy*dy + dz*dz;
-
                 float r2 = covalentRadius(atoms[j].element);
                 float maxBondDist = r1 + r2 + tolerance;
-
-                if (dist2 < minDist * minDist) return;  // too close (clashing)
-                if (dist2 > maxBondDist * maxBondDist) return;  // too far
-
-                auto key = std::make_pair(i, j);
-                if (bondSet.insert(key).second) {
-                    BondData bd;
-                    bd.atom1 = i;
-                    bd.atom2 = j;
-                    bd.order = 1;
-                    obj->bonds().push_back(bd);
-                }
+                if (dist2 < minDist * minDist || dist2 > maxBondDist * maxBondDist) return;
+                BondData bd;
+                bd.atom1 = i; bd.atom2 = j; bd.order = 1;
+                obj.bonds().push_back(bd);
             });
     }
+}
+
+// ── Loaders ────────────────────────────────────────────────────────────────
+
+std::unique_ptr<MolObject> CifLoader::loadCif(const std::string& filepath) {
+    gemmi::Structure st = gemmi::read_structure_gz(filepath);
+    if (st.models.empty())
+        throw std::runtime_error("No models found in " + filepath);
+
+    auto obj = std::make_unique<MolObject>(baseNameFromPath(filepath));
+    obj->setSourcePath(filepath);
+
+    obj->atoms() = convertModel(st.models[0]);
+    assignSS(obj->atoms(), st);
+    buildBonds(*obj);
 
     // Add explicit connections from _struct_conn (disulfide, metal, covalent links)
-    // These are authoritative — guaranteed bonds from the mmCIF annotation
+    const auto& atoms = obj->atoms();
+    int n = static_cast<int>(atoms.size());
+    std::set<std::pair<int,int>> bondSet;
+    // Populate bondSet from existing bonds to deduplicate
+    for (const auto& b : obj->bonds())
+        bondSet.insert(std::make_pair(std::min(b.atom1, b.atom2), std::max(b.atom1, b.atom2)));
+
     auto resolveAtom = [&atoms, n](const gemmi::AtomAddress& addr) -> int {
         for (int i = 0; i < n; ++i) {
             if (atoms[i].chainId == addr.chain_name &&
                 atoms[i].resSeq == addr.res_id.seqid.num.value &&
-                atoms[i].name == addr.atom_name) {
-                // Also check altloc if specified
-                if (addr.altloc != '\0' && atoms[i].serial >= 0) {
-                    // Accept anyway — altloc matching is best-effort
-                }
+                atoms[i].name == addr.atom_name)
                 return i;
-            }
         }
         return -1;
     };
+
+    // Store multi-model states (NMR ensembles / trajectories)
+    if (st.models.size() > 1) {
+        for (size_t mi = 0; mi < st.models.size(); ++mi) {
+            obj->addState(convertModel(st.models[mi]));
+        }
+    }
 
     for (const auto& conn : st.connections) {
         // Only add covalent-type connections (Covale, Disulf, MetalC)
@@ -270,6 +267,47 @@ std::string CifLoader::baseNameFromPath(const std::string& filepath) {
     auto dot = filename.rfind('.');
     if (dot != std::string::npos) filename = filename.substr(0, dot);
     return filename;
+}
+
+std::vector<AssemblyInfo> CifLoader::listAssemblies(const std::string& filepath) {
+    gemmi::Structure st = gemmi::read_structure_gz(filepath);
+    std::vector<AssemblyInfo> result;
+    for (const auto& assembly : st.assemblies) {
+        AssemblyInfo info;
+        info.name = assembly.name;
+        info.oligomericCount = assembly.oligomeric_count;
+        info.details = assembly.oligomeric_details;
+        result.push_back(std::move(info));
+    }
+    return result;
+}
+
+std::unique_ptr<MolObject> CifLoader::loadAssembly(const std::string& filepath,
+                                                     const std::string& assemblyId) {
+    gemmi::Structure st = gemmi::read_structure_gz(filepath);
+    if (st.models.empty())
+        throw std::runtime_error("No models found in " + filepath);
+
+    gemmi::Assembly* assembly = nullptr;
+    for (auto& a : st.assemblies) {
+        if (a.name == assemblyId) { assembly = &a; break; }
+    }
+    if (!assembly)
+        throw std::runtime_error("Assembly '" + assemblyId + "' not found");
+
+    gemmi::Logger logger;  // silent logger (no callback set)
+    gemmi::Model bioModel = gemmi::make_assembly(*assembly, st.models[0],
+        gemmi::HowToNameCopiedChain::Short, logger);
+
+    std::string baseName = baseNameFromPath(filepath) + "_asm" + assemblyId;
+    auto obj = std::make_unique<MolObject>(baseName);
+    obj->setSourcePath(filepath);
+
+    obj->atoms() = convertModel(bioModel);
+    assignSS(obj->atoms(), st);
+    buildBonds(*obj);
+
+    return obj;
 }
 
 } // namespace molterm

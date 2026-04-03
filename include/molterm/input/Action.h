@@ -96,6 +96,12 @@ enum class Action {
     // Search mode
     ExecuteSearch,
 
+    // Inspect / Pick modes
+    CycleInspectLevel,
+    EnterSelectAtom,
+    EnterSelectResidue,
+    EnterSelectChain,
+
     // Macro recording (Phase 4)
     TogglePixelRenderer,
     Screenshot,
@@ -171,6 +177,10 @@ inline std::string actionName(Action a) {
         case Action::DeleteWord:     return "delete_word";
         case Action::ClearLine:      return "clear_line";
         case Action::ExecuteSearch:  return "execute_search";
+        case Action::CycleInspectLevel: return "cycle_inspect_level";
+        case Action::EnterSelectAtom: return "enter_select_atom";
+        case Action::EnterSelectResidue: return "enter_select_residue";
+        case Action::EnterSelectChain: return "enter_select_chain";
         case Action::TogglePixelRenderer: return "toggle_pixel";
         case Action::Screenshot:  return "screenshot";
         case Action::StartMacro:     return "start_macro";
@@ -251,6 +261,10 @@ inline Action actionFromName(const std::string& name) {
     if (name == "delete_word")      return Action::DeleteWord;
     if (name == "clear_line")       return Action::ClearLine;
     if (name == "execute_search")   return Action::ExecuteSearch;
+    if (name == "cycle_inspect_level") return Action::CycleInspectLevel;
+    if (name == "enter_select_atom") return Action::EnterSelectAtom;
+    if (name == "enter_select_residue") return Action::EnterSelectResidue;
+    if (name == "enter_select_chain") return Action::EnterSelectChain;
     if (name == "toggle_pixel")     return Action::TogglePixelRenderer;
     if (name == "screenshot")       return Action::Screenshot;
     if (name == "start_macro")      return Action::StartMacro;

@@ -11,10 +11,50 @@ bool MolObject::reprVisible(ReprType r) const {
     return it != reprVisible_.end() && it->second;
 }
 
-void MolObject::showRepr(ReprType r) { reprVisible_[r] = true; }
-void MolObject::hideRepr(ReprType r) { reprVisible_[r] = false; }
+void MolObject::showRepr(ReprType r) {
+    reprVisible_[r] = true;
+    reprAtomMask_.erase(r);  // clear per-atom mask → show all
+}
+
+void MolObject::showReprForAtoms(ReprType r, const std::vector<int>& indices) {
+    reprVisible_[r] = true;
+    auto& mask = reprAtomMask_[r];
+    if (mask.empty()) mask.assign(atoms_.size(), false);
+    for (int idx : indices) {
+        if (idx >= 0 && idx < static_cast<int>(mask.size()))
+            mask[idx] = true;
+    }
+}
+
+void MolObject::hideRepr(ReprType r) {
+    reprVisible_[r] = false;
+    reprAtomMask_.erase(r);
+}
+
+void MolObject::hideReprForAtoms(ReprType r, const std::vector<int>& indices) {
+    auto maskIt = reprAtomMask_.find(r);
+    if (maskIt == reprAtomMask_.end()) {
+        // Currently showing all → create mask with all true, then turn off selected
+        reprAtomMask_[r].assign(atoms_.size(), true);
+        maskIt = reprAtomMask_.find(r);
+    }
+    for (int idx : indices) {
+        if (idx >= 0 && idx < static_cast<int>(maskIt->second.size()))
+            maskIt->second[idx] = false;
+    }
+}
+
 void MolObject::hideAllRepr() {
     for (auto& [k, v] : reprVisible_) v = false;
+    reprAtomMask_.clear();
+}
+
+bool MolObject::reprVisibleForAtom(ReprType r, int atomIdx) const {
+    if (!reprVisible(r)) return false;
+    auto it = reprAtomMask_.find(r);
+    if (it == reprAtomMask_.end() || it->second.empty()) return true;  // no mask → all visible
+    if (atomIdx < 0 || atomIdx >= static_cast<int>(it->second.size())) return false;
+    return it->second[atomIdx];
 }
 
 void MolObject::computeBoundingBox(float& minX, float& minY, float& minZ,
@@ -79,6 +119,30 @@ void MolObject::setAtomColors(const std::vector<int>& indices, int colorPair) {
 
 void MolObject::clearAtomColors() {
     atomColors_.clear();
+}
+
+void MolObject::addState(std::vector<AtomData> atomState) {
+    states_.push_back(std::move(atomState));
+}
+
+bool MolObject::setActiveState(int idx) {
+    if (idx < 0 || idx >= static_cast<int>(states_.size())) return false;
+    activeState_ = idx;
+    atoms_ = states_[idx];
+    rainbowCache_.clear();
+    return true;
+}
+
+bool MolObject::nextState() {
+    if (states_.size() <= 1) return false;
+    return setActiveState((activeState_ + 1) % static_cast<int>(states_.size()));
+}
+
+bool MolObject::prevState() {
+    if (states_.size() <= 1) return false;
+    int next = activeState_ - 1;
+    if (next < 0) next = static_cast<int>(states_.size()) - 1;
+    return setActiveState(next);
 }
 
 } // namespace molterm

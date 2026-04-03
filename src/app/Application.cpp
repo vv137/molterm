@@ -17,15 +17,38 @@
 #include "molterm/repr/RibbonRepr.h"
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
+#include "molterm/core/Logger.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <set>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <signal.h>
 
 namespace molterm {
+
+static const char* inspectLevelName(InspectLevel lvl) {
+    switch (lvl) {
+        case InspectLevel::Atom:    return "ATOM";
+        case InspectLevel::Residue: return "RESIDUE";
+        case InspectLevel::Chain:   return "CHAIN";
+        case InspectLevel::Object:  return "OBJECT";
+    }
+    return "?";
+}
+
+static const char* pickModeName(PickMode pm) {
+    switch (pm) {
+        case PickMode::Inspect:       return "INSPECT";
+        case PickMode::SelectAtom:    return "SEL:ATOM";
+        case PickMode::SelectResidue: return "SEL:RES";
+        case PickMode::SelectChain:   return "SEL:CHAIN";
+    }
+    return "?";
+}
 
 // Global resize flag
 static volatile sig_atomic_t g_resized = 0;
@@ -40,9 +63,14 @@ static void clearScreenAndRepaint() {
 }
 
 Application::Application() = default;
-Application::~Application() = default;
+Application::~Application() {
+    Logger::instance().close();
+}
 
 void Application::init(int argc, char* argv[]) {
+    Logger::instance().open();
+    MLOG_INFO("MolTerm starting (argc=%d)", argc);
+
     ColorMapper::initColors();
 
     // Set USalign path (compiled alongside molterm)
@@ -174,25 +202,33 @@ int Application::run() {
 
 void Application::quit(bool force) {
     (void)force;
+    MLOG_INFO("Quitting MolTerm");
     running_ = false;
 }
 
 std::string Application::loadFile(const std::string& path) {
+    MLOG_INFO("Loading file: %s", path.c_str());
     try {
         auto obj = CifLoader::loadAuto(path);
         std::string name = obj->name();
         int atomCount = static_cast<int>(obj->atoms().size());
         int bondCount = static_cast<int>(obj->bonds().size());
+        int stateCount = obj->stateCount();
 
         auto ptr = store_.add(std::move(obj));
         tabMgr_.currentTab().addObject(ptr);
         if (autoCenter_) tabMgr_.currentTab().centerView();
         needsRedraw_ = true;
 
-        return "Loaded " + name + ": " +
+        std::string msg = "Loaded " + name + ": " +
                std::to_string(atomCount) + " atoms, " +
                std::to_string(bondCount) + " bonds";
+        if (stateCount > 1)
+            msg += ", " + std::to_string(stateCount) + " states";
+        MLOG_INFO("%s", msg.c_str());
+        return msg;
     } catch (const std::exception& e) {
+        MLOG_ERROR("Load failed: %s — %s", path.c_str(), e.what());
         return std::string("Error loading ") + path + ": " + e.what();
     }
 }
@@ -229,6 +265,13 @@ void Application::processInput() {
         } else {
             cmdLine_.setMessage("Invalid macro register (use a-z)");
         }
+        needsRedraw_ = true;
+        return;
+    }
+
+    // Dismiss help overlay on any key
+    if (helpOverlay_) {
+        helpOverlay_ = false;
         needsRedraw_ = true;
         return;
     }
@@ -273,8 +316,6 @@ void Application::handleMouse(int /*key*/) {
         cam.zoomBy(1.0f / 1.15f);
     }
 #endif
-    // Left click + drag for rotation is hard without stateful tracking,
-    // but we can handle single clicks in the tab bar or object panel
     else if (event.bstate & BUTTON1_CLICKED) {
         // Check if click is in tab bar region (row 0)
         if (event.y == 0) {
@@ -289,17 +330,125 @@ void Application::handleMouse(int /*key*/) {
                 x += labelLen + 1;
             }
         }
-        // Click in viewport → pick atom
+        // Click in viewport → inspect or select atom
         else if (event.y >= 1 && event.y < 1 + layout_.viewportHeight()) {
             int vpX = event.x;
             int vpY = event.y - 1;  // offset for tab bar row
             buildProjCache();
             int atomIdx = findNearestAtom(vpX, vpY);
-            if (atomIdx >= 0) {
-                auto obj = tabMgr_.currentTab().currentObject();
-                if (obj) {
-                    pickedAtomIdx_ = atomIdx;
-                    cmdLine_.setMessage("PICK: " + atomInfoString(*obj, atomIdx));
+            if (atomIdx < 0) return;
+
+            auto obj = tabMgr_.currentTab().currentObject();
+            if (!obj) return;
+            const auto& atoms = obj->atoms();
+            const auto& a = atoms[atomIdx];
+
+            if (pickMode_ == PickMode::SelectAtom) {
+                // Click toggles atom in $sele
+                auto& sele = namedSelections_["sele"];
+                if (sele.has(atomIdx)) {
+                    sele.removeIndex(atomIdx);
+                    cmdLine_.setMessage("sele(-1) = " + std::to_string(sele.size()) +
+                        " atoms | " + a.chainId + "/" + a.resName + " " +
+                        std::to_string(a.resSeq) + "/" + a.name);
+                } else {
+                    sele.addIndex(atomIdx);
+                    cmdLine_.setMessage("sele(+1) = " + std::to_string(sele.size()) +
+                        " atoms | " + a.chainId + "/" + a.resName + " " +
+                        std::to_string(a.resSeq) + "/" + a.name);
+                }
+            } else if (pickMode_ == PickMode::SelectResidue) {
+                // Click toggles entire residue in $sele
+                auto& sele = namedSelections_["sele"];
+                // Check if any atom of this residue is already selected
+                bool alreadySelected = false;
+                std::vector<int> resAtoms;
+                for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+                    if (atoms[i].chainId == a.chainId &&
+                        atoms[i].resSeq == a.resSeq &&
+                        atoms[i].insCode == a.insCode) {
+                        resAtoms.push_back(i);
+                        if (sele.has(i)) alreadySelected = true;
+                    }
+                }
+                if (alreadySelected) {
+                    for (int i : resAtoms) sele.removeIndex(i);
+                    cmdLine_.setMessage("sele(-" + std::to_string(resAtoms.size()) + ") = " +
+                        std::to_string(sele.size()) + " atoms [" +
+                        a.chainId + "/" + a.resName + " " + std::to_string(a.resSeq) + "]");
+                } else {
+                    sele.addIndices(resAtoms);
+                    cmdLine_.setMessage("sele(+" + std::to_string(resAtoms.size()) + ") = " +
+                        std::to_string(sele.size()) + " atoms [" +
+                        a.chainId + "/" + a.resName + " " + std::to_string(a.resSeq) + "]");
+                }
+            } else if (pickMode_ == PickMode::SelectChain) {
+                // Click toggles entire chain in $sele
+                auto& sele = namedSelections_["sele"];
+                bool alreadySelected = false;
+                std::vector<int> chainAtoms;
+                for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+                    if (atoms[i].chainId == a.chainId) {
+                        chainAtoms.push_back(i);
+                        if (sele.has(i)) alreadySelected = true;
+                    }
+                }
+                if (alreadySelected) {
+                    for (int i : chainAtoms) sele.removeIndex(i);
+                    cmdLine_.setMessage("sele(-" + std::to_string(chainAtoms.size()) + ") = " +
+                        std::to_string(sele.size()) + " atoms [chain " + a.chainId + "]");
+                } else {
+                    sele.addIndices(chainAtoms);
+                    cmdLine_.setMessage("sele(+" + std::to_string(chainAtoms.size()) + ") = " +
+                        std::to_string(sele.size()) + " atoms [chain " + a.chainId + "]");
+                }
+            } else {
+                // Inspect mode — show info at current level
+                pickedAtomIdx_ = atomIdx;
+                // Store in pick register (pk1-pk4, rotating)
+                pickRegs_[pickNext_] = atomIdx;
+                int pkNum = pickNext_ + 1;  // 1-based
+                pickNext_ = (pickNext_ + 1) % 4;
+                // Save as named selection $pk1..$pk4
+                namedSelections_["pk" + std::to_string(pkNum)] =
+                    Selection({atomIdx}, "pk" + std::to_string(pkNum));
+
+                switch (inspectLevel_) {
+                    case InspectLevel::Atom:
+                        cmdLine_.setMessage("pk" + std::to_string(pkNum) + ": " +
+                            atomInfoString(*obj, atomIdx));
+                        break;
+                    case InspectLevel::Residue: {
+                        int resCount = 0;
+                        for (const auto& at : atoms)
+                            if (at.chainId == a.chainId && at.resSeq == a.resSeq && at.insCode == a.insCode)
+                                ++resCount;
+                        std::string ssStr = (a.ssType == SSType::Helix) ? "helix" :
+                                            (a.ssType == SSType::Sheet) ? "sheet" : "loop";
+                        cmdLine_.setMessage("RES: " + a.chainId + "/" + a.resName + " " +
+                            std::to_string(a.resSeq) + " (" + std::to_string(resCount) +
+                            " atoms, " + ssStr + ")");
+                        break;
+                    }
+                    case InspectLevel::Chain: {
+                        int chainAtoms = 0;
+                        std::set<int> residues;
+                        for (const auto& at : atoms) {
+                            if (at.chainId == a.chainId) {
+                                ++chainAtoms;
+                                residues.insert(at.resSeq);
+                            }
+                        }
+                        cmdLine_.setMessage("CHAIN: " + a.chainId + " (" +
+                            std::to_string(residues.size()) + " residues, " +
+                            std::to_string(chainAtoms) + " atoms)");
+                        break;
+                    }
+                    case InspectLevel::Object:
+                        cmdLine_.setMessage("OBJ: " + obj->name() + " (" +
+                            std::to_string(atoms.size()) + " atoms, " +
+                            std::to_string(obj->bonds().size()) + " bonds)");
+                        break;
                 }
             }
         }
@@ -315,18 +464,10 @@ void Application::handleAction(Action action) {
 
     switch (action) {
         // Navigation
-        case Action::RotateLeft:
-            if (inspectMode_) { cursorX_ = std::max(0, cursorX_ - 1); goto inspectUpdate; }
-            cam.rotateY(-rs);  break;
-        case Action::RotateRight:
-            if (inspectMode_) { cursorX_ = std::min(layout_.viewportWidth() - 1, cursorX_ + 1); goto inspectUpdate; }
-            cam.rotateY(rs);   break;
-        case Action::RotateUp:
-            if (inspectMode_) { cursorY_ = std::max(0, cursorY_ - 1); goto inspectUpdate; }
-            cam.rotateX(-rs);  break;
-        case Action::RotateDown:
-            if (inspectMode_) { cursorY_ = std::min(layout_.viewportHeight() - 1, cursorY_ + 1); goto inspectUpdate; }
-            cam.rotateX(rs);   break;
+        case Action::RotateLeft:   cam.rotateY(-rs);  break;
+        case Action::RotateRight:  cam.rotateY(rs);   break;
+        case Action::RotateUp:     cam.rotateX(-rs);  break;
+        case Action::RotateDown:   cam.rotateX(rs);   break;
         case Action::RotateCW:    cam.rotateZ(rs);   break;
         case Action::RotateCCW:   cam.rotateZ(-rs);  break;
         case Action::PanLeft:     cam.pan(-cam.panSpeed(), 0);    break;
@@ -472,8 +613,12 @@ void Application::handleAction(Action action) {
         case Action::ExitToNormal:
             inputHandler_->setMode(Mode::Normal);
             cmdLine_.deactivate();
-            inspectMode_ = false;
             pickedAtomIdx_ = -1;
+            if (pickMode_ != PickMode::Inspect) {
+                pickMode_ = PickMode::Inspect;
+                cmdLine_.setMessage("Inspect mode | sele=" +
+                    std::to_string(namedSelections_["sele"].size()));
+            }
             break;
 
         // Command mode actions
@@ -690,42 +835,64 @@ void Application::handleAction(Action action) {
             break;
         }
 
-        // Inspect mode
-        case Action::Inspect: {
-            inspectMode_ = !inspectMode_;
-            if (inspectMode_) {
-                // Initialize cursor to center of viewport
-                cursorX_ = layout_.viewportWidth() / 2;
-                cursorY_ = layout_.viewportHeight() / 2;
-                buildProjCache();
-                pickedAtomIdx_ = findNearestAtom(cursorX_, cursorY_);
-                auto obj = tab.currentObject();
-                if (obj && pickedAtomIdx_ >= 0)
-                    cmdLine_.setMessage("INSPECT: " + atomInfoString(*obj, pickedAtomIdx_));
-                else
-                    cmdLine_.setMessage("INSPECT mode (hjkl to move cursor, i/ESC to exit)");
+        // Multi-state cycling
+        case Action::NextState: {
+            auto obj = tab.currentObject();
+            if (obj && obj->stateCount() > 1) {
+                obj->nextState();
+                cmdLine_.setMessage("State " + std::to_string(obj->activeState() + 1) +
+                                   "/" + std::to_string(obj->stateCount()));
             } else {
-                pickedAtomIdx_ = -1;
-                cmdLine_.clearMessage();
+                cmdLine_.setMessage("Single-state structure");
+            }
+            break;
+        }
+        case Action::PrevState: {
+            auto obj = tab.currentObject();
+            if (obj && obj->stateCount() > 1) {
+                obj->prevState();
+                cmdLine_.setMessage("State " + std::to_string(obj->activeState() + 1) +
+                                   "/" + std::to_string(obj->stateCount()));
+            } else {
+                cmdLine_.setMessage("Single-state structure");
             }
             break;
         }
 
-        case Action::ShowHelp:
-            cmdLine_.setMessage("i inspect | / search | :select <expr> | :set bt|wt|br|renderer|panel | :help");
+        // Inspect (mouse-only — 'i' just shows level info)
+        case Action::Inspect:
+            cmdLine_.setMessage(std::string("Click to inspect | gs/gS/gc to select | Level: ") +
+                inspectLevelName(inspectLevel_));
             break;
 
-        inspectUpdate: {
-            // Update inspect cursor position → find nearest atom
-            buildProjCache();
-            pickedAtomIdx_ = findNearestAtom(cursorX_, cursorY_);
-            auto obj2 = tab.currentObject();
-            if (obj2 && pickedAtomIdx_ >= 0)
-                cmdLine_.setMessage("INSPECT: " + atomInfoString(*obj2, pickedAtomIdx_));
-            else
-                cmdLine_.setMessage("INSPECT: no atom nearby");
+        // Cycle inspect level: Atom → Residue → Chain → Object
+        case Action::CycleInspectLevel: {
+            inspectLevel_ = static_cast<InspectLevel>(
+                (static_cast<int>(inspectLevel_) + 1) % 4);
+            cmdLine_.setMessage(std::string("Inspect level: ") + inspectLevelName(inspectLevel_));
             break;
         }
+
+        // Pick mode: toggle atom/residue/chain selection mode
+        case Action::EnterSelectAtom:
+        case Action::EnterSelectResidue:
+        case Action::EnterSelectChain: {
+            PickMode target = (action == Action::EnterSelectAtom) ? PickMode::SelectAtom :
+                              (action == Action::EnterSelectResidue) ? PickMode::SelectResidue :
+                              PickMode::SelectChain;
+            pickMode_ = (pickMode_ == target) ? PickMode::Inspect : target;
+            if (pickMode_ != PickMode::Inspect)
+                cmdLine_.setMessage(std::string(pickModeName(pickMode_)) +
+                    " mode (click to add/remove, ESC to exit) sele=" +
+                    std::to_string(namedSelections_["sele"].size()));
+            else
+                cmdLine_.setMessage("Inspect mode");
+            break;
+        }
+
+        case Action::ShowHelp:
+            helpOverlay_ = true;
+            break;
 
         default:
             needsRedraw_ = false;
@@ -752,6 +919,8 @@ void Application::handleSearchInput(int key) {
 }
 
 void Application::renderFrame() {
+    ++frameCounter_;
+
     // Tab bar
     tabBar_.render(layout_.tabBar(), tabMgr_.tabNames(), tabMgr_.currentIndex());
 
@@ -811,23 +980,79 @@ void Application::renderViewport() {
         canvas_->flush(win);
     }
 
+    // Help overlay: keybinding cheat sheet
+    if (helpOverlay_) {
+        int ow = std::min(60, w - 4);
+        int oh = std::min(30, h - 2);
+        int ox = (w - ow) / 2;
+        int oy = (h - oh) / 2;
+
+        // Background box
+        for (int y = oy; y < oy + oh && y < h; ++y) {
+            for (int x = ox; x < ox + ow && x < w; ++x)
+                win.addCharColored(y, x, ' ', kColorStatusBar);
+        }
+
+        // Title
+        win.printColored(oy, ox + (ow - 20) / 2, "  MolTerm Keybindings ", kColorTabActive);
+
+        int row = oy + 2;
+        auto line = [&](const std::string& text) {
+            if (row < oy + oh - 1)
+                win.printColored(row++, ox + 2, text, kColorStatusBar);
+        };
+
+        line("NAVIGATION");
+        line(" h/j/k/l   Rotate molecule");
+        line(" W/A/S/D   Pan view");
+        line(" +/-       Zoom in/out");
+        line(" </>       Z-axis rotation");
+        line(" 0         Reset view");
+        line("");
+        line("REPRESENTATIONS (s=show, x=hide)");
+        line(" sw/sb/ss/sc/sr/sk   wire/ball/fill/cartoon/ribbon/bone");
+        line(" xw/xb/xs/xc/xr/xk  hide each    xa  hide all");
+        line("");
+        line("COLORING (c + key)");
+        line(" ce element  cc chain  cs SS  cb B-factor");
+        line(" cp pLDDT    cr rainbow");
+        line("");
+        line("OBJECTS & TABS");
+        line(" Tab/S-Tab  Next/prev object  Space  Toggle visible");
+        line(" gt/gT      Next/prev tab     dd     Delete object");
+        line(" o panel   i inspect   / search   n/N results");
+        line("");
+        line("MULTI-STATE       MACROS         OTHER");
+        line(" [/] prev/next    q record       m  toggle pixel");
+        line("     state        @ play          P  screenshot");
+        line("");
+        line(":help  :load  :fetch  :align  :measure  :export");
+        line("");
+        win.printColored(std::min(row, oy + oh - 1), ox + (ow - 24) / 2,
+                        "  Press any key to close  ", kColorTabActive);
+    }
+
     // Show history hint overlay when command line is active and empty
     cmdLine_.renderHistoryHint(win);
 
-    // Draw inspect cursor crosshair
-    if (inspectMode_ && cursorX_ >= 0 && cursorY_ >= 0) {
-        // Horizontal line
-        for (int x = std::max(0, cursorX_ - 2); x <= std::min(w - 1, cursorX_ + 2); ++x) {
-            if (x != cursorX_)
-                win.addCharColored(cursorY_, x, '-', kColorYellow);
+    // Draw selection highlight overlay for $sele atoms
+    {
+        auto selIt = namedSelections_.find("sele");
+        if (selIt != namedSelections_.end() && !selIt->second.empty()) {
+            // Build proj cache if not already built this frame
+            buildProjCache();
+            int scaleX = canvas_ ? canvas_->scaleX() : 1;
+            int scaleY = canvas_ ? canvas_->scaleY() : 1;
+            for (const auto& pa : projCache_) {
+                if (selIt->second.has(pa.idx)) {
+                    int tx = pa.sx / scaleX;
+                    int ty = pa.sy / scaleY;
+                    if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
+                        win.addCharColored(ty, tx, '*', kColorYellow);
+                    }
+                }
+            }
         }
-        // Vertical line
-        for (int y = std::max(0, cursorY_ - 1); y <= std::min(h - 1, cursorY_ + 1); ++y) {
-            if (y != cursorY_)
-                win.addCharColored(y, cursorX_, '|', kColorYellow);
-        }
-        // Center
-        win.addCharColored(cursorY_, cursorX_, '+', kColorYellow);
     }
 
     win.refresh();
@@ -842,7 +1067,16 @@ void Application::updateStatusBar() {
     if (obj) {
         objInfo = obj->name() + " [" +
                   std::to_string(obj->atoms().size()) + " atoms]";
+        if (obj->stateCount() > 1)
+            objInfo += " S:" + std::to_string(obj->activeState() + 1) +
+                       "/" + std::to_string(obj->stateCount());
         if (!obj->visible()) objInfo += " (hidden)";
+    }
+
+    if (pickMode_ != PickMode::Inspect) {
+        auto selIt = namedSelections_.find("sele");
+        int selCount = (selIt != namedSelections_.end()) ? static_cast<int>(selIt->second.size()) : 0;
+        objInfo = std::string(pickModeName(pickMode_)) + " [" + std::to_string(selCount) + "] " + objInfo;
     }
 
     // Show renderer type on right
@@ -877,6 +1111,8 @@ void Application::onResize() {
 }
 
 void Application::buildProjCache() {
+    if (projCacheFrame_ == frameCounter_ && !projCache_.empty()) return;
+    projCacheFrame_ = frameCounter_;
     projCache_.clear();
     auto& tab = tabMgr_.currentTab();
     auto obj = tab.currentObject();
@@ -914,24 +1150,26 @@ int Application::findNearestAtom(int termX, int termY) const {
     int subY = termY * scaleY + scaleY / 2;
 
     int bestIdx = -1;
-    float bestScore = std::numeric_limits<float>::max();
+    float bestDist2 = std::numeric_limits<float>::max();
+    float bestDepth = std::numeric_limits<float>::max();
 
     for (const auto& pa : projCache_) {
         float dx = static_cast<float>(pa.sx - subX);
         float dy = static_cast<float>(pa.sy - subY);
-        // Weight depth slightly to prefer front atoms when close
-        float screenDist2 = dx * dx + dy * dy;
-        float score = screenDist2 + pa.depth * 0.5f;
+        float dist2 = dx * dx + dy * dy;
 
-        if (score < bestScore) {
-            bestScore = score;
+        // Primary: screen distance. Tiebreaker: prefer front atom (smaller depth).
+        if (dist2 < bestDist2 - 0.5f ||
+            (dist2 < bestDist2 + 0.5f && pa.depth < bestDepth)) {
+            bestDist2 = dist2;
+            bestDepth = pa.depth;
             bestIdx = pa.idx;
         }
     }
 
     // Max pick range: 10 terminal cells worth of sub-pixels
     float maxRange = static_cast<float>(10 * std::max(scaleX, scaleY));
-    if (bestScore > maxRange * maxRange) return -1;
+    if (bestDist2 > maxRange * maxRange) return -1;
     return bestIdx;
 }
 
@@ -940,10 +1178,11 @@ std::string Application::atomInfoString(const MolObject& mol, int atomIdx) const
         return "";
     const auto& a = mol.atoms()[atomIdx];
     char buf[256];
+    std::string insStr = (a.insCode != ' ') ? std::string(1, a.insCode) : "";
     snprintf(buf, sizeof(buf),
-        "%s/%s %d%c/%s (%s) B=%.1f occ=%.2f [%.2f, %.2f, %.2f]",
+        "%s/%s %d%s/%s (%s) B=%.1f occ=%.2f [%.2f, %.2f, %.2f]",
         a.chainId.c_str(), a.resName.c_str(), a.resSeq,
-        a.insCode == ' ' ? '\0' : a.insCode,
+        insStr.c_str(),
         a.name.c_str(), a.element.c_str(),
         a.bFactor, a.occupancy,
         a.x, a.y, a.z);
@@ -1076,52 +1315,66 @@ void Application::registerCommands() {
         return result;
     }, ":objects", "List loaded objects");
 
-    // :show <repr>
-    cmdRegistry_.registerCmd("show", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :show <wireframe|ballstick|backbone>";
+    // Helper: resolve repr name to ReprType. Returns false if unknown.
+    auto resolveRepr = [](const std::string& name, ReprType& out) -> bool {
+        if (name == "wireframe" || name == "wire" || name == "lines") { out = ReprType::Wireframe; return true; }
+        if (name == "ballstick" || name == "sticks" || name == "bs")  { out = ReprType::BallStick; return true; }
+        if (name == "spacefill" || name == "spheres" || name == "cpk") { out = ReprType::Spacefill; return true; }
+        if (name == "cartoon" || name == "tube")     { out = ReprType::Cartoon; return true; }
+        if (name == "ribbon")                        { out = ReprType::Ribbon; return true; }
+        if (name == "backbone" || name == "trace" || name == "ca") { out = ReprType::Backbone; return true; }
+        return false;
+    };
+
+    // :show <repr> [selection]
+    cmdRegistry_.registerCmd("show", [resolveRepr](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "Usage: :show <repr> [selection]";
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return "No object selected";
-        const auto& repr = cmd.args[0];
-        if (repr == "wireframe" || repr == "wire" || repr == "lines")
-            obj->showRepr(ReprType::Wireframe);
-        else if (repr == "ballstick" || repr == "sticks" || repr == "bs")
-            obj->showRepr(ReprType::BallStick);
-        else if (repr == "spacefill" || repr == "spheres" || repr == "cpk")
-            obj->showRepr(ReprType::Spacefill);
-        else if (repr == "cartoon" || repr == "tube")
-            obj->showRepr(ReprType::Cartoon);
-        else if (repr == "ribbon")
-            obj->showRepr(ReprType::Ribbon);
-        else if (repr == "backbone" || repr == "trace" || repr == "ca")
-            obj->showRepr(ReprType::Backbone);
-        else return "Unknown representation: " + repr;
-        return "Showing " + repr;
-    }, ":show <repr>", "Show representation");
+        ReprType rt;
+        if (!resolveRepr(cmd.args[0], rt)) return "Unknown representation: " + cmd.args[0];
 
-    // :hide <repr>
-    cmdRegistry_.registerCmd("hide", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (cmd.args.size() > 1) {
+            // Per-atom show: :show cartoon chain A
+            std::string expr;
+            for (size_t i = 1; i < cmd.args.size(); ++i) {
+                if (i > 1) expr += " ";
+                expr += cmd.args[i];
+            }
+            auto sel = app.parseSelection(expr, *obj);
+            if (sel.empty()) return "No atoms match: " + expr;
+            obj->showReprForAtoms(rt, std::vector<int>(sel.indices().begin(), sel.indices().end()));
+            return "Showing " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms";
+        }
+        obj->showRepr(rt);
+        return "Showing " + cmd.args[0];
+    }, ":show <repr> [selection]", "Show representation (optionally for selection)");
+
+    // :hide <repr|all> [selection]
+    cmdRegistry_.registerCmd("hide", [resolveRepr](Application& app, const ParsedCommand& cmd) -> std::string {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return "No object selected";
         if (cmd.args.empty() || cmd.args[0] == "all") {
             obj->hideAllRepr();
             return "Hidden all representations";
         }
-        const auto& repr = cmd.args[0];
-        if (repr == "wireframe" || repr == "wire" || repr == "lines")
-            obj->hideRepr(ReprType::Wireframe);
-        else if (repr == "ballstick" || repr == "sticks" || repr == "bs")
-            obj->hideRepr(ReprType::BallStick);
-        else if (repr == "spacefill" || repr == "spheres" || repr == "cpk")
-            obj->hideRepr(ReprType::Spacefill);
-        else if (repr == "cartoon" || repr == "tube")
-            obj->hideRepr(ReprType::Cartoon);
-        else if (repr == "ribbon")
-            obj->hideRepr(ReprType::Ribbon);
-        else if (repr == "backbone" || repr == "trace" || repr == "ca")
-            obj->hideRepr(ReprType::Backbone);
-        else return "Unknown representation: " + repr;
-        return "Hidden " + repr;
-    }, ":hide <repr|all>", "Hide representation");
+        ReprType rt;
+        if (!resolveRepr(cmd.args[0], rt)) return "Unknown representation: " + cmd.args[0];
+
+        if (cmd.args.size() > 1) {
+            std::string expr;
+            for (size_t i = 1; i < cmd.args.size(); ++i) {
+                if (i > 1) expr += " ";
+                expr += cmd.args[i];
+            }
+            auto sel = app.parseSelection(expr, *obj);
+            if (sel.empty()) return "No atoms match: " + expr;
+            obj->hideReprForAtoms(rt, std::vector<int>(sel.indices().begin(), sel.indices().end()));
+            return "Hidden " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms";
+        }
+        obj->hideRepr(rt);
+        return "Hidden " + cmd.args[0];
+    }, ":hide <repr|all> [selection]", "Hide representation (optionally for selection)");
 
     // :color <scheme>
     cmdRegistry_.registerCmd("color", [](Application& app, const ParsedCommand& cmd) -> std::string {
@@ -1403,7 +1656,8 @@ void Application::registerCommands() {
 
     // :help
     cmdRegistry_.registerCmd("help", [](Application&, const ParsedCommand&) -> std::string {
-        return "Commands: :load :q :show :hide :color :zoom :tabnew :tabclose :objects :delete :rename :info | :set renderer|bt|wt|br|panel";
+        return "Commands: :load :fetch :show :hide :color :zoom :center :orient :select :count "
+               ":align :measure :angle :dihedral :export :set :objects :delete :rename :info | ? for keybindings";
     }, ":help", "Show help");
 
     // :delete
@@ -1451,7 +1705,13 @@ void Application::registerCommands() {
 
     // :select <expression>
     cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :select <expr> or :select <name> = <expr>";
+        if (cmd.args.empty()) return "Usage: :select <expr> | :select <name> = <expr> | :select clear";
+        // :select clear — clear $sele
+        if (cmd.args[0] == "clear") {
+            auto it = app.namedSelections().find("sele");
+            if (it != app.namedSelections().end()) it->second.clear();
+            return "Selection cleared";
+        }
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return "No object selected";
 
@@ -1669,6 +1929,39 @@ void Application::registerCommands() {
         return "Fetched " + id + " from " + src + " | " + result;
     }, ":fetch <pdb_id|afdb:uniprot_id>", "Download structure from RCSB PDB or AlphaFold DB");
 
+    // :assembly [id|list] — generate biological assembly
+    cmdRegistry_.registerCmd("assembly", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return "No object selected";
+        std::string path = obj->sourcePath();
+        if (path.empty()) return "No source file for " + obj->name();
+
+        if (!cmd.args.empty() && cmd.args[0] == "list") {
+            auto assemblies = CifLoader::listAssemblies(path);
+            if (assemblies.empty()) return "No assemblies found in " + obj->name();
+            std::string result = "Assemblies:";
+            for (const auto& a : assemblies)
+                result += " " + a.name + "(" + std::to_string(a.oligomericCount) + "-mer)";
+            return result;
+        }
+
+        std::string asmId = cmd.args.empty() ? "1" : cmd.args[0];
+        try {
+            auto asmObj = CifLoader::loadAssembly(path, asmId);
+            int atomCount = static_cast<int>(asmObj->atoms().size());
+            int bondCount = static_cast<int>(asmObj->bonds().size());
+            std::string name = asmObj->name();
+            auto ptr = app.store().add(std::move(asmObj));
+            app.tabs().currentTab().addObject(ptr);
+            if (app.autoCenter()) app.tabs().currentTab().centerView();
+            MLOG_INFO("Generated assembly %s: %d atoms, %d bonds", asmId.c_str(), atomCount, bondCount);
+            return "Assembly " + asmId + " → " + name + ": " +
+                   std::to_string(atomCount) + " atoms, " + std::to_string(bondCount) + " bonds";
+        } catch (const std::exception& e) {
+            return std::string("Assembly error: ") + e.what();
+        }
+    }, ":assembly [id|list]", "Generate biological assembly (default: assembly 1)");
+
     // :export <file.pml> — export PyMOL script
     cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> std::string {
         if (cmd.args.empty()) return "Usage: :export <file.pml>";
@@ -1708,6 +2001,160 @@ void Application::registerCommands() {
                    std::to_string(pc->pixelHeight()) + " to " + path;
         return "Failed to save " + path;
     }, ":screenshot [file.png]", "Save viewport as PNG (pixel renderer only)");
+
+    // Helper: resolve atom index from serial number string or pick register
+    auto resolveAtomIdx = [](Application& app, const std::string& s) -> int {
+        // Pick register: pk1..pk4
+        if (s.size() >= 3 && s[0] == 'p' && s[1] == 'k' && s[2] >= '1' && s[2] <= '4') {
+            return app.pickReg(s[2] - '1');
+        }
+        // Named selection reference: $name → first atom
+        if (!s.empty() && s[0] == '$') {
+            auto it = app.namedSelections().find(s.substr(1));
+            if (it != app.namedSelections().end() && !it->second.empty())
+                return it->second.indices()[0];
+            return -1;
+        }
+        // Serial number
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return -1;
+        const auto& atoms = obj->atoms();
+        try {
+            int serial = std::stoi(s);
+            for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+                if (atoms[i].serial == serial) return i;
+            }
+        } catch (...) {}
+        return -1;
+    };
+
+    // Helper: format atom label for measurement display
+    auto atomLabel = [](const AtomData& a) -> std::string {
+        return a.chainId + "/" + a.resName + std::to_string(a.resSeq) + "/" + a.name;
+    };
+
+    // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
+    cmdRegistry_.registerCmd("measure", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return "No object selected";
+        const auto& atoms = obj->atoms();
+        int n = static_cast<int>(atoms.size());
+
+        int i1, i2;
+        if (cmd.args.empty()) {
+            // Use pick registers pk1, pk2
+            i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
+            if (i1 < 0 || i2 < 0) return "Click two atoms first (pk1, pk2), then :measure";
+        } else if (cmd.args.size() >= 2) {
+            i1 = resolveAtomIdx(app, cmd.args[0]);
+            i2 = resolveAtomIdx(app, cmd.args[1]);
+            if (i1 < 0) return "Atom not found: serial " + cmd.args[0];
+            if (i2 < 0) return "Atom not found: serial " + cmd.args[1];
+        } else {
+            return "Usage: :measure [serial1 serial2] (or click 2 atoms first)";
+        }
+        if (i1 >= n || i2 >= n) return "Invalid atom index";
+
+        float dx = atoms[i1].x - atoms[i2].x;
+        float dy = atoms[i1].y - atoms[i2].y;
+        float dz = atoms[i1].z - atoms[i2].z;
+        float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+        std::string msg = "Distance " + atomLabel(atoms[i1]) + " — " +
+            atomLabel(atoms[i2]) + " = " +
+            std::to_string(dist).substr(0, std::to_string(dist).find('.') + 3) + " A";
+        MLOG_INFO("%s", msg.c_str());
+        return msg;
+    }, ":measure [s1 s2]", "Distance (no args = pk1↔pk2)");
+
+    // :angle [s1 s2 s3] — angle at vertex s2 (no args = pk1-pk2-pk3)
+    cmdRegistry_.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return "No object selected";
+        const auto& atoms = obj->atoms();
+        int n = static_cast<int>(atoms.size());
+
+        int i1, i2, i3;
+        if (cmd.args.empty()) {
+            i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1]; i3 = app.pickRegs_[2];
+            if (i1 < 0 || i2 < 0 || i3 < 0) return "Click three atoms first (pk1-pk3), then :angle";
+        } else if (cmd.args.size() >= 3) {
+            i1 = resolveAtomIdx(app, cmd.args[0]);
+            i2 = resolveAtomIdx(app, cmd.args[1]);
+            i3 = resolveAtomIdx(app, cmd.args[2]);
+            if (i1 < 0) return "Atom not found: serial " + cmd.args[0];
+            if (i2 < 0) return "Atom not found: serial " + cmd.args[1];
+            if (i3 < 0) return "Atom not found: serial " + cmd.args[2];
+        } else {
+            return "Usage: :angle [s1 s2 s3] (or click 3 atoms first)";
+        }
+        if (i1 >= n || i2 >= n || i3 >= n) return "Invalid atom index";
+
+        float v1x = atoms[i1].x - atoms[i2].x, v1y = atoms[i1].y - atoms[i2].y, v1z = atoms[i1].z - atoms[i2].z;
+        float v2x = atoms[i3].x - atoms[i2].x, v2y = atoms[i3].y - atoms[i2].y, v2z = atoms[i3].z - atoms[i2].z;
+        float dot = v1x*v2x + v1y*v2y + v1z*v2z;
+        float len1 = std::sqrt(v1x*v1x + v1y*v1y + v1z*v1z);
+        float len2 = std::sqrt(v2x*v2x + v2y*v2y + v2z*v2z);
+        float cosA = (len1 > 0 && len2 > 0) ? dot / (len1 * len2) : 0;
+        cosA = std::max(-1.0f, std::min(1.0f, cosA));
+        float deg = std::acos(cosA) * 180.0f / static_cast<float>(M_PI);
+
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%.1f", deg);
+        std::string msg = "Angle " + atomLabel(atoms[i1]) + " — " +
+            atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " = " + buf + " deg";
+        MLOG_INFO("%s", msg.c_str());
+        return msg;
+    }, ":angle [s1 s2 s3]", "Angle at s2 (no args = pk1-pk2-pk3)");
+
+    // :dihedral [s1 s2 s3 s4] — dihedral (no args = pk1-pk4)
+    cmdRegistry_.registerCmd("dihedral", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return "No object selected";
+        const auto& atoms = obj->atoms();
+        int n = static_cast<int>(atoms.size());
+
+        int i1, i2, i3, i4;
+        if (cmd.args.empty()) {
+            i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
+            i3 = app.pickRegs_[2]; i4 = app.pickRegs_[3];
+            if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0)
+                return "Click four atoms first (pk1-pk4), then :dihedral";
+        } else if (cmd.args.size() >= 4) {
+            i1 = resolveAtomIdx(app, cmd.args[0]);
+            i2 = resolveAtomIdx(app, cmd.args[1]);
+            i3 = resolveAtomIdx(app, cmd.args[2]);
+            i4 = resolveAtomIdx(app, cmd.args[3]);
+            if (i1 < 0) return "Atom not found: serial " + cmd.args[0];
+            if (i2 < 0) return "Atom not found: serial " + cmd.args[1];
+            if (i3 < 0) return "Atom not found: serial " + cmd.args[2];
+            if (i4 < 0) return "Atom not found: serial " + cmd.args[3];
+        } else {
+            return "Usage: :dihedral [s1 s2 s3 s4] (or click 4 atoms first)";
+        }
+        if (i1 >= n || i2 >= n || i3 >= n || i4 >= n) return "Invalid atom index";
+
+        float b1x = atoms[i2].x-atoms[i1].x, b1y = atoms[i2].y-atoms[i1].y, b1z = atoms[i2].z-atoms[i1].z;
+        float b2x = atoms[i3].x-atoms[i2].x, b2y = atoms[i3].y-atoms[i2].y, b2z = atoms[i3].z-atoms[i2].z;
+        float b3x = atoms[i4].x-atoms[i3].x, b3y = atoms[i4].y-atoms[i3].y, b3z = atoms[i4].z-atoms[i3].z;
+        float n1x = b1y*b2z-b1z*b2y, n1y = b1z*b2x-b1x*b2z, n1z = b1x*b2y-b1y*b2x;
+        float n2x = b2y*b3z-b2z*b3y, n2y = b2z*b3x-b2x*b3z, n2z = b2x*b3y-b2y*b3x;
+        float b2len = std::sqrt(b2x*b2x + b2y*b2y + b2z*b2z);
+        if (b2len < 1e-8f) return "Degenerate dihedral";
+        float ub2x = b2x/b2len, ub2y = b2y/b2len, ub2z = b2z/b2len;
+        float mx = n1y*ub2z-n1z*ub2y, my = n1z*ub2x-n1x*ub2z, mz = n1x*ub2y-n1y*ub2x;
+        float xv = n1x*n2x+n1y*n2y+n1z*n2z;
+        float yv = mx*n2x+my*n2y+mz*n2z;
+        float deg = std::atan2(yv, xv) * 180.0f / static_cast<float>(M_PI);
+
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%.1f", deg);
+        std::string msg = "Dihedral " + atomLabel(atoms[i1]) + " — " +
+            atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " — " +
+            atomLabel(atoms[i4]) + " = " + buf + " deg";
+        MLOG_INFO("%s", msg.c_str());
+        return msg;
+    }, ":dihedral [s1 s2 s3 s4]", "Dihedral (no args = pk1-pk4)");
 }
 
 } // namespace molterm

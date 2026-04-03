@@ -109,7 +109,11 @@ void KeymapManager::bindNormalDefaults() {
     // Quick actions
     km.bind(Mode::Normal, {'n'},       Action::SearchNext,  "Next search result");
     km.bind(Mode::Normal, {'N'},       Action::SearchPrev,  "Prev search result");
-    km.bind(Mode::Normal, {'i'},       Action::Inspect,     "Inspect atom");
+    km.bind(Mode::Normal, {'i'},       Action::Inspect,     "Inspect info");
+    km.bind(Mode::Normal, {'I'},       Action::CycleInspectLevel, "Cycle inspect level");
+    km.bind(Mode::Normal, {'g', 's'},  Action::EnterSelectAtom,    "Select atoms (click)");
+    km.bind(Mode::Normal, {'g', 'S'},  Action::EnterSelectResidue, "Select residues (click)");
+    km.bind(Mode::Normal, {'g', 'c'},  Action::EnterSelectChain,   "Select chains (click)");
     km.bind(Mode::Normal, {'?'},       Action::ShowHelp,    "Show help");
     km.bind(Mode::Normal, {'u'},       Action::Undo,        "Undo");
     km.bind(Mode::Normal, {18},        Action::Redo,        "Redo (Ctrl+R)");
@@ -122,6 +126,10 @@ void KeymapManager::bindNormalDefaults() {
     // Renderer toggle + screenshot
     km.bind(Mode::Normal, {'m'},       Action::TogglePixelRenderer, "Toggle braille/pixel");
     km.bind(Mode::Normal, {'P'},        Action::Screenshot,          "Screenshot (PNG)");
+
+    // Multi-state cycling
+    km.bind(Mode::Normal, {']'},       Action::NextState,   "Next state");
+    km.bind(Mode::Normal, {'['},       Action::PrevState,   "Prev state");
 
     // Macro recording
     km.bind(Mode::Normal, {'q'},       Action::StartMacro,  "Record/stop macro");

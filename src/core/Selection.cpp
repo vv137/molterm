@@ -45,6 +45,39 @@ Selection Selection::operator~() const {
     return *this;
 }
 
+void Selection::addIndex(int idx) {
+    auto it = std::lower_bound(indices_.begin(), indices_.end(), idx);
+    if (it == indices_.end() || *it != idx)
+        indices_.insert(it, idx);
+}
+
+void Selection::addIndices(const std::vector<int>& idxs) {
+    if (idxs.empty()) return;
+    std::vector<int> sorted = idxs;
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<int> merged;
+    merged.reserve(indices_.size() + sorted.size());
+    std::set_union(indices_.begin(), indices_.end(),
+                   sorted.begin(), sorted.end(),
+                   std::back_inserter(merged));
+    indices_ = std::move(merged);
+}
+
+void Selection::removeIndex(int idx) {
+    auto it = std::lower_bound(indices_.begin(), indices_.end(), idx);
+    if (it != indices_.end() && *it == idx)
+        indices_.erase(it);
+}
+
+bool Selection::has(int idx) const {
+    return std::binary_search(indices_.begin(), indices_.end(), idx);
+}
+
+void Selection::clear() {
+    indices_.clear();
+    expr_.clear();
+}
+
 Selection Selection::all(int totalAtoms) {
     std::vector<int> indices(totalAtoms);
     for (int i = 0; i < totalAtoms; ++i) indices[i] = i;

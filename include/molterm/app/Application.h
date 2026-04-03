@@ -25,6 +25,9 @@
 
 namespace molterm {
 
+enum class InspectLevel { Atom, Residue, Chain, Object };
+enum class PickMode { Inspect, SelectAtom, SelectResidue, SelectChain };
+
 enum class RendererType {
     Ascii,
     Braille,
@@ -117,19 +120,31 @@ private:
     // Named selections
     std::unordered_map<std::string, Selection> namedSelections_;
 
-    // Inspect mode state
-    bool inspectMode_ = false;
-    int cursorX_ = -1, cursorY_ = -1;  // viewport terminal coords
-    int pickedAtomIdx_ = -1;           // nearest atom index
+    // Help overlay state
+    bool helpOverlay_ = false;
 
-    // Projected atom cache for picking (populated each frame)
+    // Inspect / pick state (mouse-only)
+    InspectLevel inspectLevel_ = InspectLevel::Atom;
+    PickMode pickMode_ = PickMode::Inspect;
+    int pickedAtomIdx_ = -1;           // nearest atom index from last click
+
+    // Pick registers: pk1→pk4, rotates on each inspect click (like PyMOL)
+    int pickRegs_[4] = {-1, -1, -1, -1};
+    int pickNext_ = 0;
+public:
+    int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
+private:
+
+    // Projected atom cache for picking (populated once per frame)
     struct ProjAtom { int idx; int sx, sy; float depth; };
     std::vector<ProjAtom> projCache_;
+    int projCacheFrame_ = -1;  // frame counter to avoid redundant rebuilds
 
     bool running_ = false;
     bool needsRedraw_ = true;
     int64_t lastFrameMs_ = 0;
     int framesToSkip_ = 0;
+    int frameCounter_ = 0;
     float fogStrength_ = 0.35f;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;

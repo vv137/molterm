@@ -50,11 +50,15 @@ public:
     void setVisible(bool v) { visible_ = v; }
     void toggleVisible() { visible_ = !visible_; }
 
-    // Representations
+    // Representations — per-object or per-atom visibility
     bool reprVisible(ReprType r) const;
+    bool reprVisibleForAtom(ReprType r, int atomIdx) const;
     void showRepr(ReprType r);
+    void showReprForAtoms(ReprType r, const std::vector<int>& indices);
     void hideRepr(ReprType r);
+    void hideReprForAtoms(ReprType r, const std::vector<int>& indices);
     void hideAllRepr();
+    bool hasPerAtomRepr() const { return !reprAtomMask_.empty(); }
 
     // Coloring
     ColorScheme colorScheme() const { return colorScheme_; }
@@ -79,8 +83,13 @@ public:
                             float& maxX, float& maxY, float& maxZ) const;
     void computeCenter(float& cx, float& cy, float& cz) const;
 
-    // Multi-state (future: NMR, trajectory)
+    // Multi-state (NMR ensembles, trajectory)
     int activeState() const { return activeState_; }
+    int stateCount() const { return static_cast<int>(states_.size()); }
+    void addState(std::vector<AtomData> atomState);
+    bool setActiveState(int idx);
+    bool nextState();
+    bool prevState();
 
 private:
     std::string name_;
@@ -89,9 +98,13 @@ private:
     std::vector<BondData> bonds_;
     bool visible_ = true;
     int activeState_ = 0;
+    std::vector<std::vector<AtomData>> states_;  // multi-state coordinates (model 0 = atoms_)
     std::unordered_map<ReprType, bool> reprVisible_ = {
         {ReprType::Wireframe, true},
     };
+    // Per-atom repr mask: if empty for a repr, all atoms are visible.
+    // If non-empty, only atoms with mask[i]=true are rendered for that repr.
+    std::unordered_map<ReprType, std::vector<bool>> reprAtomMask_;
     ColorScheme colorScheme_ = ColorScheme::Element;
     std::vector<int> atomColors_;  // per-atom override, -1 = use scheme
     mutable std::vector<float> rainbowCache_;

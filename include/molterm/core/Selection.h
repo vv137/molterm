@@ -21,6 +21,13 @@ public:
     size_t size() const { return indices_.size(); }
     bool empty() const { return indices_.empty(); }
 
+    // Mutation (for mouse picking)
+    void addIndex(int idx);
+    void addIndices(const std::vector<int>& idxs);
+    void removeIndex(int idx);
+    bool has(int idx) const;
+    void clear();
+
     // Set operations
     Selection operator&(const Selection& other) const;  // AND (intersection)
     Selection operator|(const Selection& other) const;  // OR (union)
