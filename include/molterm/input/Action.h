@@ -93,6 +93,7 @@ enum class Action {
 
     // Macro recording (Phase 4)
     TogglePixelRenderer,
+    Screenshot,
     StartMacro,
     PlayMacro,
     ColorByPLDDT,
@@ -161,6 +162,7 @@ inline std::string actionName(Action a) {
         case Action::ClearLine:      return "clear_line";
         case Action::ExecuteSearch:  return "execute_search";
         case Action::TogglePixelRenderer: return "toggle_pixel";
+        case Action::Screenshot:  return "screenshot";
         case Action::StartMacro:     return "start_macro";
         case Action::PlayMacro:      return "play_macro";
         case Action::ColorByPLDDT:   return "color_by_plddt";
@@ -235,6 +237,7 @@ inline Action actionFromName(const std::string& name) {
     if (name == "clear_line")       return Action::ClearLine;
     if (name == "execute_search")   return Action::ExecuteSearch;
     if (name == "toggle_pixel")     return Action::TogglePixelRenderer;
+    if (name == "screenshot")       return Action::Screenshot;
     if (name == "start_macro")      return Action::StartMacro;
     if (name == "play_macro")       return Action::PlayMacro;
     return Action::None;

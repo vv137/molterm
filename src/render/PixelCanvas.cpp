@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <ncurses.h>
 #include <sys/ioctl.h>
@@ -174,6 +175,80 @@ void PixelCanvas::applyDepthFog(float strength, uint8_t fogR, uint8_t fogG, uint
         rgb_[idx + 1] = static_cast<uint8_t>(rgb_[idx + 1] + (fogG - rgb_[idx + 1]) * t);
         rgb_[idx + 2] = static_cast<uint8_t>(rgb_[idx + 2] + (fogB - rgb_[idx + 2]) * t);
     }
+}
+
+// ── PNG export ──────────────────────────────────────────────────────────────
+
+// Minimal PNG writer using zlib (no libpng needed).
+#include <zlib.h>
+
+static void pngPut32(std::vector<uint8_t>& v, uint32_t val) {
+    v.push_back((val >> 24) & 0xFF);
+    v.push_back((val >> 16) & 0xFF);
+    v.push_back((val >> 8) & 0xFF);
+    v.push_back(val & 0xFF);
+}
+
+static void pngWriteChunk(std::ofstream& f, const char* type,
+                           const uint8_t* data, size_t len) {
+    uint32_t crc;
+    std::vector<uint8_t> buf;
+    pngPut32(buf, static_cast<uint32_t>(len));
+    buf.insert(buf.end(), type, type + 4);
+    if (data && len > 0) buf.insert(buf.end(), data, data + len);
+    crc = crc32(0L, buf.data() + 4, static_cast<uInt>(4 + len));
+    pngPut32(buf, crc);
+    f.write(reinterpret_cast<const char*>(buf.data()), buf.size());
+}
+
+bool PixelCanvas::savePNG(const std::string& path) const {
+    if (pixW_ <= 0 || pixH_ <= 0) return false;
+
+    // After flush(), rgb_ may have been swapped with prevRgb_.
+    // Use whichever has actual pixel data (non-zero).
+    const std::vector<uint8_t>& src =
+        (!prevRgb_.empty() && prevRgb_.size() == rgb_.size()) ? prevRgb_ : rgb_;
+
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    // PNG signature
+    const uint8_t sig[] = {137, 80, 78, 71, 13, 10, 26, 10};
+    f.write(reinterpret_cast<const char*>(sig), 8);
+
+    // IHDR
+    std::vector<uint8_t> ihdr;
+    pngPut32(ihdr, static_cast<uint32_t>(pixW_));
+    pngPut32(ihdr, static_cast<uint32_t>(pixH_));
+    ihdr.push_back(8);  // bit depth
+    ihdr.push_back(2);  // color type: RGB
+    ihdr.push_back(0);  // compression
+    ihdr.push_back(0);  // filter
+    ihdr.push_back(0);  // interlace
+    pngWriteChunk(f, "IHDR", ihdr.data(), ihdr.size());
+
+    // IDAT: filter byte (0=None) + RGB row data, zlib compressed
+    size_t rawSize = static_cast<size_t>(pixH_) * (1 + pixW_ * 3);
+    std::vector<uint8_t> raw(rawSize);
+    size_t offset = 0;
+    for (int y = 0; y < pixH_; ++y) {
+        raw[offset++] = 0;  // filter: None
+        std::memcpy(&raw[offset], &src[y * pixW_ * 3], pixW_ * 3);
+        offset += pixW_ * 3;
+    }
+
+    uLongf compLen = compressBound(static_cast<uLong>(rawSize));
+    std::vector<uint8_t> comp(compLen);
+    if (compress2(comp.data(), &compLen, raw.data(), static_cast<uLong>(rawSize), 6) != Z_OK)
+        return false;
+    comp.resize(compLen);
+
+    pngWriteChunk(f, "IDAT", comp.data(), comp.size());
+
+    // IEND
+    pngWriteChunk(f, "IEND", nullptr, 0);
+
+    return f.good();
 }
 
 // ── Flush ───────────────────────────────────────────────────────────────────

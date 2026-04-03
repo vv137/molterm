@@ -126,7 +126,7 @@ void Application::setRenderer(RendererType type) {
 int Application::run() {
     running_ = true;
     needsRedraw_ = true;
-    int framesToSkip = 0;
+    framesToSkip_ = 0;
 
     while (running_) {
         if (g_resized) {
@@ -135,18 +135,16 @@ int Application::run() {
         }
 
         if (needsRedraw_) {
-            if (framesToSkip > 0) {
-                // Skip this frame to maintain responsiveness
-                --framesToSkip;
+            if (framesToSkip_ > 0) {
+                --framesToSkip_;
             } else {
                 auto t0 = std::chrono::steady_clock::now();
                 renderFrame();
                 auto t1 = std::chrono::steady_clock::now();
                 lastFrameMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-                // If frame took > 100ms, skip next 1-3 frames
                 if (lastFrameMs_ > 100) {
-                    framesToSkip = std::min(3, static_cast<int>(lastFrameMs_ / 50));
+                    framesToSkip_ = std::min(3, static_cast<int>(lastFrameMs_ / 50));
                 }
             }
             needsRedraw_ = false;
@@ -604,13 +602,21 @@ void Application::handleAction(Action action) {
             break;
         }
 
+        // Screenshot
+        case Action::Screenshot: {
+            std::string result = cmdRegistry_.execute(*this, "screenshot");
+            if (!result.empty()) cmdLine_.setMessage(result);
+            break;
+        }
+
         // Renderer toggle (braille ↔ pixel)
         case Action::TogglePixelRenderer:
+            fprintf(stdout, "\033[2J");
+            fflush(stdout);
+            framesToSkip_ = 0;  // don't skip the first frame after switch
             if (rendererType_ == RendererType::Pixel) {
-                setRenderer(RendererType::Braille);
-                fflush(stdout);
-                fprintf(stdout, "\033[2J");
-                fflush(stdout);
+                rendererType_ = RendererType::Braille;
+                canvas_ = std::make_unique<BrailleCanvas>();
                 clearok(curscr, TRUE);
                 cmdLine_.setMessage("Renderer: BRAILLE");
             } else {
@@ -1510,6 +1516,28 @@ void Application::registerCommands() {
         std::string result = SessionExporter::exportPML(path, tab, vpW, vpH);
         return result;
     }, ":export <file.pml>", "Export session as PyMOL script");
+
+    // :screenshot <file.png>
+    cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (app.rendererType() != RendererType::Pixel)
+            return "Screenshot requires pixel renderer (:set renderer pixel)";
+        auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
+        if (!pc) return "No pixel canvas";
+        std::string path;
+        if (cmd.args.empty()) {
+            auto now = std::chrono::system_clock::now();
+            auto t = std::chrono::system_clock::to_time_t(now);
+            char fname[64];
+            std::strftime(fname, sizeof(fname), "molterm_%Y%m%d_%H%M%S.png", std::localtime(&t));
+            path = fname;
+        } else {
+            path = cmd.args[0];
+        }
+        if (pc->savePNG(path))
+            return "Saved " + std::to_string(pc->pixelWidth()) + "x" +
+                   std::to_string(pc->pixelHeight()) + " to " + path;
+        return "Failed to save " + path;
+    }, ":screenshot [file.png]", "Save viewport as PNG (pixel renderer only)");
 }
 
 } // namespace molterm

@@ -114,8 +114,9 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'p'},       Action::PasteObject,  "Paste object");
     km.bind(Mode::Normal, {'r'},       Action::RenameObject, "Rename object");
 
-    // Renderer toggle
+    // Renderer toggle + screenshot
     km.bind(Mode::Normal, {'m'},       Action::TogglePixelRenderer, "Toggle braille/pixel");
+    km.bind(Mode::Normal, {'P'},        Action::Screenshot,          "Screenshot (PNG)");
 
     // Macro recording
     km.bind(Mode::Normal, {'q'},       Action::StartMacro,  "Record/stop macro");

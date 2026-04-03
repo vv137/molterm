@@ -48,6 +48,9 @@ public:
     void applyDepthFog(float strength = 0.35f,
                        uint8_t fogR = 30, uint8_t fogG = 35, uint8_t fogB = 50);
 
+    // Save current framebuffer as PNG
+    bool savePNG(const std::string& path) const;
+
     // Swap encoder at runtime
     void setEncoder(std::unique_ptr<GraphicsEncoder> enc);
     const GraphicsEncoder* encoder() const { return encoder_.get(); }

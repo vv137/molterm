@@ -56,6 +56,9 @@ public:
     void setRenderer(RendererType type);
     RendererType rendererType() const { return rendererType_; }
 
+    // Canvas access
+    Canvas* canvas() { return canvas_.get(); }
+
     // Representation access (for :set commands)
     Representation* getRepr(ReprType type);
 
@@ -122,6 +125,7 @@ private:
     bool running_ = false;
     bool needsRedraw_ = true;
     int64_t lastFrameMs_ = 0;
+    int framesToSkip_ = 0;
     float fogStrength_ = 0.35f;
 
     // Macro recording state
