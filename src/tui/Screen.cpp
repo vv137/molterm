@@ -1,10 +1,17 @@
+#include <clocale>
+#include <cstring>
+
 #include "molterm/tui/Screen.h"
-#include <locale.h>
 
 namespace molterm {
 
 Screen::Screen() {
-    setlocale(LC_ALL, "");
+    // Try the user's locale first; fall back to common UTF-8 locales
+    // so that wide-char ncurses works even on minimal Linux installs.
+    if (!setlocale(LC_ALL, "") || !std::strstr(setlocale(LC_ALL, nullptr), "UTF-8")) {
+        if (!setlocale(LC_ALL, "C.UTF-8"))
+            setlocale(LC_ALL, "en_US.UTF-8");
+    }
     initscr();
     if (has_colors()) {
         start_color();

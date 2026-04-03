@@ -40,17 +40,16 @@ set_target_properties(USalign PROPERTIES
 
 # ncurses — prefer wide-character build (ncursesw) for Unicode support.
 # On macOS the system curses already includes wide-char support.
-# On Linux we must link against ncursesw explicitly.
+# On Linux we must link against ncursesw explicitly and include its
+# headers from /usr/include/ncursesw/ so the wide-char API is declared.
+set(NCURSESW_FOUND FALSE)
 if(NOT APPLE)
     find_package(PkgConfig QUIET)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(NCURSESW QUIET ncursesw)
+        pkg_check_modules(NCURSESW QUIET IMPORTED_TARGET ncursesw)
     endif()
 endif()
-if(NCURSESW_FOUND)
-    set(CURSES_INCLUDE_DIR  ${NCURSESW_INCLUDE_DIRS})
-    set(CURSES_LIBRARIES    ${NCURSESW_LIBRARIES})
-else()
+if(NOT NCURSESW_FOUND)
     find_package(Curses REQUIRED)
 endif()
 
@@ -108,12 +107,12 @@ add_executable(molterm ${MOLTERM_SOURCES})
 
 target_include_directories(molterm PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CURSES_INCLUDE_DIR}
+    $<$<NOT:$<BOOL:${NCURSESW_FOUND}>>:${CURSES_INCLUDE_DIR}>
 )
 
 target_link_libraries(molterm PRIVATE
     gemmi::gemmi_cpp
-    ${CURSES_LIBRARIES}
+    $<IF:$<BOOL:${NCURSESW_FOUND}>,PkgConfig::NCURSESW,${CURSES_LIBRARIES}>
 )
 
 target_compile_options(molterm PRIVATE
