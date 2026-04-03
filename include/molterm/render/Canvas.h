@@ -42,9 +42,9 @@ public:
     virtual void drawDot(int sx, int sy, float depth, int colorPair) = 0;
     virtual void drawLine(int x0, int y0, float d0,
                           int x1, int y1, float d1,
-                          int colorPair) = 0;
+                          int colorPair);
     virtual void drawCircle(int cx, int cy, float depth,
-                            int radius, int colorPair, bool filled) = 0;
+                            int radius, int colorPair, bool filled);
 
     // Convenience: draw char at terminal cell coords (for labels)
     virtual void drawChar(int termX, int termY, float depth,

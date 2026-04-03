@@ -547,7 +547,8 @@ set_view (\
 - [ ] **KeymapManager TOML** — fully customizable keybindings from file
 - [ ] **Color schemes** — user-defined color themes from `colors.toml`
 - [ ] **SessionExporter** — .pml script generation
-- [ ] **`:fetch`** — download structures from RCSB PDB
+- [ ] **`:fetch`** — download structures from RCSB PDB and AFDB
+- [ ] **pLDDT** - pLDDT color scheme
 - [ ] **Macro recording** — `q`/`@` VIM-style macros
 - [ ] **Tab completion** — for commands, filenames, object names
 

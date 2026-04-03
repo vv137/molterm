@@ -28,11 +28,6 @@ public:
     int scaleY() const override { return kPixPerCellY; }
 
     void drawDot(int sx, int sy, float depth, int colorPair) override;
-    void drawLine(int x0, int y0, float d0,
-                  int x1, int y1, float d1,
-                  int colorPair) override;
-    void drawCircle(int cx, int cy, float depth,
-                    int radius, int colorPair, bool filled) override;
     void drawChar(int termX, int termY, float depth,
                   char ch, int colorPair) override;
 
@@ -41,7 +36,8 @@ private:
     int pixW_ = 0, pixH_ = 0;
 
     // Per-pixel color pair ID; -1 means background (empty).
-    std::vector<int> colorBuf_;
+    // int8_t suffices since color pair IDs max at ~64.
+    std::vector<int8_t> colorBuf_;
 
     DepthBuffer zbuf_;
 
@@ -49,7 +45,10 @@ private:
         return sx >= 0 && sx < pixW_ && sy >= 0 && sy < pixH_;
     }
 
-    int& pixel(int sx, int sy) { return colorBuf_[sy * pixW_ + sx]; }
+    int8_t& pixel(int sx, int sy) { return colorBuf_[sy * pixW_ + sx]; }
+
+    // Reusable buffer for Sixel output (avoids per-frame allocation).
+    mutable std::string sixelBuf_;
 
     // Build Sixel escape-sequence string from the framebuffer.
     void buildSixelData(std::string& out) const;

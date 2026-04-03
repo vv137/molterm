@@ -65,48 +65,6 @@ void BlockCanvas::drawDot(int sx, int sy, float depth, int colorPair) {
     }
 }
 
-void BlockCanvas::drawLine(int x0, int y0, float d0,
-                            int x1, int y1, float d1,
-                            int colorPair) {
-    bresenham(x0, y0, d0, x1, y1, d1,
-        [&](int x, int y, float depth) {
-            drawDot(x, y, depth, colorPair);
-        });
-}
-
-void BlockCanvas::drawCircle(int cx, int cy, float depth,
-                              int radius, int colorPair, bool filled) {
-    if (filled) {
-        for (int dy = -radius; dy <= radius; ++dy) {
-            for (int dx = -radius; dx <= radius; ++dx) {
-                if (dx*dx + dy*dy <= radius*radius) {
-                    drawDot(cx + dx, cy + dy, depth, colorPair);
-                }
-            }
-        }
-    } else {
-        int x = radius, y = 0;
-        int err = 1 - radius;
-        while (x >= y) {
-            drawDot(cx+x, cy+y, depth, colorPair);
-            drawDot(cx-x, cy+y, depth, colorPair);
-            drawDot(cx+x, cy-y, depth, colorPair);
-            drawDot(cx-x, cy-y, depth, colorPair);
-            drawDot(cx+y, cy+x, depth, colorPair);
-            drawDot(cx-y, cy+x, depth, colorPair);
-            drawDot(cx+y, cy-x, depth, colorPair);
-            drawDot(cx-y, cy-x, depth, colorPair);
-            ++y;
-            if (err < 0) {
-                err += 2 * y + 1;
-            } else {
-                --x;
-                err += 2 * (y - x) + 1;
-            }
-        }
-    }
-}
-
 void BlockCanvas::drawChar(int termX, int termY, float depth,
                             char ch, int colorPair) {
     if (termX < 0 || termX >= termW_ || termY < 0 || termY >= termH_) return;

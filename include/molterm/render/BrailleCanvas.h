@@ -28,11 +28,6 @@ public:
     int scaleY() const override { return 4; }
 
     void drawDot(int sx, int sy, float depth, int colorPair) override;
-    void drawLine(int x0, int y0, float d0,
-                  int x1, int y1, float d1,
-                  int colorPair) override;
-    void drawCircle(int cx, int cy, float depth,
-                    int radius, int colorPair, bool filled) override;
     void drawChar(int termX, int termY, float depth,
                   char ch, int colorPair) override;
 

@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <ncurses.h>
-#include <set>
 
 namespace molterm {
 
@@ -30,49 +29,7 @@ void SixelCanvas::clear() {
 void SixelCanvas::drawDot(int sx, int sy, float depth, int colorPair) {
     if (!inBounds(sx, sy)) return;
     if (!zbuf_.testAndSet(sx, sy, depth)) return;
-    pixel(sx, sy) = colorPair;
-}
-
-void SixelCanvas::drawLine(int x0, int y0, float d0,
-                            int x1, int y1, float d1,
-                            int colorPair) {
-    bresenham(x0, y0, d0, x1, y1, d1,
-        [&](int x, int y, float depth) {
-            drawDot(x, y, depth, colorPair);
-        });
-}
-
-void SixelCanvas::drawCircle(int cx, int cy, float depth,
-                              int radius, int colorPair, bool filled) {
-    if (filled) {
-        for (int dy = -radius; dy <= radius; ++dy) {
-            for (int dx = -radius; dx <= radius; ++dx) {
-                if (dx * dx + dy * dy <= radius * radius) {
-                    drawDot(cx + dx, cy + dy, depth, colorPair);
-                }
-            }
-        }
-    } else {
-        int x = radius, y = 0;
-        int err = 1 - radius;
-        while (x >= y) {
-            drawDot(cx + x, cy + y, depth, colorPair);
-            drawDot(cx - x, cy + y, depth, colorPair);
-            drawDot(cx + x, cy - y, depth, colorPair);
-            drawDot(cx - x, cy - y, depth, colorPair);
-            drawDot(cx + y, cy + x, depth, colorPair);
-            drawDot(cx - y, cy + x, depth, colorPair);
-            drawDot(cx + y, cy - x, depth, colorPair);
-            drawDot(cx - y, cy - x, depth, colorPair);
-            ++y;
-            if (err < 0) {
-                err += 2 * y + 1;
-            } else {
-                --x;
-                err += 2 * (y - x) + 1;
-            }
-        }
-    }
+    pixel(sx, sy) = static_cast<int8_t>(colorPair);
 }
 
 void SixelCanvas::drawChar(int termX, int termY, float depth,
@@ -132,83 +89,72 @@ SixelCanvas::RGB SixelCanvas::colorPairToRGB(int colorPair) {
 // ── Sixel encoder ───────────────────────────────────────────────────────────
 
 void SixelCanvas::buildSixelData(std::string& out) const {
-    // Collect the set of color pair IDs actually used in the framebuffer.
-    std::set<int> usedColors;
-    for (int c : colorBuf_) {
-        if (c >= 0) usedColors.insert(c);
-    }
-    if (usedColors.empty()) return;
+    static constexpr int kMaxColorId = 128;
 
-    // Assign compact Sixel palette indices.
-    // Map: colorPair → sixelIndex  (0-based, dense).
-    std::vector<std::pair<int, int>> palette; // (colorPair, sixelIdx)
+    // Collect used colors with a flat bool array (O(N), no heap alloc).
+    bool used[kMaxColorId] = {};
+    for (auto c : colorBuf_) {
+        if (c >= 0) used[c] = true;
+    }
+
+    // Build dense palette: colorPair → sixelIndex.
+    std::vector<std::pair<int, int>> palette;
     int nextIdx = 0;
-    for (int cp : usedColors) {
-        palette.push_back({cp, nextIdx++});
+    for (int i = 0; i < kMaxColorId; ++i) {
+        if (used[i]) palette.push_back({i, nextIdx++});
     }
+    if (palette.empty()) return;
 
-    // Reserve a generous estimate to avoid repeated reallocation.
     out.reserve(static_cast<size_t>(pixW_) * pixH_ / 2);
 
-    // DCS introducer: ESC P 0 ; 0 ; 0 q
-    //   Params: P1=0 (normal aspect), P2=0 (no bg), P3=0 (horiz grid = default)
+    // DCS introducer
     out += "\033P0;0;0q";
 
-    // Set raster attributes: "  width ; height
-    // "1;1; tells the terminal the pixel aspect ratio is 1:1
+    // Raster attributes: pixel aspect 1:1, image dimensions
     out += "\"1;1;";
     out += std::to_string(pixW_);
     out += ';';
     out += std::to_string(pixH_);
 
-    // Define palette entries: # idx ; 2 ; R ; G ; B  (RGB in 0-100 range)
+    // Palette definitions: # idx ; 2 ; R% ; G% ; B%  (0-100 range)
     for (auto& [cp, idx] : palette) {
         RGB rgb = colorPairToRGB(cp);
-        int r100 = rgb.r * 100 / 255;
-        int g100 = rgb.g * 100 / 255;
-        int b100 = rgb.b * 100 / 255;
         out += '#';
         out += std::to_string(idx);
         out += ";2;";
-        out += std::to_string(r100);
+        out += std::to_string(rgb.r * 100 / 255);
         out += ';';
-        out += std::to_string(g100);
+        out += std::to_string(rgb.g * 100 / 255);
         out += ';';
-        out += std::to_string(b100);
+        out += std::to_string(rgb.b * 100 / 255);
     }
 
-    // Build a quick reverse map for colorPair → sixelIdx.
-    // Max color pair ID we need to support is ~64.
-    int maxCp = 0;
-    for (auto& [cp, _] : palette) maxCp = std::max(maxCp, cp);
-    std::vector<int> cpToIdx(maxCp + 1, -1);
-    for (auto& [cp, idx] : palette) cpToIdx[cp] = idx;
-
     // Encode scanlines in 6-row bands.
+    // Precompute which colors appear in each band to avoid per-color scans.
     for (int bandY = 0; bandY < pixH_; bandY += 6) {
+        int bandH = std::min(6, pixH_ - bandY);
+
+        // Single pass over band pixels to find active colors.
+        bool bandColors[kMaxColorId] = {};
+        for (int row = 0; row < bandH; ++row) {
+            const auto* rowPtr = &colorBuf_[(bandY + row) * pixW_];
+            for (int x = 0; x < pixW_; ++x) {
+                if (rowPtr[x] >= 0)
+                    bandColors[rowPtr[x]] = true;
+            }
+        }
+
         bool firstColor = true;
         for (auto& [cp, sixIdx] : palette) {
-            // Check if this color appears in this band at all (skip if not).
-            bool hasPixels = false;
-            int bandH = std::min(6, pixH_ - bandY);
-            for (int row = 0; row < bandH && !hasPixels; ++row) {
-                const int* rowPtr = &colorBuf_[(bandY + row) * pixW_];
-                for (int x = 0; x < pixW_; ++x) {
-                    if (rowPtr[x] == cp) { hasPixels = true; break; }
-                }
-            }
-            if (!hasPixels) continue;
+            if (!bandColors[cp]) continue;
 
-            // Graphics CR to restart the X cursor for this color
-            // (not needed for the first color in a band).
             if (!firstColor) out += '$';
             firstColor = false;
 
-            // Select this color
             out += '#';
             out += std::to_string(sixIdx);
 
-            // Encode the 6-pixel columns with RLE.
+            // RLE-encode the 6-pixel columns for this color.
             int runChar = -1;
             int runLen = 0;
 
@@ -225,7 +171,6 @@ void SixelCanvas::buildSixelData(std::string& out) const {
             };
 
             for (int x = 0; x < pixW_; ++x) {
-                // Build the 6-bit Sixel value for this column.
                 uint8_t sixel = 0;
                 for (int bit = 0; bit < 6; ++bit) {
                     int py = bandY + bit;
@@ -245,11 +190,9 @@ void SixelCanvas::buildSixelData(std::string& out) const {
             }
             flushRun();
         }
-        // Graphics newline — move to next 6-pixel band.
         if (bandY + 6 < pixH_) out += '-';
     }
 
-    // String terminator: ESC backslash
     out += "\033\\";
 }
 
@@ -258,9 +201,9 @@ void SixelCanvas::buildSixelData(std::string& out) const {
 void SixelCanvas::flush(Window& win) {
     if (pixW_ <= 0 || pixH_ <= 0) return;
 
-    std::string sixel;
-    buildSixelData(sixel);
-    if (sixel.empty()) return;
+    sixelBuf_.clear();
+    buildSixelData(sixelBuf_);
+    if (sixelBuf_.empty()) return;
 
     // Determine the window's absolute position on screen.
     int wy = 0, wx = 0;
@@ -269,7 +212,7 @@ void SixelCanvas::flush(Window& win) {
     // Temporarily leave ncurses mode to write raw escape sequences.
     // Use the cursor-positioning escape and then emit the Sixel data.
     // Row/col are 1-based in VT sequences.
-    fprintf(stdout, "\033[%d;%dH%s", wy + 1, wx + 1, sixel.c_str());
+    fprintf(stdout, "\033[%d;%dH%s", wy + 1, wx + 1, sixelBuf_.c_str());
     fflush(stdout);
 }
 
