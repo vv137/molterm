@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <set>
 #include <cstdlib>
 #include <filesystem>
@@ -211,6 +212,13 @@ void Application::quit(bool force) {
 
 std::string Application::loadFile(const std::string& path) {
     MLOG_INFO("Loading file: %s", path.c_str());
+
+    // Show loading message immediately
+    cmdLine_.setMessage("Loading " + path + "...");
+    cmdLine_.render(layout_.commandLine());
+    layout_.commandLine().refresh();
+    doupdate();
+
     try {
         auto obj = CifLoader::loadAuto(path);
         std::string name = obj->name();
@@ -946,6 +954,9 @@ void Application::renderFrame() {
     // Viewport — render to canvas but defer pixel flush
     renderViewport();
 
+    // Clear camera dirty flag after rendering (so caches like Spacefill sort work)
+    tabMgr_.currentTab().camera().clearDirty();
+
     // Object panel
     if (layout_.panelVisible()) {
         auto& tab = tabMgr_.currentTab();
@@ -1057,6 +1068,76 @@ void Application::renderViewport() {
     // Show history hint overlay when command line is active and empty
     cmdLine_.renderHistoryHint(win);
 
+    // Draw labels on viewport
+    {
+        buildProjCache();
+        int scaleX = canvas_ ? canvas_->scaleX() : 1;
+        int scaleY = canvas_ ? canvas_->scaleY() : 1;
+        auto obj = tabMgr_.currentTab().currentObject();
+        if (obj && !labelAtoms_.empty()) {
+            const auto& atoms = obj->atoms();
+            // Build fast lookup set from label list
+            std::set<int> labelSet(labelAtoms_.begin(), labelAtoms_.end());
+            for (const auto& pa : projCache_) {
+                if (!labelSet.count(pa.idx)) continue;
+
+                int tx = pa.sx / scaleX;
+                int ty = pa.sy / scaleY;
+                if (tx < 0 || tx >= w - 6 || ty < 0 || ty >= h) continue;
+
+                const auto& a = atoms[pa.idx];
+                std::string lbl = a.resName + std::to_string(a.resSeq);
+                // Offset label to the right of atom
+                int lx = std::min(tx + 1, w - static_cast<int>(lbl.size()));
+                win.printColored(ty, lx, lbl, kColorWhite);
+            }
+        }
+    }
+
+    // Draw measurement dashed lines + labels
+    {
+        auto obj = tabMgr_.currentTab().currentObject();
+        int scaleX = canvas_ ? canvas_->scaleX() : 1;
+        int scaleY = canvas_ ? canvas_->scaleY() : 1;
+        if (obj && !measurements_.empty()) {
+            const auto& atoms = obj->atoms();
+            auto& cam = tabMgr_.currentTab().camera();
+            for (const auto& m : measurements_) {
+                if (m.atoms.size() < 2) continue;
+                // Draw lines between consecutive atoms in the measurement
+                for (size_t mi = 0; mi + 1 < m.atoms.size(); ++mi) {
+                    int a1 = m.atoms[mi], a2 = m.atoms[mi + 1];
+                    if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
+                    if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
+                    float sx1, sy1, d1, sx2, sy2, d2;
+                    cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+                    cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                    int tx1 = static_cast<int>(sx1) / scaleX, ty1 = static_cast<int>(sy1) / scaleY;
+                    int tx2 = static_cast<int>(sx2) / scaleX, ty2 = static_cast<int>(sy2) / scaleY;
+                    // Dashed line in terminal space
+                    int steps = std::max(std::abs(tx2 - tx1), std::abs(ty2 - ty1));
+                    if (steps == 0) steps = 1;
+                    for (int s = 0; s <= steps; s += 2) {  // skip every other for dashes
+                        float t = static_cast<float>(s) / static_cast<float>(steps);
+                        int x = tx1 + static_cast<int>((tx2 - tx1) * t);
+                        int y = ty1 + static_cast<int>((ty2 - ty1) * t);
+                        if (x >= 0 && x < w && y >= 0 && y < h)
+                            win.addCharColored(y, x, '-', kColorYellow);
+                    }
+                }
+                // Label at midpoint of first segment
+                int a1 = m.atoms[0], a2 = m.atoms[1];
+                float sx1, sy1, d1, sx2, sy2, d2;
+                cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+                cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
+                int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
+                if (mx >= 0 && mx < w - static_cast<int>(m.label.size()) && my >= 0 && my < h)
+                    win.printColored(my, mx, m.label, kColorYellow);
+            }
+        }
+    }
+
     // Draw selection highlight overlay for $sele atoms
     {
         auto selIt = namedSelections_.find("sele");
@@ -1136,6 +1217,8 @@ void Application::buildProjCache() {
     if (projCacheFrame_ == frameCounter_ && !projCache_.empty()) return;
     projCacheFrame_ = frameCounter_;
     projCache_.clear();
+    pickGrid_.clear();
+
     auto& tab = tabMgr_.currentTab();
     auto obj = tab.currentObject();
     if (!obj || !obj->visible()) return;
@@ -1159,13 +1242,14 @@ void Application::buildProjCache() {
         int tx = static_cast<int>(fsx) / scaleX;
         int ty = static_cast<int>(fsy) / scaleY;
         if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
+            int cacheIdx = static_cast<int>(projCache_.size());
             projCache_.push_back({i, static_cast<int>(fsx), static_cast<int>(fsy), depth});
+            pickGrid_[pickGridKey(static_cast<int>(fsx), static_cast<int>(fsy))].push_back(cacheIdx);
         }
     }
 }
 
 int Application::findNearestAtom(int termX, int termY) const {
-    // Convert terminal coords to sub-pixel for matching
     int scaleX = canvas_ ? canvas_->scaleX() : 1;
     int scaleY = canvas_ ? canvas_->scaleY() : 1;
     int subX = termX * scaleX + scaleX / 2;
@@ -1175,21 +1259,28 @@ int Application::findNearestAtom(int termX, int termY) const {
     float bestDist2 = std::numeric_limits<float>::max();
     float bestDepth = std::numeric_limits<float>::max();
 
-    for (const auto& pa : projCache_) {
-        float dx = static_cast<float>(pa.sx - subX);
-        float dy = static_cast<float>(pa.sy - subY);
-        float dist2 = dx * dx + dy * dy;
-
-        // Primary: screen distance. Tiebreaker: prefer front atom (smaller depth).
-        if (dist2 < bestDist2 - 0.5f ||
-            (dist2 < bestDist2 + 0.5f && pa.depth < bestDepth)) {
-            bestDist2 = dist2;
-            bestDepth = pa.depth;
-            bestIdx = pa.idx;
+    // Query 3x3 neighborhood in spatial hash
+    int cx = subX / kPickCellSize, cy = subY / kPickCellSize;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int key = (cy + dy) * 10000 + (cx + dx);
+            auto it = pickGrid_.find(key);
+            if (it == pickGrid_.end()) continue;
+            for (int ci : it->second) {
+                const auto& pa = projCache_[ci];
+                float ddx = static_cast<float>(pa.sx - subX);
+                float ddy = static_cast<float>(pa.sy - subY);
+                float dist2 = ddx * ddx + ddy * ddy;
+                if (dist2 < bestDist2 - 0.5f ||
+                    (dist2 < bestDist2 + 0.5f && pa.depth < bestDepth)) {
+                    bestDist2 = dist2;
+                    bestDepth = pa.depth;
+                    bestIdx = pa.idx;
+                }
+            }
         }
     }
 
-    // Max pick range: 10 terminal cells worth of sub-pixels
     float maxRange = static_cast<float>(10 * std::max(scaleX, scaleY));
     if (bestDist2 > maxRange * maxRange) return -1;
     return bestIdx;
@@ -2079,6 +2170,57 @@ void Application::registerCommands() {
         return "Applied default preset (cartoon + ballstick ligands)";
     }, ":preset", "Apply smart default representations");
 
+    // :label [selection] — add labels for atoms matching selection
+    cmdRegistry_.registerCmd("label", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return "No object selected";
+        if (cmd.args.empty()) return "Usage: :label <selection> or :label clear";
+        if (cmd.args[0] == "clear") {
+            app.labelAtoms().clear();
+            return "Labels cleared";
+        }
+        std::string expr;
+        for (size_t i = 0; i < cmd.args.size(); ++i) {
+            if (i > 0) expr += " ";
+            expr += cmd.args[i];
+        }
+        auto sel = app.parseSelection(expr, *obj);
+        if (sel.empty()) return "No atoms match: " + expr;
+        // Add to label set (deduplicate)
+        auto& labels = app.labelAtoms();
+        for (int idx : sel.indices()) {
+            bool found = false;
+            for (int li : labels) { if (li == idx) { found = true; break; } }
+            if (!found) labels.push_back(idx);
+        }
+        return "Labeled " + std::to_string(sel.size()) + " atoms";
+    }, ":label <selection|clear>", "Show labels on viewport");
+
+    // :unlabel — remove all labels
+    cmdRegistry_.registerCmd("unlabel", [](Application& app, const ParsedCommand&) -> std::string {
+        app.labelAtoms().clear();
+        return "Labels cleared";
+    }, ":unlabel", "Remove all labels");
+
+    // :run <script.mt> — execute a command script
+    cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "Usage: :run <script.mt>";
+        std::ifstream file(cmd.args[0]);
+        if (!file) return "Cannot open: " + cmd.args[0];
+        int count = 0;
+        std::string line;
+        while (std::getline(file, line)) {
+            size_t start = line.find_first_not_of(" \t");
+            if (start == std::string::npos || line[start] == '#') continue;
+            line = line.substr(start);
+            if (line.empty()) continue;
+            app.cmdRegistry().execute(app, line);
+            ++count;
+        }
+        MLOG_INFO("Ran %d commands from %s", count, cmd.args[0].c_str());
+        return "Ran " + std::to_string(count) + " commands from " + cmd.args[0];
+    }, ":run <file>", "Execute command script");
+
     cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> std::string {
         if (SessionSaver::saveSession(app))
             return "Session saved to " + SessionSaver::sessionPath();
@@ -2143,9 +2285,11 @@ void Application::registerCommands() {
         float dz = atoms[i1].z - atoms[i2].z;
         float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
 
+        char dbuf[16]; std::snprintf(dbuf, sizeof(dbuf), "%.2f", dist);
+        std::string shortLabel = std::string(dbuf) + "A";
         std::string msg = "Distance " + atomLabel(atoms[i1]) + " — " +
-            atomLabel(atoms[i2]) + " = " +
-            std::to_string(dist).substr(0, std::to_string(dist).find('.') + 3) + " A";
+            atomLabel(atoms[i2]) + " = " + shortLabel;
+        app.measurements().push_back({{i1, i2}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
         return msg;
     }, ":measure [s1 s2]", "Distance (no args = pk1↔pk2)");
@@ -2184,8 +2328,10 @@ void Application::registerCommands() {
 
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%.1f", deg);
+        std::string shortLabel = std::string(buf) + "°";
         std::string msg = "Angle " + atomLabel(atoms[i1]) + " — " +
             atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " = " + buf + " deg";
+        app.measurements().push_back({{i1, i2, i3}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
         return msg;
     }, ":angle [s1 s2 s3]", "Angle at s2 (no args = pk1-pk2-pk3)");
@@ -2232,9 +2378,11 @@ void Application::registerCommands() {
 
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%.1f", deg);
+        std::string shortLabel = std::string(buf) + "°";
         std::string msg = "Dihedral " + atomLabel(atoms[i1]) + " — " +
             atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " — " +
             atomLabel(atoms[i4]) + " = " + buf + " deg";
+        app.measurements().push_back({{i1, i2, i3, i4}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
         return msg;
     }, ":dihedral [s1 s2 s3 s4]", "Dihedral (no args = pk1-pk4)");

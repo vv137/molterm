@@ -17,7 +17,11 @@ public:
     void setScale(float s) { scale_ = (s < 0.1f) ? 0.1f : s; }
 
 private:
-    float scale_ = 0.5f;  // VDW radius scale factor for terminal rendering
+    float scale_ = 0.5f;
+
+    // Cached depth-sorted indices (re-sort only when camera dirty)
+    mutable std::vector<int> sortedIndices_;
+    mutable bool sortDirty_ = true;
 
     static float vdwRadius(const std::string& element);
 };

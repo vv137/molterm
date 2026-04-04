@@ -1,4 +1,5 @@
 #include "molterm/repr/SpacefillRepr.h"
+#include <algorithm>
 #include <cmath>
 
 namespace molterm {
@@ -31,11 +32,9 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
     const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
     auto rf = [&](int i) { return rbw ? (*rbw)[i] : -1.0f; };
 
-    // Project and sort by depth (back to front for proper occlusion with filled circles)
     struct ProjAtom { int idx; int sx, sy; float depth; int radius; int color; };
     std::vector<ProjAtom> projected;
     projected.reserve(atoms.size());
-
 
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         const auto& a = atoms[i];
@@ -44,7 +43,6 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
         if (fsx < -100 || fsx > cw + 100 || fsy < -100 || fsy > ch + 100)
             continue;
 
-        // Radius in sub-pixels: VDW radius * scale * camera zoom * canvas scale
         float vdw = vdwRadius(a.element);
         int r = static_cast<int>(vdw * scale_ * static_cast<float>(canvas.scaleX()) * cam.zoom() + 0.5f);
         if (r < 1) r = 1;
@@ -56,12 +54,18 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
             depth, r, color});
     }
 
-    // Sort back-to-front (largest depth first = farthest first)
-    std::sort(projected.begin(), projected.end(),
-        [](const ProjAtom& a, const ProjAtom& b) { return a.depth > b.depth; });
+    // Sort back-to-front only when camera changed
+    if (cam.isDirty() || sortDirty_ || sortedIndices_.size() != projected.size()) {
+        sortedIndices_.resize(projected.size());
+        for (int i = 0; i < static_cast<int>(projected.size()); ++i) sortedIndices_[i] = i;
+        std::sort(sortedIndices_.begin(), sortedIndices_.end(),
+            [&](int a, int b) { return projected[a].depth > projected[b].depth; });
+        sortDirty_ = false;
+    }
 
-    // Draw back to front
-    for (const auto& pa : projected) {
+    for (int si : sortedIndices_) {
+        if (si >= static_cast<int>(projected.size())) continue;
+        const auto& pa = projected[si];
         canvas.drawCircle(pa.sx, pa.sy, pa.depth, pa.radius, pa.color, true);
     }
 }

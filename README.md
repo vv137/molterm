@@ -487,12 +487,12 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Offscreen screenshot** — `:screenshot` works in any renderer (offscreen PixelCanvas)
 - [x] **SSH optimizations** — BrailleCanvas diff-flush, projection dedup, Bresenham depth step
 
-### Phase 6: Annotation + Scripting
+### Phase 6: Annotation + Scripting — DONE
 
-- [ ] **Atom/residue labels** — `:label resi 50-60`, `:label name CA and chain A` rendered on viewport
-- [ ] **Measurement display** — dashed lines + distance/angle values drawn between pk atoms on viewport
-- [ ] **`:run` script** — execute `.mt` command script files for automation (`:run setup.mt`)
-- [ ] **BlockCanvas diff flush** — cell-level dirty tracking (same as BrailleCanvas) for SSH
+- [x] **Atom/residue labels** — `:label <selection>` rendered on viewport, `:label clear` / `:unlabel` to remove
+- [x] **Measurement display** — dashed lines + distance/angle values drawn between measured atoms on viewport
+- [x] **`:run` script** — execute `.mt` command script files for automation (`:run setup.mt`)
+- [x] **BlockCanvas diff flush** — cell-level dirty tracking (same as BrailleCanvas) for SSH
 
 ### Phase 7: Visualization
 
@@ -510,9 +510,9 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 
 ### Optimization Backlog
 
-- [ ] Frustum culling — skip atoms outside viewport before projection
-- [ ] Spatial hash for picking — `findNearestAtom` O(N) → O(1)
-- [ ] Atom depth pre-sort — Spacefill sort only when camera dirty
+- [x] Frustum culling — BallStick/Backbone skip off-screen atoms (Wireframe, Spacefill already had it)
+- [x] Spatial hash for picking — `findNearestAtom` O(N) → O(1) via 2D grid (20px cells, 3×3 query)
+- [x] Spacefill depth pre-sort — sort only when camera dirty, reuse sorted order across frames
 - [ ] Compile-time bond table — `constexpr` static initialization
 
 ---

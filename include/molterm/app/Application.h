@@ -53,6 +53,7 @@ public:
     Layout& layout() { return layout_; }
     InputHandler& input() { return *inputHandler_; }
     UndoStack& undoStack() { return undoStack_; }
+    CommandRegistry& cmdRegistry() { return cmdRegistry_; }
 
     // Load a file into the current tab
     std::string loadFile(const std::string& path);
@@ -134,14 +135,29 @@ private:
     // Pick registers: pk1→pk4, rotates on each inspect click (like PyMOL)
     int pickRegs_[4] = {-1, -1, -1, -1};
     int pickNext_ = 0;
+
+    // Labels: atom indices to render text labels for
+    std::vector<int> labelAtoms_;
+
+    // Persistent measurements: pairs/triples/quads of atom indices + label
+    struct Measurement { std::vector<int> atoms; std::string label; };
+    std::vector<Measurement> measurements_;
+
 public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
+    std::vector<int>& labelAtoms() { return labelAtoms_; }
+    std::vector<Measurement>& measurements() { return measurements_; }
 private:
 
     // Projected atom cache for picking (populated once per frame)
     struct ProjAtom { int idx; int sx, sy; float depth; };
     std::vector<ProjAtom> projCache_;
-    int projCacheFrame_ = -1;  // frame counter to avoid redundant rebuilds
+    int projCacheFrame_ = -1;
+
+    // 2D spatial hash for O(1) picking
+    static constexpr int kPickCellSize = 20;  // sub-pixels per cell
+    std::unordered_map<int, std::vector<int>> pickGrid_;  // grid key → indices into projCache_
+    int pickGridKey(int sx, int sy) const { return (sy / kPickCellSize) * 10000 + (sx / kPickCellSize); }
 
     bool running_ = false;
     bool needsRedraw_ = true;

@@ -35,6 +35,7 @@ private:
         int botColor = 0;
     };
     std::vector<Cell> cells_;
+    std::vector<Cell> prevCells_;
     DepthBuffer zbuf_;  // at sub-pixel resolution
 
     Cell& cell(int tx, int ty) { return cells_[ty * termW_ + tx]; }

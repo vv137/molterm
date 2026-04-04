@@ -16,9 +16,13 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
     if (r < 1) r = 1;
 
     // Collect Cα atoms grouped by chain
+    int sw = canvas.subW(), sh = canvas.subH();
+    int margin = r * 3;
+
     struct CaAtom {
         size_t idx;
         float sx, sy, depth;
+        bool visible;
         std::string chainId;
     };
     std::vector<CaAtom> cas;
@@ -30,12 +34,14 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         ca.idx = i;
         ca.chainId = a.chainId;
         cam.projectCached(a.x, a.y, a.z, ca.sx, ca.sy, ca.depth);
+        ca.visible = (ca.sx >= -margin && ca.sx < sw + margin &&
+                      ca.sy >= -margin && ca.sy < sh + margin);
         cas.push_back(ca);
     }
 
-    // Draw thick lines between consecutive Cα atoms in the same chain
     for (size_t i = 1; i < cas.size(); ++i) {
         if (cas[i].chainId != cas[i-1].chainId) continue;
+        if (!cas[i].visible && !cas[i-1].visible) continue;
 
         int x0 = static_cast<int>(std::round(cas[i-1].sx));
         int y0 = static_cast<int>(std::round(cas[i-1].sy));
@@ -56,8 +62,8 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         }
     }
 
-    // Draw Cα circles on top
     for (const auto& ca : cas) {
+        if (!ca.visible) continue;
         int sx = static_cast<int>(std::round(ca.sx));
         int sy = static_cast<int>(std::round(ca.sy));
         int color = ColorMapper::colorForAtom(atoms[ca.idx], scheme, mol.atomColor(static_cast<int>(ca.idx)), rf(static_cast<int>(ca.idx)));
