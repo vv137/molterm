@@ -340,7 +340,7 @@ void Application::handleMouse(int /*key*/) {
         cam.zoomBy(1.0f / 1.15f);
     }
 #endif
-    else if (event.bstate & BUTTON1_CLICKED) {
+    else if (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED)) {
         // Check if click is in tab bar region (row 0)
         if (event.y == 0) {
             auto names = tabMgr_.tabNames();

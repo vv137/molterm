@@ -44,7 +44,8 @@ void Screen::setTimeout(int ms) {
 }
 
 void Screen::enableMouse() {
-    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, nullptr);
+    mousemask(ALL_MOUSE_EVENTS, nullptr);
+    mouseinterval(0);  // disable click-detection delay for responsive picking
 }
 
 } // namespace molterm
