@@ -487,6 +487,34 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Offscreen screenshot** — `:screenshot` works in any renderer (offscreen PixelCanvas)
 - [x] **SSH optimizations** — BrailleCanvas diff-flush, projection dedup, Bresenham depth step
 
+### Phase 6: Annotation + Scripting
+
+- [ ] **Atom/residue labels** — `:label resi 50-60`, `:label name CA and chain A` rendered on viewport
+- [ ] **Measurement display** — dashed lines + distance/angle values drawn between pk atoms on viewport
+- [ ] **`:run` script** — execute `.mt` command script files for automation (`:run setup.mt`)
+- [ ] **BlockCanvas diff flush** — cell-level dirty tracking (same as BrailleCanvas) for SSH
+
+### Phase 7: Visualization
+
+- [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
+- [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
+- [ ] **Sequence bar** — bottom row showing 1-letter sequence, click to navigate to residue
+- [ ] **Contact map** — residue-residue Cα distance matrix overlay
+- [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
+
+### Phase 8: Export + Generation
+
+- [ ] **Animation export** — rotate/state-cycle → GIF or APNG (`:record spin 360 out.gif`)
+- [ ] **Crystal packing** — symmetry mates from `UnitCell` (`:symmates [radius]`)
+- [ ] **SMILES input** — `:smiles CCO` → simple 3D coordinate generation
+
+### Optimization Backlog
+
+- [ ] Frustum culling — skip atoms outside viewport before projection
+- [ ] Spatial hash for picking — `findNearestAtom` O(N) → O(1)
+- [ ] Atom depth pre-sort — Spacefill sort only when camera dirty
+- [ ] Compile-time bond table — `constexpr` static initialization
+
 ---
 
 ## License
