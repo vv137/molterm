@@ -759,7 +759,10 @@ void Application::handleAction(Action action) {
                 } else if (cmdName == "set") {
                     for (const auto& o : {"renderer", "backbone_thickness", "bt",
                                            "wireframe_thickness", "wt", "ball_radius", "br",
-                                           "pan_speed", "ps", "fog", "auto_center", "panel",
+                                           "pan_speed", "ps", "fog", "outline", "outline_threshold", "ot",
+                                           "outline_darken", "od", "cartoon_helix", "ch",
+                                           "cartoon_sheet", "csh", "cartoon_loop", "cl",
+                                           "cartoon_subdiv", "csd", "auto_center", "panel",
                                            "seqbar", "seqwrap"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
@@ -1135,7 +1138,7 @@ void Application::renderViewport() {
     if (rendererType_ == RendererType::Pixel) {
         auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
         if (pc) {
-            pc->applyOutline();  // silhouette edges before fog
+            if (outlineEnabled_) pc->applyOutline(outlineThreshold_, outlineDarken_);
             if (fogStrength_ > 0.0f) pc->applyDepthFog(fogStrength_);
         }
     }
@@ -1903,6 +1906,44 @@ void Application::registerCommands() {
             app.setFogStrength(val);
             return "Fog strength set to " + std::to_string(val);
         }
+        if (opt == "outline") {
+            app.setOutlineEnabled(!app.outlineEnabled());
+            return std::string("Outline: ") + (app.outlineEnabled() ? "on" : "off");
+        }
+        if (opt == "outline_threshold" || opt == "ot") {
+            if (cmd.args.size() < 2) return "Usage: :set outline_threshold <0.0-1.0>";
+            app.setOutlineThreshold(std::stof(cmd.args[1]));
+            return "Outline threshold set to " + cmd.args[1];
+        }
+        if (opt == "outline_darken" || opt == "od") {
+            if (cmd.args.size() < 2) return "Usage: :set outline_darken <0.0-1.0>";
+            app.setOutlineDarken(std::stof(cmd.args[1]));
+            return "Outline darken set to " + cmd.args[1];
+        }
+        if (opt == "cartoon_helix" || opt == "ch") {
+            if (cmd.args.size() < 2) return "Usage: :set cartoon_helix <0.1-3.0>";
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (ct) { ct->setHelixRadius(std::stof(cmd.args[1])); return "Cartoon helix radius: " + cmd.args[1]; }
+            return "Cartoon repr not found";
+        }
+        if (opt == "cartoon_sheet" || opt == "csh") {
+            if (cmd.args.size() < 2) return "Usage: :set cartoon_sheet <0.1-3.0>";
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (ct) { ct->setSheetRadius(std::stof(cmd.args[1])); return "Cartoon sheet radius: " + cmd.args[1]; }
+            return "Cartoon repr not found";
+        }
+        if (opt == "cartoon_loop" || opt == "cl") {
+            if (cmd.args.size() < 2) return "Usage: :set cartoon_loop <0.05-1.0>";
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (ct) { ct->setLoopRadius(std::stof(cmd.args[1])); return "Cartoon loop radius: " + cmd.args[1]; }
+            return "Cartoon repr not found";
+        }
+        if (opt == "cartoon_subdiv" || opt == "csd") {
+            if (cmd.args.size() < 2) return "Usage: :set cartoon_subdiv <2-16>";
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (ct) { ct->setSubdivisions(std::stoi(cmd.args[1])); return "Cartoon subdivisions: " + cmd.args[1]; }
+            return "Cartoon repr not found";
+        }
         if (opt == "auto_center") {
             app.setAutoCenter(!app.autoCenter());
             return std::string("Auto-center on load: ") + (app.autoCenter() ? "on" : "off");
@@ -2298,7 +2339,7 @@ void Application::registerCommands() {
             }
         }
 
-        offscreen.applyOutline();
+        if (app.outlineEnabled()) offscreen.applyOutline(app.outlineThreshold(), app.outlineDarken());
         if (app.fogStrength() > 0.0f)
             offscreen.applyDepthFog(app.fogStrength());
 

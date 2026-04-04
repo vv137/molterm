@@ -189,7 +189,14 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png]          " Save viewport as PNG (works in any renderer)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
-:set fog <0-1>                  " Depth fog strength
+:set fog <0-1>                  " Depth fog strength (default: 0.35)
+:set outline                    " Toggle silhouette outlines
+:set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
+:set od|outline_darken <n>      " Outline darkness (default: 0.3, 0=black)
+:set ch|cartoon_helix <n>       " Cartoon helix radius (default: 0.8)
+:set csh|cartoon_sheet <n>      " Cartoon sheet width (default: 0.7)
+:set cl|cartoon_loop <n>        " Cartoon loop radius (default: 0.25)
+:set csd|cartoon_subdiv <n>     " Cartoon spline subdivisions (default: 8)
 :set seqbar                     " Toggle sequence bar
 :set seqwrap                    " Toggle sequence wrap mode
 :set bt|wt|br <n>               " Backbone/wireframe thickness, ball radius

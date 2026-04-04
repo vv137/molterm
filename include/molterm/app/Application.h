@@ -85,6 +85,12 @@ public:
     // Settings
     float fogStrength() const { return fogStrength_; }
     void setFogStrength(float s) { fogStrength_ = s; }
+    bool outlineEnabled() const { return outlineEnabled_; }
+    void setOutlineEnabled(bool v) { outlineEnabled_ = v; }
+    float outlineThreshold() const { return outlineThreshold_; }
+    void setOutlineThreshold(float t) { outlineThreshold_ = t; }
+    float outlineDarken() const { return outlineDarken_; }
+    void setOutlineDarken(float d) { outlineDarken_ = d; }
     bool autoCenter() const { return autoCenter_; }
     void setForcedProtocol(GraphicsProtocol p) { forcedProtocol_ = p; }
     void setAutoCenter(bool v) { autoCenter_ = v; }
@@ -171,6 +177,9 @@ private:
     int framesToSkip_ = 0;
     int frameCounter_ = 0;
     float fogStrength_ = 0.35f;
+    bool outlineEnabled_ = true;
+    float outlineThreshold_ = 0.3f;
+    float outlineDarken_ = 0.3f;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
 
