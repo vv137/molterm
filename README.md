@@ -228,9 +228,18 @@ Recursive descent parser with boolean operators. Used by `:select`, `:count`, `:
 3. Results shown as dashed lines + labels on viewport
 4. `:overlay` to toggle visibility, `:overlay clear` to remove all
 
+**Slash notation:** `/obj/chain/resi/name` — hierarchical selection (empty = wildcard)
+
+```vim
+//A/42/CA                       " chain A, residue 42, atom CA
+//A+B/10-50                     " chains A and B, residues 10-50
+/1abc//42                       " object 1abc, all chains, residue 42
+//A                             " chain A, all residues
+```
+
 **Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `hydro`, `water`, `het`/`ligand`, `protein`, `nucleic`, `dna`, `rna`, `polymer`, `obj`, `$name`
 
-**Operators:** `and`, `or`, `not`, `( )`
+**Operators:** `and`, `or`, `not`, `( )`, `+` (OR shorthand: `chain A+B`, `resi 10+20+30-40`)
 
 ---
 

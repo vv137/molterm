@@ -101,7 +101,7 @@ Selection Selection::fromPredicate(const MolObject& mol,
 namespace {
 
 struct Token {
-    enum Type { Word, Number, Dash, LParen, RParen, AtRef, End };
+    enum Type { Word, Number, Dash, LParen, RParen, AtRef, Slash, Plus, End };
     Type type;
     std::string value;
 };
@@ -117,6 +117,8 @@ public:
         char ch = input_[pos_];
         if (ch == '(') { ++pos_; return {Token::LParen, "("}; }
         if (ch == ')') { ++pos_; return {Token::RParen, ")"}; }
+        if (ch == '/') { ++pos_; return {Token::Slash, "/"}; }
+        if (ch == '+') { ++pos_; return {Token::Plus, "+"}; }
         if (ch == '-' && pos_ + 1 < input_.size() && std::isdigit(input_[pos_+1])) {
             // Could be negative number or range dash
             // Check if previous token was a number — then it's a range dash
@@ -240,8 +242,116 @@ private:
         return parseAtom();
     }
 
-    // atom: keyword | @name | "(" or ")"
+    // Parse slash notation: /obj/chain/resi/name
+    // Any component can be empty (wildcard): //A/42/CA, /1abc//42, //A
+    Selection parseSlash() {
+        // Already consumed the first '/'
+        // Read up to 4 slash-separated components
+        std::vector<std::string> parts;
+        std::string part;
+        while (true) {
+            if (current_.type == Token::Slash) {
+                parts.push_back(part);
+                part.clear();
+                advance();
+            } else if (current_.type == Token::End ||
+                       current_.type == Token::LParen ||
+                       current_.type == Token::RParen ||
+                       (current_.type == Token::Word &&
+                        (current_.value == "and" || current_.value == "or" || current_.value == "not"))) {
+                parts.push_back(part);
+                break;
+            } else {
+                part += current_.value;
+                advance();
+            }
+        }
+
+        // parts[0]=obj, parts[1]=chain, parts[2]=resi, parts[3]=name
+        std::string objPat  = (parts.size() > 0) ? parts[0] : "";
+        std::string chainPat = (parts.size() > 1) ? parts[1] : "";
+        std::string resiPat  = (parts.size() > 2) ? parts[2] : "";
+        std::string namePat  = (parts.size() > 3) ? parts[3] : "";
+
+        // Parse resi pattern: could be "42", "10-20", "10+20+30-40"
+        std::vector<std::pair<int,int>> resiRanges;
+        if (!resiPat.empty()) {
+            // Split by +
+            std::string buf;
+            auto flushBuf = [&]() {
+                if (buf.empty()) return;
+                auto dash = buf.find('-');
+                if (dash != std::string::npos && dash > 0) {
+                    resiRanges.push_back({std::stoi(buf.substr(0, dash)),
+                                          std::stoi(buf.substr(dash + 1))});
+                } else {
+                    int v = std::stoi(buf);
+                    resiRanges.push_back({v, v});
+                }
+                buf.clear();
+            };
+            for (char c : resiPat) {
+                if (c == '+') { flushBuf(); } else { buf += c; }
+            }
+            flushBuf();
+        }
+
+        // Parse chain pattern: could be "A", "A+B"
+        std::vector<std::string> chains;
+        if (!chainPat.empty()) {
+            std::string cbuf;
+            for (char c : chainPat) {
+                if (c == '+') { if (!cbuf.empty()) chains.push_back(cbuf); cbuf.clear(); }
+                else cbuf += c;
+            }
+            if (!cbuf.empty()) chains.push_back(cbuf);
+        }
+
+        // Parse name pattern: "CA", "CA+CB"
+        std::vector<std::string> names;
+        if (!namePat.empty()) {
+            std::string nbuf;
+            for (char c : namePat) {
+                if (c == '+') { if (!nbuf.empty()) names.push_back(nbuf); nbuf.clear(); }
+                else nbuf += static_cast<char>(std::toupper(c));
+            }
+            if (!nbuf.empty()) names.push_back(nbuf);
+        }
+
+        std::string objName = objPat;
+        std::string molName = mol_.name();
+
+        return Selection::fromPredicate(mol_,
+            [objName, molName, chains, resiRanges, names](int, const AtomData& a) {
+                if (!objName.empty() && molName != objName) return false;
+                if (!chains.empty()) {
+                    bool found = false;
+                    for (const auto& c : chains) if (a.chainId == c) { found = true; break; }
+                    if (!found) return false;
+                }
+                if (!resiRanges.empty()) {
+                    bool found = false;
+                    for (const auto& r : resiRanges)
+                        if (a.resSeq >= r.first && a.resSeq <= r.second) { found = true; break; }
+                    if (!found) return false;
+                }
+                if (!names.empty()) {
+                    bool found = false;
+                    for (const auto& n : names) if (a.name == n) { found = true; break; }
+                    if (!found) return false;
+                }
+                return true;
+            },
+            "/" + objPat + "/" + chainPat + "/" + resiPat + "/" + namePat);
+    }
+
     Selection parseAtom() {
+        // Slash notation: /obj/chain/resi/name
+        if (current_.type == Token::Slash) {
+            advance();
+            return parseSlash();
+        }
+
         // Parentheses
         if (match(Token::LParen)) {
             auto inner = parseOr();
@@ -273,11 +383,20 @@ private:
             return Selection::all(totalAtoms_);
         }
         if (kwLower == "chain") {
-            std::string chainId = current_.value;
+            std::vector<std::string> ids;
+            ids.push_back(current_.value);
             advance();
+            while (current_.type == Token::Plus) {
+                advance();
+                ids.push_back(current_.value);
+                advance();
+            }
             return Selection::fromPredicate(mol_,
-                [chainId](int, const AtomData& a) { return a.chainId == chainId; },
-                "chain " + chainId);
+                [ids](int, const AtomData& a) {
+                    for (const auto& id : ids) if (a.chainId == id) return true;
+                    return false;
+                },
+                "chain " + ids[0]);
         }
         if (kwLower == "resn") {
             std::string resName = current_.value;
@@ -289,30 +408,52 @@ private:
                 "resn " + resName);
         }
         if (kwLower == "resi") {
-            int start = std::stoi(current_.value);
-            advance();
-            // Check for range: resi 10-20
-            if (current_.type == Token::Dash) {
+            // Parse: resi 10, resi 10-20, resi 10+20+30, resi 10-20+30-40
+            std::vector<std::pair<int,int>> ranges;  // {start, end} pairs
+            auto parseOneResi = [&]() {
+                int start = std::stoi(current_.value);
                 advance();
-                int end = std::stoi(current_.value);
+                if (current_.type == Token::Dash) {
+                    advance();
+                    int end = std::stoi(current_.value);
+                    advance();
+                    ranges.push_back({start, end});
+                } else {
+                    ranges.push_back({start, start});
+                }
+            };
+            parseOneResi();
+            while (current_.type == Token::Plus) {
                 advance();
-                return Selection::fromPredicate(mol_,
-                    [start, end](int, const AtomData& a) {
-                        return a.resSeq >= start && a.resSeq <= end;
-                    },
-                    "resi " + std::to_string(start) + "-" + std::to_string(end));
+                parseOneResi();
             }
             return Selection::fromPredicate(mol_,
-                [start](int, const AtomData& a) { return a.resSeq == start; },
-                "resi " + std::to_string(start));
+                [ranges](int, const AtomData& a) {
+                    for (const auto& r : ranges)
+                        if (a.resSeq >= r.first && a.resSeq <= r.second) return true;
+                    return false;
+                },
+                "resi");
         }
         if (kwLower == "name") {
-            std::string atomName = current_.value;
-            std::transform(atomName.begin(), atomName.end(), atomName.begin(), ::toupper);
+            std::vector<std::string> names;
+            std::string n = current_.value;
+            std::transform(n.begin(), n.end(), n.begin(), ::toupper);
+            names.push_back(n);
             advance();
+            while (current_.type == Token::Plus) {
+                advance();
+                n = current_.value;
+                std::transform(n.begin(), n.end(), n.begin(), ::toupper);
+                names.push_back(n);
+                advance();
+            }
             return Selection::fromPredicate(mol_,
-                [atomName](int, const AtomData& a) { return a.name == atomName; },
-                "name " + atomName);
+                [names](int, const AtomData& a) {
+                    for (const auto& nm : names) if (a.name == nm) return true;
+                    return false;
+                },
+                "name");
         }
         if (kwLower == "element" || kwLower == "elem") {
             std::string elem = current_.value;
