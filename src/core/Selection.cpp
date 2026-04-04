@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "molterm/core/Selection.h"
+#include "molterm/core/BondTable.h"
 #include "molterm/core/MolObject.h"
 
 namespace molterm {
@@ -371,6 +372,36 @@ private:
             return Selection::fromPredicate(mol_,
                 [](int, const AtomData& a) { return a.isHet; },
                 "het");
+        }
+        if (kwLower == "protein") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) { return isStandardAA(a.resName); },
+                "protein");
+        }
+        if (kwLower == "nucleic") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) { return isStandardNA(a.resName); },
+                "nucleic");
+        }
+        if (kwLower == "dna") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) {
+                    return a.resName == "DA" || a.resName == "DT" ||
+                           a.resName == "DG" || a.resName == "DC";
+                }, "dna");
+        }
+        if (kwLower == "rna") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) {
+                    return a.resName == "A" || a.resName == "U" ||
+                           a.resName == "G" || a.resName == "C";
+                }, "rna");
+        }
+        if (kwLower == "polymer") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) {
+                    return isStandardAA(a.resName) || isStandardNA(a.resName);
+                }, "polymer");
         }
         if (kwLower == "obj") {
             // obj <name> — select all atoms if current object name matches

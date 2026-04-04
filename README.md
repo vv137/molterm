@@ -219,7 +219,7 @@ Recursive descent parser with boolean operators. Used by `:select`, `:count`, `:
 1. Click atoms in inspect mode — each click stores pk1→pk2→pk3→pk4 (rotating)
 2. `:measure` (distance pk1↔pk2), `:angle` (pk1-pk2-pk3), `:dihedral` (pk1-pk4)
 
-**Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `hydro`, `water`, `obj`, `$name`
+**Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `hydro`, `water`, `het`/`ligand`, `protein`, `nucleic`, `dna`, `rna`, `polymer`, `obj`, `$name`
 
 **Operators:** `and`, `or`, `not`, `( )`
 

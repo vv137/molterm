@@ -2260,6 +2260,11 @@ void Application::registerCommands() {
 
     // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
     cmdRegistry_.registerCmd("measure", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (!cmd.args.empty() && cmd.args[0] == "clear") {
+            int count = static_cast<int>(app.measurements().size());
+            app.measurements().clear();
+            return "Cleared " + std::to_string(count) + " measurements";
+        }
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return "No object selected";
         const auto& atoms = obj->atoms();
