@@ -499,6 +499,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 
 ### Phase 7: Visualization
 
+- [ ] **Pixel-mode label rendering** — built-in bitmap font for labels rendered directly into RGB framebuffer
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
 - [ ] **Sequence bar** — bottom row showing 1-letter sequence, click to navigate to residue
