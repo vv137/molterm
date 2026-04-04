@@ -10,7 +10,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
-# gemmi — mmCIF/PDB parser (header-only)
+# gemmi — mmCIF/PDB parser (static link for portable binaries)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_GEMMI_PROGRAM OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     gemmi
     GIT_REPOSITORY https://github.com/project-gemmi/gemmi.git
