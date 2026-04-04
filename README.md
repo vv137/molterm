@@ -176,7 +176,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :angle [s1 s2 s3]              " Angle at s2 (no args = pk1-pk2-pk3)
 :dihedral [s1 s2 s3 s4]        " Dihedral (no args = pk1-pk4)
                                 " Args: serial number, pk1-pk4, or $selection
+:label <selection>              " Show residue labels on viewport
+:label clear                    " Remove all labels (also :unlabel)
 :preset                         " Apply smart defaults (cartoon protein, ballstick ligands)
+:run <script.mt>                " Execute command script (# comments supported)
 :save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png]          " Save viewport as PNG (works in any renderer)
