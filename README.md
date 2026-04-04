@@ -313,6 +313,33 @@ Configuration files in `~/.molterm/`:
 </details>
 
 <details>
+<summary><strong>All bindable actions</strong></summary>
+
+**Navigation:** `rotate_left`, `rotate_right`, `rotate_up`, `rotate_down`, `rotate_cw`, `rotate_ccw`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `reset_view`, `center_selection`, `redraw`
+
+**Representations:** `show_wireframe`, `show_ballstick`, `show_spacefill`, `show_cartoon`, `show_ribbon`, `show_backbone`, `hide_wireframe`, `hide_ballstick`, `hide_spacefill`, `hide_cartoon`, `hide_ribbon`, `hide_backbone`, `hide_all`, `show_overlay`, `hide_overlay`, `apply_preset`
+
+**Coloring:** `color_by_element`, `color_by_chain`, `color_by_ss`, `color_by_bfactor`, `color_by_plddt`, `color_by_rainbow`, `color_by_restype`
+
+**Objects:** `next_object`, `prev_object`, `toggle_visible`, `delete_object`, `yank_object`, `paste_object`, `rename_object`, `toggle_panel`
+
+**Tabs:** `next_tab`, `prev_tab`, `new_tab`, `close_tab`, `move_to_tab`, `copy_to_tab`
+
+**Modes:** `enter_command`, `enter_search`, `exit_to_normal`
+
+**Search:** `search_next`, `search_prev`
+
+**Inspect / Selection:** `inspect`, `cycle_inspect_level`, `enter_select_atom`, `enter_select_residue`, `enter_select_chain`
+
+**State:** `prev_state`, `next_state`
+
+**Other:** `show_help`, `undo`, `redo`, `repeat_last`, `toggle_pixel`, `screenshot`, `start_macro`, `play_macro`
+
+**Command mode:** `execute`, `autocomplete`, `history_prev`, `history_next`, `delete_word`, `clear_line`
+
+</details>
+
+<details>
 <summary><strong>colors.toml example</strong></summary>
 
 ```toml
