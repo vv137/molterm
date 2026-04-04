@@ -174,10 +174,10 @@ void PixelCanvas::drawTriangle(float x0, float y0, float z0,
     float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
     if (nLen > 1e-6f) { nx /= nLen; ny /= nLen; nz /= nLen; }
 
-    // Two-sided half-Lambert: light from upper-left-front
+    // Two-sided Lambert: light from upper-left-front, strong contrast
     float dot = -0.4f * nx - 0.4f * ny + 0.82f * nz;
-    float halfLambert = std::abs(dot) * 0.4f + 0.6f;
-    float intensity = 0.55f + 0.45f * halfLambert;
+    float halfLambert = std::abs(dot) * 0.5f + 0.5f;
+    float intensity = 0.2f + 0.8f * halfLambert;
 
     auto base = colorPairToRGB(colorPair);
     uint8_t cr = static_cast<uint8_t>(std::min(255.0f, base.r * intensity));
@@ -225,6 +225,77 @@ void PixelCanvas::drawChar(int, int, float, char, int) {
 }
 
 // ── Post-processing ─────────────────────────────────────────────────────────
+
+void PixelCanvas::applyOutline(float threshold, float darken) {
+    if (pixW_ <= 0 || pixH_ <= 0) return;
+    if (zMax_ <= zMin_) return;
+
+    float range = zMax_ - zMin_;
+    // Two thresholds: strong edges (silhouette) and subtle edges (nearby overlap)
+    float threshStrong = threshold * range;
+    float threshSubtle = threshold * range * 0.15f;  // much more sensitive
+    constexpr int kRadius = 2;
+
+    // Detect edge pixels: 2 = strong (silhouette/bg boundary), 1 = subtle (nearby overlap)
+    std::vector<uint8_t> edge(static_cast<size_t>(pixW_) * pixH_, 0);
+
+    for (int y = 1; y < pixH_ - 1; ++y) {
+        for (int x = 1; x < pixW_ - 1; ++x) {
+            size_t idx = static_cast<size_t>(y) * pixW_ + x;
+            if (colorIds_[idx] < 0) continue;
+
+            float z = zbuf_.get(x, y);
+            uint8_t level = 0;
+
+            auto check = [&](int nx, int ny) {
+                size_t ni = static_cast<size_t>(ny) * pixW_ + nx;
+                if (colorIds_[ni] < 0) { level = 2; return; }  // bg boundary = strong
+                float dz = std::abs(z - zbuf_.get(nx, ny));
+                if (dz > threshStrong) level = std::max(level, uint8_t(2));
+                else if (dz > threshSubtle) level = std::max(level, uint8_t(1));
+            };
+
+            check(x-1, y); check(x+1, y); check(x, y-1); check(x, y+1);
+            edge[idx] = level;
+        }
+    }
+
+    // Dilate and darken
+    for (int y = 0; y < pixH_; ++y) {
+        for (int x = 0; x < pixW_; ++x) {
+            size_t idx = static_cast<size_t>(y) * pixW_ + x;
+            if (colorIds_[idx] < 0) continue;
+
+            uint8_t maxLevel = 0;
+            bool onEdge = (edge[idx] > 0);
+            for (int dy = -kRadius; dy <= kRadius && maxLevel < 2; ++dy) {
+                for (int dx = -kRadius; dx <= kRadius && maxLevel < 2; ++dx) {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || nx >= pixW_ || ny < 0 || ny >= pixH_) continue;
+                    if (dx*dx + dy*dy > kRadius*kRadius) continue;
+                    uint8_t e = edge[static_cast<size_t>(ny) * pixW_ + nx];
+                    if (e > maxLevel) maxLevel = e;
+                }
+            }
+
+            if (maxLevel > 0) {
+                size_t pi = idx * 3;
+                float d;
+                if (onEdge && maxLevel == 2)
+                    d = darken;                          // strong edge center: darkest
+                else if (maxLevel == 2)
+                    d = darken + (1.0f - darken) * 0.4f; // strong edge fringe
+                else if (onEdge)
+                    d = darken + (1.0f - darken) * 0.55f; // subtle edge center
+                else
+                    d = darken + (1.0f - darken) * 0.7f;  // subtle edge fringe
+                rgb_[pi]     = static_cast<uint8_t>(rgb_[pi]     * d);
+                rgb_[pi + 1] = static_cast<uint8_t>(rgb_[pi + 1] * d);
+                rgb_[pi + 2] = static_cast<uint8_t>(rgb_[pi + 2] * d);
+            }
+        }
+    }
+}
 
 void PixelCanvas::applyDepthFog(float strength, uint8_t fogR, uint8_t fogG, uint8_t fogB) {
     preFogRgb_ = rgb_;

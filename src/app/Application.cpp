@@ -1131,10 +1131,13 @@ void Application::renderViewport() {
         }
     }
 
-    // Apply depth fog on pixel canvas (post-processing before flush)
+    // Apply post-processing on pixel canvas
     if (rendererType_ == RendererType::Pixel) {
         auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
-        if (pc && fogStrength_ > 0.0f) pc->applyDepthFog(fogStrength_);
+        if (pc) {
+            pc->applyOutline();  // silhouette edges before fog
+            if (fogStrength_ > 0.0f) pc->applyDepthFog(fogStrength_);
+        }
     }
 
     // Pixel flush is deferred to after doupdate() in renderFrame().
@@ -2295,6 +2298,7 @@ void Application::registerCommands() {
             }
         }
 
+        offscreen.applyOutline();
         if (app.fogStrength() > 0.0f)
             offscreen.applyDepthFog(app.fogStrength());
 

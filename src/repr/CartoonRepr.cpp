@@ -1,6 +1,5 @@
 #include "molterm/repr/CartoonRepr.h"
 #include "molterm/render/ColorMapper.h"
-#include "molterm/render/PixelCanvas.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -33,9 +32,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     auto scheme = mol.colorScheme();
     const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
     auto rf = [&](int i) -> float { return rbw ? (*rbw)[i] : -1.0f; };
-
-    // Check if we have a PixelCanvas for triangle rasterization
-    auto* pixCanvas = dynamic_cast<PixelCanvas*>(&canvas);
 
     int subdiv = subdivisions_;
     if (atoms.size() > 20000) subdiv = std::max(2, subdiv / 4);
@@ -144,6 +140,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         // For PixelCanvas: project vertices and rasterize triangles
         // For text canvases: fallback to thick lines (circle stamp)
 
+        bool useTriangles = (canvas.scaleX() >= 8);  // pixel canvas only
+
         auto ssHalfW = [&](SSType ss) -> float {
             switch (ss) {
                 case SSType::Helix: return helixRadius_;
@@ -155,28 +153,21 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             switch (ss) {
                 case SSType::Helix: return 0.3f;
                 case SSType::Sheet: return 0.15f;
-                default:            return loopRadius_;  // circular for coil
+                default:            return loopRadius_;
             }
         };
 
-        if (pixCanvas) {
-            // Triangle-based rendering for PixelCanvas
-            // Generate 4-vertex rings for helix/sheet, N-vertex for coil
+        if (useTriangles) {
             struct Vert { float x, y, z; };
             auto makeRing = [&](int i) -> std::vector<Vert> {
                 float hw = ssHalfW(spine[i].ss);
                 float hh = ssHalfH(spine[i].ss);
                 bool isCoil = (spine[i].ss == SSType::Loop);
 
-                // Sheet arrowhead: widen then taper to point
                 if (spine[i].arrowFrac >= 0.0f) {
                     float af = spine[i].arrowFrac;
-                    if (af < 0.5f) {
-                        hw *= (1.0f + af * 1.2f);  // widen to 1.6×
-                    } else {
-                        hw *= (2.0f * (1.0f - af) * 1.6f);  // taper to 0
-                        if (hw < 0.05f) hw = 0.05f;
-                    }
+                    if (af < 0.5f) hw *= (1.0f + af * 1.2f);
+                    else { hw *= (2.0f * (1.0f - af) * 1.6f); if (hw < 0.05f) hw = 0.05f; }
                 }
 
                 std::vector<Vert> ring;
@@ -191,7 +182,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                         });
                     }
                 } else {
-                    // 4-point rectangular cross-section
                     ring.push_back({spine[i].x + hw*bx[i] + hh*nx[i],
                                     spine[i].y + hw*by[i] + hh*ny[i],
                                     spine[i].z + hw*bz[i] + hh*nz[i]});
@@ -219,35 +209,77 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                     auto& a = prevRing[j]; auto& b = prevRing[j1];
                     auto& c = ring[j1];    auto& d = ring[j];
 
-                    // Project all 4 verts
                     float as, ay, ad, bs, by2, bd, cs, cy, cd, ds, dy, dd;
                     cam.projectCached(a.x, a.y, a.z, as, ay, ad);
                     cam.projectCached(b.x, b.y, b.z, bs, by2, bd);
                     cam.projectCached(c.x, c.y, c.z, cs, cy, cd);
                     cam.projectCached(d.x, d.y, d.z, ds, dy, dd);
 
-                    // Two triangles per quad
-                    pixCanvas->drawTriangle(as, ay, ad, bs, by2, bd, ds, dy, dd, color);
-                    pixCanvas->drawTriangle(bs, by2, bd, cs, cy, cd, ds, dy, dd, color);
+                    canvas.drawTriangle(as, ay, ad, bs, by2, bd, ds, dy, dd, color);
+                    canvas.drawTriangle(bs, by2, bd, cs, cy, cd, ds, dy, dd, color);
                 }
                 prevRing = std::move(ring);
             }
         } else {
-            // Fallback for text-based canvases: thick spline lines
+            // Braille/block/ascii: thick circle-stamped spline lines
+            // SS-dependent radius with sheet arrowheads + Lambert pseudo-shading
             float scaleF = static_cast<float>(canvas.scaleX());
+            const auto& rot = cam.rotation();
+            // Camera Z-axis in world space (view direction)
+            float camZx = rot[6], camZy = rot[7], camZz = rot[8];
+
             for (int i = 1; i < nPts; ++i) {
                 float sx0, sy0, d0, sx1, sy1, d1;
                 cam.projectCached(spine[i-1].x, spine[i-1].y, spine[i-1].z, sx0, sy0, d0);
                 cam.projectCached(spine[i].x, spine[i].y, spine[i].z, sx1, sy1, d1);
 
-                float hw = ssHalfW(spine[i-1].ss) * scaleF * cam.zoom();
+                // SS-dependent base radius (sheet wider, loop thinner)
+                SSType ss = spine[i-1].ss;
+                float baseR;
+                switch (ss) {
+                    case SSType::Helix: baseR = 1.2f; break;
+                    case SSType::Sheet: baseR = 1.8f; break;  // wide flat
+                    default:            baseR = 0.4f; break;  // thin coil
+                }
+
+                // Sheet arrowhead: widen then taper
+                float af = spine[i-1].arrowFrac;
+                if (af >= 0.0f) {
+                    if (af < 0.4f)
+                        baseR *= (1.0f + af * 1.5f);   // widen to ~1.6x
+                    else
+                        baseR *= std::max(0.2f, 2.0f * (1.0f - af));  // taper to point
+                }
+
+                float hw = baseR * scaleF * cam.zoom();
                 int r = std::max(1, static_cast<int>(hw + 0.5f));
                 int color = spine[i-1].color;
 
+                // Lambert shading: tangent · camera_dir → brightness
+                // Perpendicular to view = bright (surface facing camera)
+                // Parallel to view = dim (surface edge-on)
+                float dotVal = std::abs(tx[i-1]*camZx + ty[i-1]*camZy + tz[i-1]*camZz);
+                // dotVal ~1 = tangent parallel to view (tube face-on, bright)
+                // dotVal ~0 = tangent perpendicular to view (edge, also bright for tube)
+                // For a tube, brightness is high when tangent is NOT parallel to view
+                float brightness = 1.0f - dotVal * 0.6f;
+
+                // Shade by varying radius + skipping edge dots
+                int shadedR = std::max(1, static_cast<int>(r * brightness));
+                // For dark areas, draw only inner portion (density shading)
+                int innerR = (brightness < 0.7f) ? std::max(1, shadedR - 1) : shadedR;
+
+                int step = 0;
                 Canvas::bresenham(static_cast<int>(sx0), static_cast<int>(sy0), d0,
                                   static_cast<int>(sx1), static_cast<int>(sy1), d1,
                     [&](int x, int y, float d) {
-                        canvas.drawCircle(x, y, d, r, color, true);
+                        // Skip every other stamp in dark areas for sparser dots
+                        if (brightness < 0.5f && (step & 1)) {
+                            canvas.drawCircle(x, y, d, innerR, color, true);
+                        } else {
+                            canvas.drawCircle(x, y, d, shadedR, color, true);
+                        }
+                        ++step;
                     });
             }
         }
@@ -330,22 +362,13 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             cam.projectCached(wx, wy, wz, vsx[s], vsy[s], vsz[s]);
         }
 
-        if (pixCanvas) {
-            float csx, csy, csd;
-            cam.projectCached(cx, cy, cz, csx, csy, csd);
-            for (int s = 0; s < nSides; ++s) {
-                int s1 = (s + 1) % nSides;
-                pixCanvas->drawTriangle(csx, csy, csd,
-                                        vsx[s], vsy[s], vsz[s],
-                                        vsx[s1], vsy[s1], vsz[s1], color);
-            }
-        } else {
-            // Text canvas: draw edges
-            for (int s = 0; s < nSides; ++s) {
-                int s1 = (s + 1) % nSides;
-                canvas.drawLine(static_cast<int>(vsx[s]), static_cast<int>(vsy[s]), vsz[s],
-                                static_cast<int>(vsx[s1]), static_cast<int>(vsy[s1]), vsz[s1], color);
-            }
+        float csx, csy, csd;
+        cam.projectCached(cx, cy, cz, csx, csy, csd);
+        for (int s = 0; s < nSides; ++s) {
+            int s1 = (s + 1) % nSides;
+            canvas.drawTriangle(csx, csy, csd,
+                                vsx[s], vsy[s], vsz[s],
+                                vsx[s1], vsy[s1], vsz[s1], color);
         }
     };
 

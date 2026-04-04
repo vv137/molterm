@@ -69,4 +69,58 @@ void Canvas::bresenham(int x0, int y0, float d0,
     }
 }
 
+void Canvas::drawTriangle(float x0, float y0, float z0,
+                          float x1, float y1, float z1,
+                          float x2, float y2, float z2,
+                          int colorPair) {
+    // Sort vertices by Y (top to bottom)
+    if (y0 > y1) { std::swap(x0, x1); std::swap(y0, y1); std::swap(z0, z1); }
+    if (y0 > y2) { std::swap(x0, x2); std::swap(y0, y2); std::swap(z0, z2); }
+    if (y1 > y2) { std::swap(x1, x2); std::swap(y1, y2); std::swap(z1, z2); }
+
+    int iy0 = static_cast<int>(y0), iy2 = static_cast<int>(y2);
+    if (iy0 == iy2) return;  // degenerate
+
+    // Scanline rasterization
+    for (int y = std::max(0, iy0); y <= std::min(subH() - 1, iy2); ++y) {
+        float fy = static_cast<float>(y) + 0.5f;
+
+        // Compute x-intercepts on left/right edges
+        float xa, xb, za, zb;
+
+        // Long edge: v0→v2 (always spans full height)
+        float tLong = (fy - y0) / (y2 - y0);
+        xa = x0 + (x2 - x0) * tLong;
+        za = z0 + (z2 - z0) * tLong;
+
+        // Short edge: v0→v1 or v1→v2
+        if (fy < y1) {
+            float denom = y1 - y0;
+            if (denom < 0.001f) denom = 0.001f;
+            float tShort = (fy - y0) / denom;
+            xb = x0 + (x1 - x0) * tShort;
+            zb = z0 + (z1 - z0) * tShort;
+        } else {
+            float denom = y2 - y1;
+            if (denom < 0.001f) denom = 0.001f;
+            float tShort = (fy - y1) / denom;
+            xb = x1 + (x2 - x1) * tShort;
+            zb = z1 + (z2 - z1) * tShort;
+        }
+
+        if (xa > xb) { std::swap(xa, xb); std::swap(za, zb); }
+
+        int ixa = std::max(0, static_cast<int>(xa));
+        int ixb = std::min(subW() - 1, static_cast<int>(xb));
+        float spanLen = xb - xa;
+        if (spanLen < 0.001f) spanLen = 0.001f;
+
+        for (int x = ixa; x <= ixb; ++x) {
+            float t = (static_cast<float>(x) - xa) / spanLen;
+            float z = za + (zb - za) * t;
+            drawDot(x, y, z, colorPair);
+        }
+    }
+}
+
 } // namespace molterm

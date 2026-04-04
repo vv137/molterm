@@ -14,9 +14,9 @@ public:
                 Canvas& canvas) override;
 
 private:
-    float helixRadius_ = 0.8f;   // Å — chunky helix
-    float sheetRadius_ = 0.7f;   // Å — chunky sheet
-    float loopRadius_ = 0.25f;   // Å — thin coil
+    float helixRadius_ = 0.8f;
+    float sheetRadius_ = 0.7f;
+    float loopRadius_ = 0.25f;
     int subdivisions_ = 8;
 
     static float catmullRom(float p0, float p1, float p2, float p3, float t);

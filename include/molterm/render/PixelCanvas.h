@@ -33,11 +33,10 @@ public:
     void drawCircle(int cx, int cy, float depth,
                     int radius, int colorPair, bool filled) override;
 
-    // Shaded triangle rasterization (barycentric, z-buffered, Lambert-lit)
     void drawTriangle(float x0, float y0, float z0,
                       float x1, float y1, float z1,
                       float x2, float y2, float z2,
-                      int colorPair);
+                      int colorPair) override;
     void drawChar(int termX, int termY, float depth,
                   char ch, int colorPair) override;
 
@@ -50,8 +49,10 @@ public:
     // Depth buffer access (for post-processing)
     const DepthBuffer& depthBuffer() const { return zbuf_; }
 
+    // Apply silhouette outline: darken pixels at depth discontinuities
+    void applyOutline(float threshold = 0.3f, float darken = 0.3f);
+
     // Apply depth fog: blend pixels toward fogColor based on depth.
-    // strength: 0.0 = no fog, 1.0 = full fog at max depth
     void applyDepthFog(float strength = 0.35f,
                        uint8_t fogR = 30, uint8_t fogG = 35, uint8_t fogB = 50);
 

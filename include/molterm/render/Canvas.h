@@ -47,6 +47,12 @@ public:
     virtual void drawCircle(int cx, int cy, float depth,
                             int radius, int colorPair, bool filled);
 
+    // Z-buffered triangle rasterization (sub-pixel coords, barycentric scanline)
+    virtual void drawTriangle(float x0, float y0, float z0,
+                              float x1, float y1, float z1,
+                              float x2, float y2, float z2,
+                              int colorPair);
+
     // Convenience: draw char at terminal cell coords (for labels)
     virtual void drawChar(int termX, int termY, float depth,
                           char ch, int colorPair) = 0;
