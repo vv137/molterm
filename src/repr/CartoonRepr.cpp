@@ -252,34 +252,19 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                 }
 
                 float hw = baseR * scaleF * cam.zoom();
-                int r = std::max(1, static_cast<int>(hw + 0.5f));
+                // Minimum radius = 2 sub-pixels to avoid 1-pixel thin lines in braille
+                int r = std::max(2, static_cast<int>(hw + 0.5f));
                 int color = spine[i-1].color;
 
-                // Lambert shading: tangent · camera_dir → brightness
-                // Perpendicular to view = bright (surface facing camera)
-                // Parallel to view = dim (surface edge-on)
+                // Lambert shading: vary radius gently (keep minimum thickness)
                 float dotVal = std::abs(tx[i-1]*camZx + ty[i-1]*camZy + tz[i-1]*camZz);
-                // dotVal ~1 = tangent parallel to view (tube face-on, bright)
-                // dotVal ~0 = tangent perpendicular to view (edge, also bright for tube)
-                // For a tube, brightness is high when tangent is NOT parallel to view
-                float brightness = 1.0f - dotVal * 0.6f;
+                float brightness = 1.0f - dotVal * 0.35f;  // subtle: 65-100% range
+                int shadedR = std::max(2, static_cast<int>(r * brightness));
 
-                // Shade by varying radius + skipping edge dots
-                int shadedR = std::max(1, static_cast<int>(r * brightness));
-                // For dark areas, draw only inner portion (density shading)
-                int innerR = (brightness < 0.7f) ? std::max(1, shadedR - 1) : shadedR;
-
-                int step = 0;
                 Canvas::bresenham(static_cast<int>(sx0), static_cast<int>(sy0), d0,
                                   static_cast<int>(sx1), static_cast<int>(sy1), d1,
                     [&](int x, int y, float d) {
-                        // Skip every other stamp in dark areas for sparser dots
-                        if (brightness < 0.5f && (step & 1)) {
-                            canvas.drawCircle(x, y, d, innerR, color, true);
-                        } else {
-                            canvas.drawCircle(x, y, d, shadedR, color, true);
-                        }
-                        ++step;
+                        canvas.drawCircle(x, y, d, shadedR, color, true);
                     });
             }
         }
@@ -362,13 +347,23 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             cam.projectCached(wx, wy, wz, vsx[s], vsy[s], vsz[s]);
         }
 
-        float csx, csy, csd;
-        cam.projectCached(cx, cy, cz, csx, csy, csd);
-        for (int s = 0; s < nSides; ++s) {
-            int s1 = (s + 1) % nSides;
-            canvas.drawTriangle(csx, csy, csd,
-                                vsx[s], vsy[s], vsz[s],
-                                vsx[s1], vsy[s1], vsz[s1], color);
+        if (canvas.scaleX() >= 8) {
+            // Pixel: filled triangles
+            float csx, csy, csd;
+            cam.projectCached(cx, cy, cz, csx, csy, csd);
+            for (int s = 0; s < nSides; ++s) {
+                int s1 = (s + 1) % nSides;
+                canvas.drawTriangle(csx, csy, csd,
+                                    vsx[s], vsy[s], vsz[s],
+                                    vsx[s1], vsy[s1], vsz[s1], color);
+            }
+        } else {
+            // Braille/block: outline only
+            for (int s = 0; s < nSides; ++s) {
+                int s1 = (s + 1) % nSides;
+                canvas.drawLine(static_cast<int>(vsx[s]), static_cast<int>(vsy[s]), vsz[s],
+                                static_cast<int>(vsx[s1]), static_cast<int>(vsy[s1]), vsz[s1], color);
+            }
         }
     };
 
