@@ -30,6 +30,7 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 - **Online fetch** — download from RCSB PDB (`fetch 1abc`) and AlphaFold DB (`fetch afdb:P12345`)
 - **Session management** — auto-save on quit, `--resume` to restore, `:save` for manual save
 - **PyMOL session export** — `.pml` scripts with `set_view`, repr, coloring
+- **Silhouette outlines** — depth edge detection with configurable threshold/darkness (pixel mode)
 - **Screenshot from any renderer** — `:screenshot` renders offscreen via PixelCanvas even in braille/ASCII mode
 - **Multi-state animation** — NMR ensemble / trajectory state cycling with `[`/`]` keys
 - **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
@@ -561,6 +562,18 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Selection highlight** — `$sele` atoms shown in reverse video
 - [x] **Color by scheme** — SS, chain coloring on sequence text
 - [x] **Click to navigate** — click residue in seqbar to center camera on it
+
+### Phase 6.8: Selection + Rendering — DONE
+
+- [x] **Slash notation** — `/obj/chain/resi/name` hierarchical selection (empty = wildcard): `//A/42/CA`, `//A+B/10-50`
+- [x] **`+` operator** — OR shorthand: `chain A+B`, `resi 10+20+30-40`, `name CA+CB+N`
+- [x] **Heteroatom coloring** — `ce` / `:color element` now colors N/O/S/P by element, carbon unchanged
+- [x] **Command line editing** — `Left`/`Right` cursor, `Home`/`End`, `Del`, fast input (no viewport re-render)
+- [x] **Canvas::drawTriangle** — scanline rasterizer with bounding box clamp (all canvases)
+- [x] **Silhouette outlines** — depth edge detection + 2px thick dark outlines (pixel mode, `:set outline`)
+- [x] **Lambert shading** — pixel triangle 20-100% intensity, braille stamp radius 65-100%
+- [x] **Cartoon braille** — SS-dependent thick lines (helix=1.2, sheet=1.8 wide, loop=0.4), sheet arrowheads
+- [x] **Configurable parameters** — `:set outline/ot/od`, `:set ch/csh/cl/csd` for cartoon radii/subdivisions
 
 ### Phase 7: Visualization
 
