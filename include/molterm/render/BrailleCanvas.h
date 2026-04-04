@@ -39,6 +39,7 @@ private:
         int color = 0;      // dominant color
     };
     std::vector<Cell> cells_;
+    std::vector<Cell> prevCells_;  // previous frame for diff-based flush
 
     // Depth buffer at sub-pixel resolution
     DepthBuffer zbuf_;

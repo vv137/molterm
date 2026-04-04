@@ -29,8 +29,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                          Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Cartoon)) return;
 
-    int cw = canvas.subW(), ch = canvas.subH();
-    float aspect = canvas.aspectYX();
     const auto& atoms = mol.atoms();
     auto scheme = mol.colorScheme();
     const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
@@ -54,8 +52,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         cas.push_back({i, atoms[i].x, atoms[i].y, atoms[i].z,
                        atoms[i].ssType, atoms[i].chainId});
     }
-
-    cam.prepareProjection(cw, ch, aspect);
 
     // Process each chain
     size_t cStart = 0;

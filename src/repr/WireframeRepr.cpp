@@ -8,7 +8,6 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     if (!mol.visible() || !mol.reprVisible(ReprType::Wireframe)) return;
 
     int cw = canvas.subW(), ch = canvas.subH();
-    float aspect = canvas.aspectYX();
     const auto& atoms = mol.atoms();
     const auto& bonds = mol.bonds();
     auto scheme = mol.colorScheme();
@@ -22,7 +21,6 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     // Pre-project all atoms using cached projection
     struct Projected { float sx, sy, depth; bool valid; };
     std::vector<Projected> proj(atoms.size());
-    cam.prepareProjection(cw, ch, aspect);
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
         cam.projectCached(a.x, a.y, a.z, proj[i].sx, proj[i].sy, proj[i].depth);

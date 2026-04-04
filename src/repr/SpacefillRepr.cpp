@@ -26,7 +26,6 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
     if (!mol.visible() || !mol.reprVisible(ReprType::Spacefill)) return;
 
     int cw = canvas.subW(), ch = canvas.subH();
-    float aspect = canvas.aspectYX();
     const auto& atoms = mol.atoms();
     auto scheme = mol.colorScheme();
     const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
@@ -37,7 +36,7 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
     std::vector<ProjAtom> projected;
     projected.reserve(atoms.size());
 
-    cam.prepareProjection(cw, ch, aspect);
+
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         const auto& a = atoms[i];
         float fsx, fsy, depth;

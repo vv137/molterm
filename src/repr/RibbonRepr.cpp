@@ -34,8 +34,6 @@ void RibbonRepr::render(const MolObject& mol, const Camera& cam,
                          Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Ribbon)) return;
 
-    int cw = canvas.subW(), ch = canvas.subH();
-    float aspect = canvas.aspectYX();
     const auto& atoms = mol.atoms();
     auto scheme = mol.colorScheme();
     const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
@@ -79,8 +77,6 @@ void RibbonRepr::render(const MolObject& mol, const Camera& cam,
         }
         allCas.push_back(ca);
     }
-
-    cam.prepareProjection(cw, ch, aspect);
 
     // Process each chain
     size_t chainStart = 0;

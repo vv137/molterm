@@ -25,6 +25,7 @@ void BrailleCanvas::resize(int termW, int termH) {
     termW_ = termW;
     termH_ = termH;
     cells_.resize(static_cast<size_t>(termW) * termH);
+    prevCells_.clear();  // force full redraw after resize
     zbuf_.resize(termW * 2, termH * 4);
     clear();
 }
@@ -35,15 +36,28 @@ void BrailleCanvas::clear() {
 }
 
 void BrailleCanvas::flush(Window& win) {
+    bool hasPrev = (prevCells_.size() == cells_.size());
     for (int ty = 0; ty < termH_; ++ty) {
         for (int tx = 0; tx < termW_; ++tx) {
             auto& c = cell(tx, ty);
-            if (c.dots == 0) continue;
+            size_t idx = static_cast<size_t>(ty) * termW_ + tx;
+
+            // Skip unchanged cells (major SSH bandwidth saving)
+            if (hasPrev && c.dots == prevCells_[idx].dots && c.color == prevCells_[idx].color)
+                continue;
+
+            if (c.dots == 0) {
+                // Cell became empty — clear it if it was non-empty before
+                if (hasPrev && prevCells_[idx].dots != 0)
+                    win.addChar(ty, tx, ' ');
+                continue;
+            }
 
             char32_t cp = BRAILLE_BASE | c.dots;
             win.addWideChar(ty, tx, cp, c.color);
         }
     }
+    prevCells_ = cells_;
 }
 
 void BrailleCanvas::drawDot(int sx, int sy, float depth, int colorPair) {

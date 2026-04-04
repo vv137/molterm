@@ -7,8 +7,6 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
                           Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Backbone)) return;
 
-    int cw = canvas.subW(), ch = canvas.subH();
-    float aspect = canvas.aspectYX();
     const auto& atoms = mol.atoms();
     auto scheme = mol.colorScheme();
     const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
@@ -24,8 +22,6 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         std::string chainId;
     };
     std::vector<CaAtom> cas;
-    cam.prepareProjection(cw, ch, aspect);
-
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
         if (a.name != "CA") continue;

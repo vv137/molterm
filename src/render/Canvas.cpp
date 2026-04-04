@@ -55,19 +55,17 @@ void Canvas::bresenham(int x0, int y0, float d0,
     int sy = (y0 < y1) ? 1 : -1;
     int err = dx - dy;
     int steps = std::max(dx, dy);
-    if (steps == 0) steps = 1;
-    int step = 0;
+    float depth = d0;
+    float depthStep = (steps > 0) ? (d1 - d0) / static_cast<float>(steps) : 0.0f;
 
     while (true) {
-        float t = static_cast<float>(step) / static_cast<float>(steps);
-        float depth = d0 + (d1 - d0) * t;
         plot(x0, y0, depth);
 
         if (x0 == x1 && y0 == y1) break;
         int e2 = 2 * err;
         if (e2 > -dy) { err -= dy; x0 += sx; }
         if (e2 < dx)  { err += dx; y0 += sy; }
-        ++step;
+        depth += depthStep;
     }
 }
 

@@ -966,9 +966,12 @@ void Application::renderViewport() {
     canvas_->clear();
 
     auto& tab = tabMgr_.currentTab();
+
+    // Prepare projection once per frame (not per-repr per-object)
+    tab.camera().prepareProjection(canvas_->subW(), canvas_->subH(), canvas_->aspectYX());
+
     for (const auto& obj : tab.objects()) {
         if (!obj->visible()) continue;
-        // Render each active representation
         for (auto& [reprType, repr] : representations_) {
             if (obj->reprVisible(reprType)) {
                 repr->render(*obj, tab.camera(), *canvas_);
