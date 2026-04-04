@@ -2045,6 +2045,9 @@ void Application::registerCommands() {
         offscreen.clear();
 
         auto& tab = app.tabs().currentTab();
+        // Re-prepare projection for the offscreen pixel coordinate space
+        tab.camera().prepareProjection(offscreen.subW(), offscreen.subH(), offscreen.aspectYX());
+
         for (const auto& obj : tab.objects()) {
             if (!obj->visible()) continue;
             for (auto& [reprType, repr] : app.representations()) {
@@ -2056,6 +2059,11 @@ void Application::registerCommands() {
 
         if (app.fogStrength() > 0.0f)
             offscreen.applyDepthFog(app.fogStrength());
+
+        // Restore projection for the active canvas
+        auto* canvas = app.canvas();
+        if (canvas)
+            tab.camera().prepareProjection(canvas->subW(), canvas->subH(), canvas->aspectYX());
 
         if (offscreen.savePNG(path))
             return "Saved " + std::to_string(offscreen.pixelWidth()) + "x" +
