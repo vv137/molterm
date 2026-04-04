@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux-x86_64
+          - os: ubuntu-22.04-arm
+            name: linux-aarch64
+          - os: macos-13
+            name: macos-x86_64
+          - os: macos-14
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for git describe version string
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libncursesw5-dev zlib1g-dev pkg-config
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Package
+        run: |
+          mkdir -p molterm-${{ github.ref_name }}-${{ matrix.name }}
+          cp build/molterm build/USalign THIRDPARTY.md molterm-${{ github.ref_name }}-${{ matrix.name }}/
+          tar czf molterm-${{ github.ref_name }}-${{ matrix.name }}.tar.gz \
+            molterm-${{ github.ref_name }}-${{ matrix.name }}/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: molterm-${{ github.ref_name }}-${{ matrix.name }}
+          path: molterm-${{ github.ref_name }}-${{ matrix.name }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: "*.tar.gz"
