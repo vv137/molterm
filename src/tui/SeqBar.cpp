@@ -104,20 +104,20 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
     };
 
     if (!wrap) {
-        int focusIdx = -1;
-        if (focusResi >= 0 && focusResi != lastFocusResi_) {
-            // Only auto-scroll when focus changes (not when {/} manually scrolls)
-            for (int i = 0; i < seqLen; ++i) {
-                if (residues_[i].resSeq == focusResi) { focusIdx = i; break; }
-            }
-            lastFocusResi_ = focusResi;
-        }
-
         int visibleW = w - 8;
         if (visibleW < 10) visibleW = w;
 
-        if (focusIdx >= 0) {
-            scrollOffset_ = focusIdx - visibleW / 2;
+        // Auto-scroll only when focused residue is outside visible range
+        if (focusResi >= 0 && focusResi != lastFocusResi_) {
+            lastFocusResi_ = focusResi;
+            int focusIdx = -1;
+            for (int i = 0; i < seqLen; ++i) {
+                if (residues_[i].resSeq == focusResi) { focusIdx = i; break; }
+            }
+            if (focusIdx >= 0 &&
+                (focusIdx < scrollOffset_ || focusIdx >= scrollOffset_ + visibleW)) {
+                scrollOffset_ = focusIdx - visibleW / 2;
+            }
         }
         scrollOffset_ = std::max(0, std::min(scrollOffset_, seqLen - visibleW));
         if (scrollOffset_ < 0) scrollOffset_ = 0;
@@ -192,14 +192,17 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
     }
 }
 
-int SeqBar::resSeqAtColumn(int col, bool wrap, int winWidth) const {
+int SeqBar::resSeqAtColumn(int col, bool wrap, int winWidth, std::string* outChain) const {
+    int idx = -1;
     if (!wrap) {
-        int idx = scrollOffset_ + col;
-        if (idx >= 0 && idx < static_cast<int>(residues_.size()) &&
-            residues_[idx].resSeq != kSeparator && residues_[idx].resSeq != kChainLabel)
-            return residues_[idx].resSeq;
+        idx = scrollOffset_ + col;
     }
     (void)winWidth;
+    if (idx >= 0 && idx < static_cast<int>(residues_.size()) &&
+        residues_[idx].resSeq != kSeparator && residues_[idx].resSeq != kChainLabel) {
+        if (outChain) *outChain = residues_[idx].chainId;
+        return residues_[idx].resSeq;
+    }
     return -1;
 }
 

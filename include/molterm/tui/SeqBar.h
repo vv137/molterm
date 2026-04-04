@@ -21,8 +21,8 @@ public:
     void render(Window& win, int focusResi, const Selection* sele,
                 ColorScheme scheme, bool wrap);
 
-    // Mouse click → returns resSeq at terminal column, or -1
-    int resSeqAtColumn(int col, bool wrap, int winWidth) const;
+    // Mouse click → returns resSeq at terminal column, or -1. Sets chainId if found.
+    int resSeqAtColumn(int col, bool wrap, int winWidth, std::string* outChain = nullptr) const;
 
     // How many rows needed for wrap mode
     int wrapRows(int winWidth) const;

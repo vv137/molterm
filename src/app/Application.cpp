@@ -482,18 +482,21 @@ void Application::handleMouse(int /*key*/) {
             int seqBarY = 1 + layout_.viewportHeight();
             int seqBarH = layout_.seqBar().height();
             if (event.y >= seqBarY && event.y < seqBarY + seqBarH) {
+                std::string clickChain;
                 int resi = seqBar_.resSeqAtColumn(event.x, layout_.seqBarWrap(),
-                                                   layout_.seqBar().width());
+                                                   layout_.seqBar().width(), &clickChain);
                 if (resi >= 0) {
                     focusResi_ = resi;
-                    // Center camera on this residue
                     auto obj = tabMgr_.currentTab().currentObject();
                     if (obj) {
                         const auto& atoms = obj->atoms();
                         for (const auto& a : atoms) {
-                            if (a.resSeq == resi && a.chainId == seqBar_.activeChain() && a.name == "CA") {
-                                tabMgr_.currentTab().camera().setCenter(a.x, a.y, a.z);
-                                cmdLine_.setMessage("Centered on " + a.chainId + "/" +
+                            if (a.resSeq == resi && a.chainId == clickChain &&
+                                (a.name == "CA" || a.name == "C1'")) {
+                                auto& seqCam = tabMgr_.currentTab().camera();
+                                seqCam.setCenter(a.x, a.y, a.z);
+                                if (seqCam.zoom() < 5.0f) seqCam.setZoom(8.0f);
+                                cmdLine_.setMessage(a.chainId + "/" +
                                     a.resName + " " + std::to_string(resi));
                                 break;
                             }
