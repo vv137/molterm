@@ -178,6 +178,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 " Args: serial number, pk1-pk4, or $selection
 :label <selection>              " Show residue labels on viewport
 :label clear                    " Remove all labels (also :unlabel)
+:overlay                        " Toggle overlay visibility (labels, measurements, sele)
+:overlay clear                  " Clear all measurements and labels
 :preset                         " Apply smart defaults (cartoon protein, ballstick ligands)
 :run <script.mt>                " Execute command script (# comments supported)
 :save                           " Save session (auto-saved on quit)

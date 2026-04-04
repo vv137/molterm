@@ -127,6 +127,7 @@ private:
     // Help overlay state
     bool helpOverlay_ = false;
 
+
     // Inspect / pick state (mouse-only)
     InspectLevel inspectLevel_ = InspectLevel::Atom;
     PickMode pickMode_ = PickMode::Inspect;
@@ -147,6 +148,7 @@ public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
     std::vector<int>& labelAtoms() { return labelAtoms_; }
     std::vector<Measurement>& measurements() { return measurements_; }
+    bool overlayVisible_ = true;
 private:
 
     // Projected atom cache for picking (populated once per frame)

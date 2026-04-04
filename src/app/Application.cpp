@@ -1068,6 +1068,7 @@ void Application::renderViewport() {
     // Show history hint overlay when command line is active and empty
     cmdLine_.renderHistoryHint(win);
 
+  if (overlayVisible_) {
     // Draw labels on viewport
     {
         buildProjCache();
@@ -1157,6 +1158,7 @@ void Application::renderViewport() {
             }
         }
     }
+  } // overlayVisible_
 
     win.refresh();
 }
@@ -2202,6 +2204,20 @@ void Application::registerCommands() {
         return "Labels cleared";
     }, ":unlabel", "Remove all labels");
 
+    // :overlay [clear] — toggle or clear overlays (labels, measurements, selection)
+    cmdRegistry_.registerCmd("overlay", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        if (!cmd.args.empty() && cmd.args[0] == "clear") {
+            int mc = static_cast<int>(app.measurements().size());
+            int lc = static_cast<int>(app.labelAtoms().size());
+            app.measurements().clear();
+            app.labelAtoms().clear();
+            return "Cleared " + std::to_string(mc) + " measurements, " +
+                   std::to_string(lc) + " labels";
+        }
+        app.overlayVisible_ = !app.overlayVisible_;
+        return app.overlayVisible_ ? "Overlays visible" : "Overlays hidden";
+    }, ":overlay [clear]", "Toggle or clear overlays");
+
     // :run <script.mt> — execute a command script
     cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> std::string {
         if (cmd.args.empty()) return "Usage: :run <script.mt>";
@@ -2260,11 +2276,6 @@ void Application::registerCommands() {
 
     // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
     cmdRegistry_.registerCmd("measure", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (!cmd.args.empty() && cmd.args[0] == "clear") {
-            int count = static_cast<int>(app.measurements().size());
-            app.measurements().clear();
-            return "Cleared " + std::to_string(count) + " measurements";
-        }
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return "No object selected";
         const auto& atoms = obj->atoms();
