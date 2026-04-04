@@ -84,6 +84,9 @@ public:
                             float& maxX, float& maxY, float& maxZ) const;
     void computeCenter(float& cx, float& cy, float& cz) const;
 
+    // Apply smart defaults: cartoon for protein/NA, ballstick for ligands
+    void applySmartDefaults();
+
     // Multi-state (NMR ensembles, trajectory)
     int activeState() const { return activeState_; }
     int stateCount() const { return static_cast<int>(states_.size()); }

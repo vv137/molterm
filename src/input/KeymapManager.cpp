@@ -112,6 +112,7 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'N'},       Action::SearchPrev,  "Prev search result");
     km.bind(Mode::Normal, {'i'},       Action::Inspect,     "Inspect info");
     km.bind(Mode::Normal, {'I'},       Action::CycleInspectLevel, "Cycle inspect level");
+    km.bind(Mode::Normal, {'g', 'd'},  Action::ApplyPreset,        "Apply default preset");
     km.bind(Mode::Normal, {'g', 's'},  Action::EnterSelectAtom,    "Select atoms (click)");
     km.bind(Mode::Normal, {'g', 'S'},  Action::EnterSelectResidue, "Select residues (click)");
     km.bind(Mode::Normal, {'g', 'c'},  Action::EnterSelectChain,   "Select chains (click)");

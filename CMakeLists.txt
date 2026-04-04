@@ -71,6 +71,7 @@ set(MOLTERM_SOURCES
     src/core/ObjectStore.cpp
     src/core/Selection.cpp
     src/core/Logger.cpp
+    src/core/BondTable.cpp
     # IO
     src/io/CifLoader.cpp
     src/io/Aligner.cpp

@@ -1,9 +1,11 @@
 #include "molterm/io/CifLoader.h"
+#include "molterm/core/BondTable.h"
 
 #include <gemmi/mmread.hpp>
 #include <gemmi/mmread_gz.hpp>
 #include <gemmi/model.hpp>
 #include <gemmi/assembly.hpp>
+#include <gemmi/chemcomp.hpp>
 #include <gemmi/logger.hpp>
 
 #include <algorithm>
@@ -142,33 +144,134 @@ static void assignSS(std::vector<AtomData>& atoms, const gemmi::Structure& st) {
     }
 }
 
+// Build atom index by (chain, resSeq, insCode, atomName) for fast lookup within a residue
+struct ResidueKey {
+    std::string chainId;
+    int resSeq;
+    char insCode;
+    bool operator==(const ResidueKey& o) const {
+        return chainId == o.chainId && resSeq == o.resSeq && insCode == o.insCode;
+    }
+};
+
+struct ResKeyHash {
+    size_t operator()(const ResidueKey& k) const {
+        return std::hash<std::string>()(k.chainId) ^ (std::hash<int>()(k.resSeq) << 16) ^ k.insCode;
+    }
+};
+
 static void buildBonds(MolObject& obj) {
     const auto& atoms = obj.atoms();
     int n = static_cast<int>(atoms.size());
-    SpatialHash grid(2.5f, n);
-    for (int i = 0; i < n; ++i)
-        grid.insert(i, atoms[i].x, atoms[i].y, atoms[i].z);
 
-    constexpr float tolerance = 0.5f;
-    constexpr float minDist = 0.4f;
-    constexpr float maxSearchDist = 2.5f;
-
+    // Index: (chain, resSeq, insCode) → {atomName → atomIdx}
+    std::unordered_map<ResidueKey,
+        std::unordered_map<std::string, int>, ResKeyHash> resAtomMap;
     for (int i = 0; i < n; ++i) {
-        float r1 = covalentRadius(atoms[i].element);
-        grid.forEachNeighbor(atoms[i].x, atoms[i].y, atoms[i].z, maxSearchDist,
-            [&](int j) {
-                if (j <= i) return;
-                float dx = atoms[i].x - atoms[j].x;
-                float dy = atoms[i].y - atoms[j].y;
-                float dz = atoms[i].z - atoms[j].z;
-                float dist2 = dx*dx + dy*dy + dz*dz;
-                float r2 = covalentRadius(atoms[j].element);
-                float maxBondDist = r1 + r2 + tolerance;
-                if (dist2 < minDist * minDist || dist2 > maxBondDist * maxBondDist) return;
-                BondData bd;
-                bd.atom1 = i; bd.atom2 = j; bd.order = 1;
-                obj.bonds().push_back(bd);
+        ResidueKey rk{atoms[i].chainId, atoms[i].resSeq, atoms[i].insCode};
+        resAtomMap[rk][atoms[i].name] = i;
+    }
+
+    std::set<std::pair<int,int>> bondSet;  // dedup across tiers
+
+    auto addBond = [&](int a1, int a2, int order) {
+        auto key = std::make_pair(std::min(a1, a2), std::max(a1, a2));
+        if (bondSet.insert(key).second) {
+            BondData bd;
+            bd.atom1 = key.first; bd.atom2 = key.second; bd.order = order;
+            obj.bonds().push_back(bd);
+        }
+    };
+
+    // ── Tier 1: Standard residue bond table ────────────────────────────────
+    for (auto& [rk, atomMap] : resAtomMap) {
+        const auto* table = standardBonds(atoms[atomMap.begin()->second].resName);
+        if (!table) continue;
+        for (const auto& be : *table) {
+            auto it1 = atomMap.find(be.atom1);
+            auto it2 = atomMap.find(be.atom2);
+            if (it1 != atomMap.end() && it2 != atomMap.end())
+                addBond(it1->second, it2->second, be.order);
+        }
+    }
+
+    // ── Tier 1b: Inter-residue bonds (peptide C-N, phosphodiester O3'-P) ──
+    // Group residues by chain, sorted by resSeq
+    std::unordered_map<std::string, std::vector<ResidueKey>> chainResidues;
+    for (const auto& [rk, _] : resAtomMap)
+        chainResidues[rk.chainId].push_back(rk);
+    for (auto& [chain, residues] : chainResidues) {
+        std::sort(residues.begin(), residues.end(),
+            [](const ResidueKey& a, const ResidueKey& b) {
+                return a.resSeq < b.resSeq || (a.resSeq == b.resSeq && a.insCode < b.insCode);
             });
+        for (size_t ri = 0; ri + 1 < residues.size(); ++ri) {
+            auto& map1 = resAtomMap[residues[ri]];
+            auto& map2 = resAtomMap[residues[ri + 1]];
+            // Peptide bond: C(i) → N(i+1)
+            auto cIt = map1.find("C");
+            auto nIt = map2.find("N");
+            if (cIt != map1.end() && nIt != map2.end()) {
+                float dx = atoms[cIt->second].x - atoms[nIt->second].x;
+                float dy = atoms[cIt->second].y - atoms[nIt->second].y;
+                float dz = atoms[cIt->second].z - atoms[nIt->second].z;
+                float d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 < 1.8f * 1.8f)  // peptide bond ~1.33 Å
+                    addBond(cIt->second, nIt->second, 1);
+            }
+            // Phosphodiester: O3'(i) → P(i+1)
+            auto o3It = map1.find("O3'");
+            auto pIt = map2.find("P");
+            if (o3It != map1.end() && pIt != map2.end()) {
+                float dx = atoms[o3It->second].x - atoms[pIt->second].x;
+                float dy = atoms[o3It->second].y - atoms[pIt->second].y;
+                float dz = atoms[o3It->second].z - atoms[pIt->second].z;
+                float d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 < 2.0f * 2.0f)  // P-O ~1.6 Å
+                    addBond(o3It->second, pIt->second, 1);
+            }
+        }
+    }
+
+    // ── Tier 2: Distance-based fallback for non-standard residues ──────────
+    // Only apply to atoms NOT already bonded by the table
+    std::vector<bool> hasBonds(n, false);
+    for (const auto& b : obj.bonds()) {
+        hasBonds[b.atom1] = true;
+        hasBonds[b.atom2] = true;
+    }
+
+    // Collect un-bonded atoms (ligands, modified residues)
+    std::vector<int> unbonded;
+    for (int i = 0; i < n; ++i) {
+        if (!hasBonds[i]) unbonded.push_back(i);
+    }
+
+    if (!unbonded.empty()) {
+        SpatialHash grid(2.5f, static_cast<int>(unbonded.size()));
+        for (int idx = 0; idx < static_cast<int>(unbonded.size()); ++idx)
+            grid.insert(unbonded[idx], atoms[unbonded[idx]].x,
+                        atoms[unbonded[idx]].y, atoms[unbonded[idx]].z);
+
+        constexpr float tolerance = 0.5f;
+        constexpr float minDist = 0.4f;
+        constexpr float maxSearchDist = 2.5f;
+
+        for (int ai : unbonded) {
+            float r1 = covalentRadius(atoms[ai].element);
+            grid.forEachNeighbor(atoms[ai].x, atoms[ai].y, atoms[ai].z, maxSearchDist,
+                [&](int aj) {
+                    if (aj <= ai) return;
+                    float dx = atoms[ai].x - atoms[aj].x;
+                    float dy = atoms[ai].y - atoms[aj].y;
+                    float dz = atoms[ai].z - atoms[aj].z;
+                    float dist2 = dx*dx + dy*dy + dz*dz;
+                    float r2 = covalentRadius(atoms[aj].element);
+                    float maxBondDist = r1 + r2 + tolerance;
+                    if (dist2 < minDist * minDist || dist2 > maxBondDist * maxBondDist) return;
+                    addBond(ai, aj, 1);
+                });
+        }
     }
 }
 

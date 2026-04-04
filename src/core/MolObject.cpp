@@ -1,4 +1,5 @@
 #include "molterm/core/MolObject.h"
+#include "molterm/core/BondTable.h"
 #include <algorithm>
 #include <limits>
 
@@ -143,6 +144,51 @@ bool MolObject::prevState() {
     int next = activeState_ - 1;
     if (next < 0) next = static_cast<int>(states_.size()) - 1;
     return setActiveState(next);
+}
+
+void MolObject::applySmartDefaults() {
+    bool hasProtein = false;
+    bool hasNA = false;
+    bool hasLigand = false;
+    std::vector<int> ligandAtoms;
+
+    for (int i = 0; i < static_cast<int>(atoms_.size()); ++i) {
+        const auto& a = atoms_[i];
+        if (isStandardAA(a.resName)) {
+            hasProtein = true;
+        } else if (isStandardNA(a.resName)) {
+            hasNA = true;
+        } else if (a.isHet) {
+            hasLigand = true;
+            ligandAtoms.push_back(i);
+        }
+    }
+
+    bool isSmallMol = (!hasProtein && !hasNA && atoms_.size() < 100);
+
+    if (isSmallMol) {
+        // Small molecule: ball-and-stick for everything
+        hideAllRepr();
+        showRepr(ReprType::BallStick);
+        return;
+    }
+
+    // Macromolecule: cartoon for protein/NA, ballstick for ligands
+    hideAllRepr();
+
+    if (hasProtein || hasNA) {
+        if (atoms_.size() > 50000) {
+            // Very large: backbone only
+            showRepr(ReprType::Backbone);
+        } else {
+            showRepr(ReprType::Cartoon);
+        }
+        setColorScheme(ColorScheme::Chain);
+    }
+
+    if (hasLigand && !ligandAtoms.empty()) {
+        showReprForAtoms(ReprType::BallStick, ligandAtoms);
+    }
 }
 
 } // namespace molterm

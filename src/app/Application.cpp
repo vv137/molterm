@@ -218,6 +218,7 @@ std::string Application::loadFile(const std::string& path) {
         int bondCount = static_cast<int>(obj->bonds().size());
         int stateCount = obj->stateCount();
 
+        obj->applySmartDefaults();
         auto ptr = store_.add(std::move(obj));
         tabMgr_.currentTab().addObject(ptr);
         if (autoCenter_) tabMgr_.currentTab().centerView();
@@ -895,6 +896,16 @@ void Application::handleAction(Action action) {
                     std::to_string(namedSelections_["sele"].size()));
             else
                 cmdLine_.setMessage("Inspect mode");
+            break;
+        }
+
+        // Apply smart default preset
+        case Action::ApplyPreset: {
+            auto obj = tab.currentObject();
+            if (obj) {
+                obj->applySmartDefaults();
+                cmdLine_.setMessage("Applied default preset");
+            }
             break;
         }
 
@@ -2052,7 +2063,14 @@ void Application::registerCommands() {
         return "Failed to save " + path;
     }, ":screenshot [file.png]", "Save viewport as PNG (works in any renderer)");
 
-    // :save — save session manually
+    // :preset — apply smart default representation
+    cmdRegistry_.registerCmd("preset", [](Application& app, const ParsedCommand&) -> std::string {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return "No object selected";
+        obj->applySmartDefaults();
+        return "Applied default preset (cartoon + ballstick ligands)";
+    }, ":preset", "Apply smart default representations");
+
     cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> std::string {
         if (SessionSaver::saveSession(app))
             return "Session saved to " + SessionSaver::sessionPath();

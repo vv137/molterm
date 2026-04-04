@@ -17,18 +17,22 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 
 ## Features
 
+- **Smart defaults** — auto-detects protein/nucleic/ligand content: cartoon for macromolecules, ball-and-stick for ligands, chain coloring (`gd` / `:preset` to re-apply)
+- **3-tier bond detection** — standard residue table (20 AA + 8 nucleotides, with bond order) → inter-residue peptide/phosphodiester bonds → distance fallback for ligands
 - **Multi-renderer pipeline** — Unicode Braille (8x resolution), half-block, ASCII, and native pixel protocols (Sixel, Kitty, iTerm2) with auto-detection
 - **VIM-like modal interface** — Normal, Command, Search modes with trie-based multi-key bindings (`sw`, `dd`, `gt`, etc.)
 - **Rich representations** — wireframe, ball-and-stick, spacefill, cartoon (Catmull-Rom spline + cross-section rasterization), flat ribbon, backbone trace — per-object or per-selection visibility
 - **Selection algebra** — recursive descent parser: `chain A and helix`, `resi 50-60 or name CA`, boolean `and/or/not` with parentheses
-- **Mouse selection** — Shift+Click to add atoms, Ctrl+Click to remove, Shift+Ctrl+Click for whole residue. Selection highlight overlay on viewport
-- **Multi-level inspect** — click to inspect at atom/residue/chain/object level (`I` cycles level)
+- **Mouse selection** — `gs`/`gS`/`gc` pick modes for atom/residue/chain selection with `$sele` highlight overlay
+- **Multi-level inspect** — click to inspect at atom/residue/chain/object level (`I` cycles), pick registers pk1-pk4 for measurements
 - **Biological assemblies** — generate quaternary structures from PDB/mmCIF symmetry operators (`:assembly`)
 - **Structure alignment** — TM-align and MM-align via USalign integration
 - **Online fetch** — download from RCSB PDB (`fetch 1abc`) and AlphaFold DB (`fetch afdb:P12345`)
+- **Session management** — auto-save on quit, `--resume` to restore, `:save` for manual save
 - **PyMOL session export** — `.pml` scripts with `set_view`, repr, coloring
+- **Screenshot from any renderer** — `:screenshot` renders offscreen via PixelCanvas even in braille/ASCII mode
 - **Multi-state animation** — NMR ensemble / trajectory state cycling with `[`/`]` keys
-- **Measurement tools** — distance, angle, dihedral between atoms by serial number
+- **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
 - **Full customization** — keybindings, color themes, and settings via TOML configs in `~/.molterm/`
 - **Structured logging** — session log to `~/.molterm/molterm.log`
 
@@ -101,6 +105,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `sr` / `xr` | Ribbon (flat) |
 | `sk` / `xk` | Backbone trace |
 | `xa` | Hide all |
+| `gd` | Apply default preset (cartoon + ballstick ligands) |
 
 </details>
 
@@ -171,9 +176,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :angle [s1 s2 s3]              " Angle at s2 (no args = pk1-pk2-pk3)
 :dihedral [s1 s2 s3 s4]        " Dihedral (no args = pk1-pk4)
                                 " Args: serial number, pk1-pk4, or $selection
+:preset                         " Apply smart defaults (cartoon protein, ballstick ligands)
 :save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
-:screenshot [file.png]          " Save viewport as PNG (pixel renderer)
+:screenshot [file.png]          " Save viewport as PNG (works in any renderer)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set fog <0-1>                  " Depth fog strength
 :set bt|wt|br <n>               " Backbone/wireframe thickness, ball radius
@@ -464,6 +470,22 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Multi-state animation** — `[`/`]` state cycling for NMR ensembles; state shown in status bar
 - [x] **Ribbon geometry** — Catmull-Rom spline ribbon with C→O guide vectors, sheet arrowheads, cross-fill
 - [x] **Logging** — structured logging to `~/.molterm/molterm.log` with timestamped session markers
+
+### Phase 5.5: Smart Defaults + Interaction — DONE
+
+- [x] **3-tier bond detection** — standard residue table (20 AA + 8 NA with bond order) → peptide/phosphodiester inter-residue → distance fallback for ligands
+- [x] **Smart default repr** — auto-detect protein/NA/ligand: cartoon for macromolecules, ball-and-stick for ligands, chain coloring
+- [x] **`:preset` / `gd`** — re-apply smart defaults on demand
+- [x] **VMD-like residue type coloring** — `ct` / `:color restype` (nonpolar/polar/acidic/basic)
+- [x] **Mouse-only inspect** — click to inspect at atom/residue/chain/object level, `I` cycles
+- [x] **Pick registers** — pk1→pk4 rotating, used by `:measure`/`:angle`/`:dihedral` (no args)
+- [x] **Mouse selection modes** — `gs` atom, `gS` residue, `gc` chain, click to toggle in `$sele`
+- [x] **Selection highlight** — `$sele` atoms shown as `*` overlay on viewport
+- [x] **Per-selection show/hide** — `:show cartoon chain A`, `:hide wireframe helix`
+- [x] **Biological assembly** — `:assembly [id|list]` via gemmi `make_assembly()`
+- [x] **Session autosave** — auto-save on quit, `--resume` / `-r` to restore, `:save` manual
+- [x] **Offscreen screenshot** — `:screenshot` works in any renderer (offscreen PixelCanvas)
+- [x] **SSH optimizations** — BrailleCanvas diff-flush, projection dedup, Bresenham depth step
 
 ---
 
