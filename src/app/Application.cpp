@@ -18,6 +18,7 @@
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
 #include "molterm/core/Logger.h"
+#include "molterm/io/SessionSaver.h"
 
 #include <chrono>
 #include <cmath>
@@ -117,8 +118,9 @@ void Application::init(int argc, char* argv[]) {
     // Enable mouse
     screen_.enableMouse();
 
-    // Load files from command line args
+    // Load files from command line args (skip flags)
     for (int i = 1; i < argc; ++i) {
+        if (argv[i][0] == '-') continue;  // skip flags
         std::string msg = loadFile(argv[i]);
         if (!msg.empty()) {
             cmdLine_.setMessage(msg);
@@ -202,6 +204,7 @@ int Application::run() {
 
 void Application::quit(bool force) {
     (void)force;
+    SessionSaver::saveSession(*this);
     MLOG_INFO("Quitting MolTerm");
     running_ = false;
 }
@@ -1992,10 +1995,6 @@ void Application::registerCommands() {
 
     // :screenshot <file.png>
     cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (app.rendererType() != RendererType::Pixel)
-            return "Screenshot requires pixel renderer (:set renderer pixel)";
-        auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
-        if (!pc) return "No pixel canvas";
         std::string path;
         if (cmd.args.empty()) {
             auto now = std::chrono::system_clock::now();
@@ -2006,11 +2005,56 @@ void Application::registerCommands() {
         } else {
             path = cmd.args[0];
         }
-        if (pc->savePNG(path))
-            return "Saved " + std::to_string(pc->pixelWidth()) + "x" +
-                   std::to_string(pc->pixelHeight()) + " to " + path;
+
+        // If already in pixel mode, use the existing canvas
+        if (app.rendererType() == RendererType::Pixel) {
+            auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
+            if (pc && pc->savePNG(path))
+                return "Saved " + std::to_string(pc->pixelWidth()) + "x" +
+                       std::to_string(pc->pixelHeight()) + " to " + path;
+            return "Failed to save " + path;
+        }
+
+        // Offscreen render: create a temporary PixelCanvas, render into it, save PNG
+        auto proto = ProtocolPicker::detect();
+        auto encoder = ProtocolPicker::createEncoder(proto);
+        if (!encoder) {
+            // Create a dummy SixelEncoder just for offscreen rendering
+            encoder = ProtocolPicker::createEncoder(GraphicsProtocol::Sixel);
+        }
+        if (!encoder) return "Cannot create offscreen renderer";
+
+        PixelCanvas offscreen(std::move(encoder));
+        int w = app.layout().viewportWidth();
+        int h = app.layout().viewportHeight();
+        offscreen.resize(w, h);
+        offscreen.clear();
+
+        auto& tab = app.tabs().currentTab();
+        for (const auto& obj : tab.objects()) {
+            if (!obj->visible()) continue;
+            for (auto& [reprType, repr] : app.representations()) {
+                if (obj->reprVisible(reprType)) {
+                    repr->render(*obj, tab.camera(), offscreen);
+                }
+            }
+        }
+
+        if (app.fogStrength() > 0.0f)
+            offscreen.applyDepthFog(app.fogStrength());
+
+        if (offscreen.savePNG(path))
+            return "Saved " + std::to_string(offscreen.pixelWidth()) + "x" +
+                   std::to_string(offscreen.pixelHeight()) + " to " + path;
         return "Failed to save " + path;
-    }, ":screenshot [file.png]", "Save viewport as PNG (pixel renderer only)");
+    }, ":screenshot [file.png]", "Save viewport as PNG (works in any renderer)");
+
+    // :save — save session manually
+    cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> std::string {
+        if (SessionSaver::saveSession(app))
+            return "Session saved to " + SessionSaver::sessionPath();
+        return "Failed to save session";
+    }, ":save", "Save session to ~/.molterm/autosave.toml");
 
     // Helper: resolve atom index from serial number string or pick register
     auto resolveAtomIdx = [](Application& app, const std::string& s) -> int {

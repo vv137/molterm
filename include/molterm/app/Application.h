@@ -47,6 +47,7 @@ public:
 
     // Public accessors for command handlers
     TabManager& tabs() { return tabMgr_; }
+    const TabManager& tabs() const { return tabMgr_; }
     ObjectStore& store() { return store_; }
     CommandLine& cmdLine() { return cmdLine_; }
     Layout& layout() { return layout_; }
@@ -63,8 +64,10 @@ public:
     // Canvas access
     Canvas* canvas() { return canvas_.get(); }
 
-    // Representation access (for :set commands)
+    // Representation access
     Representation* getRepr(ReprType type);
+    const std::unordered_map<ReprType, std::unique_ptr<Representation>>& representations() const { return representations_; }
+    std::unordered_map<ReprType, std::unique_ptr<Representation>>& representations() { return representations_; }
 
     // Search
     const std::string& lastSearch() const { return lastSearch_; }

@@ -118,6 +118,7 @@ set(MOLTERM_SOURCES
     src/config/ConfigParser.cpp
     # Export
     src/io/SessionExporter.cpp
+    src/io/SessionSaver.cpp
 )
 
 # ── Target ───────────────────────────────────────────────────────────────────

@@ -43,6 +43,8 @@ make -j$(nproc)
 # Run
 ./molterm protein.pdb
 ./molterm structure.cif.gz        # gzipped files supported
+./molterm --resume                # restore last session (auto-saved on quit)
+./molterm -r                      # short form
 ./molterm --version               # prints version + git hash
 ```
 
@@ -169,6 +171,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :angle [s1 s2 s3]              " Angle at s2 (no args = pk1-pk2-pk3)
 :dihedral [s1 s2 s3 s4]        " Dihedral (no args = pk1-pk4)
                                 " Args: serial number, pk1-pk4, or $selection
+:save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png]          " Save viewport as PNG (pixel renderer)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2

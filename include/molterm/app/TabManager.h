@@ -24,6 +24,8 @@ public:
     void goToTab(int idx);
 
     size_t count() const { return tabs_.size(); }
+    Tab& tab(int idx) { return *tabs_[idx]; }
+    const Tab& tab(int idx) const { return *tabs_[idx]; }
     std::vector<std::string> tabNames() const;
 
     // Move/copy object from current tab to target tab
