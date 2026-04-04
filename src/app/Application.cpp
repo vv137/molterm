@@ -430,6 +430,7 @@ void Application::handleMouse(int /*key*/) {
                 // Inspect mode — show info at current level
                 pickedAtomIdx_ = atomIdx;
                 focusResi_ = a.resSeq;
+                focusChain_ = a.chainId;
                 // Store in pick register (pk1-pk4, rotating)
                 pickRegs_[pickNext_] = atomIdx;
                 int pkNum = pickNext_ + 1;  // 1-based
@@ -487,6 +488,7 @@ void Application::handleMouse(int /*key*/) {
                                                    layout_.seqBar().width(), &clickChain);
                 if (resi >= 0) {
                     focusResi_ = resi;
+                    focusChain_ = clickChain;
                     auto obj = tabMgr_.currentTab().currentObject();
                     if (obj) {
                         const auto& atoms = obj->atoms();
@@ -1011,22 +1013,33 @@ void Application::handleAction(Action action) {
     }
 }
 
-void Application::handleCommandInput(int key) {
+void Application::handleLineEdit(int key) {
     if (key == KEY_BACKSPACE || key == 127 || key == 8) {
         cmdLine_.backspace();
+    } else if (key == KEY_DC || key == 330) {
+        cmdLine_.deleteForward();
+    } else if (key == KEY_LEFT) {
+        cmdLine_.cursorLeft();
+    } else if (key == KEY_RIGHT) {
+        cmdLine_.cursorRight();
+    } else if (key == KEY_HOME || key == 1) {
+        cmdLine_.cursorHome();
+    } else if (key == KEY_END || key == 5) {
+        cmdLine_.cursorEnd();
     } else {
         cmdLine_.insertChar(key);
     }
-    needsRedraw_ = true;
+    cmdLine_.render(layout_.commandLine());
+    layout_.commandLine().refresh();
+    doupdate();
+}
+
+void Application::handleCommandInput(int key) {
+    handleLineEdit(key);
 }
 
 void Application::handleSearchInput(int key) {
-    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        cmdLine_.backspace();
-    } else {
-        cmdLine_.insertChar(key);
-    }
-    needsRedraw_ = true;
+    handleLineEdit(key);
 }
 
 void Application::renderFrame() {
@@ -1076,7 +1089,7 @@ void Application::renderFrame() {
             const Selection* sele = nullptr;
             auto selIt = namedSelections_.find("sele");
             if (selIt != namedSelections_.end()) sele = &selIt->second;
-            seqBar_.render(layout_.seqBar(), focusResi_, sele,
+            seqBar_.render(layout_.seqBar(), focusResi_, focusChain_, sele,
                           obj->colorScheme(), layout_.seqBarWrap());
         }
     }

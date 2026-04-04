@@ -77,6 +77,28 @@ void CommandLine::backspace() {
     }
 }
 
+void CommandLine::deleteForward() {
+    if (cursorPos_ < static_cast<int>(input_.size())) {
+        input_.erase(cursorPos_, 1);
+    }
+}
+
+void CommandLine::cursorLeft() {
+    if (cursorPos_ > 0) --cursorPos_;
+}
+
+void CommandLine::cursorRight() {
+    if (cursorPos_ < static_cast<int>(input_.size())) ++cursorPos_;
+}
+
+void CommandLine::cursorHome() {
+    cursorPos_ = 0;
+}
+
+void CommandLine::cursorEnd() {
+    cursorPos_ = static_cast<int>(input_.size());
+}
+
 void CommandLine::deleteWord() {
     while (cursorPos_ > 0 && input_[cursorPos_ - 1] == ' ') {
         input_.erase(cursorPos_ - 1, 1);

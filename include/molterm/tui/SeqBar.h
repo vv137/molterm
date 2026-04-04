@@ -18,8 +18,8 @@ public:
 
     // Render into the window. focusResi = residue to center on (-1 = no focus).
     // selectedAtoms = sele indices for highlight.
-    void render(Window& win, int focusResi, const Selection* sele,
-                ColorScheme scheme, bool wrap);
+    void render(Window& win, int focusResi, const std::string& focusChain,
+                const Selection* sele, ColorScheme scheme, bool wrap);
 
     // Mouse click → returns resSeq at terminal column, or -1. Sets chainId if found.
     int resSeqAtColumn(int col, bool wrap, int winWidth, std::string* outChain = nullptr) const;

@@ -85,8 +85,8 @@ static int colorForResidue(const SeqBar::Residue& r, ColorScheme scheme) {
     }
 }
 
-void SeqBar::render(Window& win, int focusResi, const Selection* sele,
-                    ColorScheme scheme, bool wrap) {
+void SeqBar::render(Window& win, int focusResi, const std::string& focusChain,
+                    const Selection* sele, ColorScheme scheme, bool wrap) {
     win.erase();
     int w = win.width();
     int h = win.height();
@@ -112,7 +112,10 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
             lastFocusResi_ = focusResi;
             int focusIdx = -1;
             for (int i = 0; i < seqLen; ++i) {
-                if (residues_[i].resSeq == focusResi) { focusIdx = i; break; }
+                if (residues_[i].resSeq == focusResi &&
+                    (focusChain.empty() || residues_[i].chainId == focusChain)) {
+                    focusIdx = i; break;
+                }
             }
             if (focusIdx >= 0 &&
                 (focusIdx < scrollOffset_ || focusIdx >= scrollOffset_ + visibleW)) {

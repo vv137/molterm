@@ -106,7 +106,8 @@ private:
     CommandLine cmdLine_;
     ObjectPanel objectPanel_;
     SeqBar seqBar_;
-    int focusResi_ = -1;  // residue to center seqbar on
+    int focusResi_ = -1;
+    std::string focusChain_;  // chain of focused residue for seqbar scroll
     KeymapManager keymapMgr_;
     std::unique_ptr<InputHandler> inputHandler_;
     CommandRegistry cmdRegistry_;
@@ -186,6 +187,7 @@ private:
     void handleAction(Action action);
     void handleCommandInput(int key);
     void handleSearchInput(int key);
+    void handleLineEdit(int key);
     void handleMouse(int key);
     void renderFrame();
     void renderViewport();

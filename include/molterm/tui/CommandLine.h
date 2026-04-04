@@ -19,6 +19,11 @@ public:
     void deactivate();
     void insertChar(int ch);
     void backspace();
+    void deleteForward();   // delete char under cursor
+    void cursorLeft();
+    void cursorRight();
+    void cursorHome();
+    void cursorEnd();
     void deleteWord();
     void clearInput();
 
