@@ -20,6 +20,7 @@ public:
     void resize(int termW, int termH) override;
     void clear() override;
     void flush(Window& win) override;
+    void invalidate() override { prevRgb_.clear(); }
 
     int subW() const override { return pixW_; }
     int subH() const override { return pixH_; }

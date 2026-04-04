@@ -947,29 +947,37 @@ void Application::handleAction(Action action) {
             break;
         }
 
-        case Action::ToggleSeqBar:
-            // Cycle: hidden → scroll → wrap → hidden
+        case Action::ToggleSeqBar: {
             if (!layout_.seqBarVisible()) {
-                layout_.toggleSeqBar();  // show
-                if (layout_.seqBarWrap()) layout_.toggleSeqBarWrap();  // ensure scroll mode first
+                layout_.toggleSeqBar();
+                if (layout_.seqBarWrap()) layout_.toggleSeqBarWrap();
                 cmdLine_.setMessage("Sequence bar: scroll");
             } else if (!layout_.seqBarWrap()) {
-                layout_.toggleSeqBarWrap();  // scroll → wrap
+                layout_.toggleSeqBarWrap();
                 cmdLine_.setMessage("Sequence bar: wrap");
             } else {
-                layout_.toggleSeqBarWrap();  // back to scroll
-                layout_.toggleSeqBar();      // hide
+                layout_.toggleSeqBarWrap();
+                layout_.toggleSeqBar();
                 cmdLine_.setMessage("Sequence bar: hidden");
             }
+            if (canvas_) canvas_->invalidate();
+            onResize();
             break;
+        }
 
         case Action::SeqBarNextChain:
-            seqBar_.nextChain();
-            cmdLine_.setMessage("Seqbar chain: " + seqBar_.activeChain());
+            if (layout_.seqBarVisible() && !layout_.seqBarWrap()) {
+                seqBar_.nextChain();
+                seqBar_.scrollToChain(seqBar_.activeChain());
+                cmdLine_.setMessage("Chain: " + seqBar_.activeChain());
+            }
             break;
         case Action::SeqBarPrevChain:
-            seqBar_.prevChain();
-            cmdLine_.setMessage("Seqbar chain: " + seqBar_.activeChain());
+            if (layout_.seqBarVisible() && !layout_.seqBarWrap()) {
+                seqBar_.prevChain();
+                seqBar_.scrollToChain(seqBar_.activeChain());
+                cmdLine_.setMessage("Chain: " + seqBar_.activeChain());
+            }
             break;
 
         case Action::ShowOverlay:
@@ -1024,6 +1032,27 @@ void Application::renderFrame() {
     // Tab bar
     tabBar_.render(layout_.tabBar(), tabMgr_.tabNames(), tabMgr_.currentIndex());
 
+    // Adjust seqbar height BEFORE rendering viewport (setSeqBarHeight rebuilds windows)
+    if (layout_.seqBarVisible()) {
+        auto obj = tabMgr_.currentTab().currentObject();
+        if (obj) {
+            seqBar_.update(*obj);
+            if (layout_.seqBarWrap()) {
+                int needed = std::min(seqBar_.wrapRows(layout_.seqBar().width()),
+                                      screen_.height() / 4);
+                if (needed != layout_.seqBar().height()) {
+                    layout_.setSeqBarHeight(std::max(1, needed));
+                    if (canvas_) canvas_->invalidate();
+                }
+            } else {
+                if (layout_.seqBar().height() != 1) {
+                    layout_.setSeqBarHeight(1);
+                    if (canvas_) canvas_->invalidate();
+                }
+            }
+        }
+    }
+
     // Viewport — render to canvas but defer pixel flush
     renderViewport();
 
@@ -1041,17 +1070,6 @@ void Application::renderFrame() {
     if (layout_.seqBarVisible()) {
         auto obj = tabMgr_.currentTab().currentObject();
         if (obj) {
-            seqBar_.update(*obj);
-            // Dynamic height for wrap mode
-            if (layout_.seqBarWrap()) {
-                int needed = std::min(seqBar_.wrapRows(layout_.seqBar().width()),
-                                      screen_.height() / 4);
-                if (needed != layout_.seqBar().height())
-                    layout_.setSeqBarHeight(std::max(1, needed));
-            } else {
-                if (layout_.seqBar().height() != 1)
-                    layout_.setSeqBarHeight(1);
-            }
             const Selection* sele = nullptr;
             auto selIt = namedSelections_.find("sele");
             if (selIt != namedSelections_.end()) sele = &selIt->second;
@@ -1299,15 +1317,15 @@ void Application::updateStatusBar() {
 }
 
 void Application::onResize() {
-    // Flush any in-flight Sixel output before reinitializing
     fflush(stdout);
-    // Clear screen to remove stale Sixel images at old coordinates
     fprintf(stdout, "\033[2J");
     fflush(stdout);
 
     endwin();
     refresh();
     layout_.resize(screen_.height(), screen_.width());
+    if (canvas_) canvas_->invalidate();
+    framesToSkip_ = 0;
     needsRedraw_ = true;
 }
 
@@ -1872,10 +1890,14 @@ void Application::registerCommands() {
         }
         if (opt == "seqbar") {
             app.layout().toggleSeqBar();
+            if (app.canvas()) app.canvas()->invalidate();
+            app.onResize();
             return app.layout().seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden";
         }
         if (opt == "seqwrap") {
             app.layout().toggleSeqBarWrap();
+            if (app.canvas()) app.canvas()->invalidate();
+            app.onResize();
             return app.layout().seqBarWrap() ? "Sequence bar: wrap" : "Sequence bar: scroll";
         }
         return "Unknown option: " + opt;

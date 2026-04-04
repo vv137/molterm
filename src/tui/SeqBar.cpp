@@ -23,45 +23,54 @@ char SeqBar::toOneLetter(const std::string& resName) {
 }
 
 void SeqBar::update(const MolObject& mol, const std::string& /*activeChainId*/) {
+    // Skip rebuild if same object (name-based cache)
+    if (mol.name() == lastObjName_ && !residues_.empty()) return;
+    lastObjName_ = mol.name();
     residues_.clear();
     chainIds_.clear();
+    cachedResCount_ = 0;
 
     const auto& atoms = mol.atoms();
     std::set<std::string> seenChains;
     int lastResSeq = -9999;
     std::string lastChain;
 
-    // Extract all residues from all chains, with chain separator markers
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         const auto& a = atoms[i];
 
-        // New chain?
         if (a.chainId != lastChain) {
             if (seenChains.find(a.chainId) == seenChains.end()) {
                 seenChains.insert(a.chainId);
                 chainIds_.push_back(a.chainId);
-
-                // Insert separator marker (resSeq=-1 signals chain break)
-                if (!residues_.empty()) {
-                    residues_.push_back({-1, '|', SSType::Loop, -1, ""});
-                }
-                // Insert chain label marker
-                residues_.push_back({-2, ' ', SSType::Loop, -1, a.chainId});
+                if (!residues_.empty())
+                    residues_.push_back({kSeparator, '|', SSType::Loop, -1, -1, -1, ""});
+                residues_.push_back({kChainLabel, ' ', SSType::Loop, -1, -1, -1, a.chainId});
             }
             lastChain = a.chainId;
             lastResSeq = -9999;
         }
 
-        if (a.resSeq == lastResSeq) continue;
+        if (a.resSeq == lastResSeq) {
+            // Extend last residue's atom range + check for CA/C1'
+            if (!residues_.empty() && residues_.back().resSeq >= 0) {
+                residues_.back().lastAtomIdx = i;
+                if (a.name == "CA" || a.name == "C1'")
+                    residues_.back().reprAtomIdx = i;
+            }
+            continue;
+        }
         lastResSeq = a.resSeq;
 
         Residue r;
         r.resSeq = a.resSeq;
         r.letter = toOneLetter(a.resName);
         r.ss = a.ssType;
+        r.reprAtomIdx = i;  // default; overwritten if CA/C1' found later in same residue
         r.firstAtomIdx = i;
+        r.lastAtomIdx = i;
         r.chainId = a.chainId;
         residues_.push_back(r);
+        ++cachedResCount_;
     }
 }
 
@@ -85,16 +94,26 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
 
     int seqLen = static_cast<int>(residues_.size());
 
+    // Helper: check if any atom in residue range is selected
+    auto isResSelected = [&](const Residue& r) -> bool {
+        if (!sele || r.firstAtomIdx < 0) return false;
+        for (int ai = r.firstAtomIdx; ai <= r.lastAtomIdx; ++ai) {
+            if (sele->has(ai)) return true;
+        }
+        return false;
+    };
+
     if (!wrap) {
-        // 1-row mode: auto-scroll to center on focusResi
         int focusIdx = -1;
-        if (focusResi >= 0) {
+        if (focusResi >= 0 && focusResi != lastFocusResi_) {
+            // Only auto-scroll when focus changes (not when {/} manually scrolls)
             for (int i = 0; i < seqLen; ++i) {
                 if (residues_[i].resSeq == focusResi) { focusIdx = i; break; }
             }
+            lastFocusResi_ = focusResi;
         }
 
-        int visibleW = w - 8;  // room for position indicator
+        int visibleW = w - 8;
         if (visibleW < 10) visibleW = w;
 
         if (focusIdx >= 0) {
@@ -108,19 +127,19 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
             const auto& r = residues_[ri];
 
             // Separator / chain label
-            if (r.resSeq == -1) {
+            if (r.resSeq == kSeparator) {
                 win.addCharColored(0, i, '|', kColorSlate);
                 continue;
             }
-            if (r.resSeq == -2) {
-                // Chain label: "A:"
+            if (r.resSeq == kChainLabel) {
                 std::string lbl = r.chainId + ":";
-                win.printColored(0, i, lbl, kColorPanelHeader);
+                win.printColored(0, i, lbl, kColorWhite);
+                i += static_cast<int>(lbl.size()) - 1;  // -1 because loop increments
                 continue;
             }
 
             int color = colorForResidue(r, scheme);
-            bool selected = sele && r.firstAtomIdx >= 0 && sele->has(r.firstAtomIdx);
+            bool selected = isResSelected(r);
 
             if (selected) {
                 win.setAttr(A_REVERSE);
@@ -131,10 +150,7 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
             }
         }
 
-        // Position indicator at right edge
-        int totalRes = 0;
-        for (const auto& r : residues_) if (r.resSeq >= 0) ++totalRes;
-        std::string pos = "[" + std::to_string(totalRes) + "]";
+        std::string pos = "[" + std::to_string(cachedResCount_) + "]";
         int posX = w - static_cast<int>(pos.size());
         if (posX > visibleW)
             win.printColored(0, posX, pos, kColorStatusBar);
@@ -147,14 +163,13 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
             const auto& r = residues_[i];
 
             // Chain break: start new line
-            if (r.resSeq == -1) {
+            if (r.resSeq == kSeparator) {
                 if (col > 0) { ++row; col = 0; }
                 continue;
             }
-            if (r.resSeq == -2) {
-                // Chain label at start of new line
+            if (r.resSeq == kChainLabel) {
                 std::string lbl = r.chainId + ":";
-                if (row < h) win.printColored(row, 0, lbl, kColorPanelHeader);
+                if (row < h) win.printColored(row, 0, lbl, kColorWhite);
                 col = static_cast<int>(lbl.size());
                 continue;
             }
@@ -163,7 +178,7 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
             if (row >= h) break;
 
             int color = colorForResidue(r, scheme);
-            bool selected = sele && r.firstAtomIdx >= 0 && sele->has(r.firstAtomIdx);
+            bool selected = isResSelected(r);
 
             if (selected) {
                 win.setAttr(A_REVERSE);
@@ -180,7 +195,8 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
 int SeqBar::resSeqAtColumn(int col, bool wrap, int winWidth) const {
     if (!wrap) {
         int idx = scrollOffset_ + col;
-        if (idx >= 0 && idx < static_cast<int>(residues_.size()) && residues_[idx].resSeq >= 0)
+        if (idx >= 0 && idx < static_cast<int>(residues_.size()) &&
+            residues_[idx].resSeq != kSeparator && residues_[idx].resSeq != kChainLabel)
             return residues_[idx].resSeq;
     }
     (void)winWidth;
@@ -191,8 +207,8 @@ int SeqBar::wrapRows(int winWidth) const {
     if (winWidth < 5) return 1;
     int rows = 1, col = 0;
     for (const auto& r : residues_) {
-        if (r.resSeq == -1) { if (col > 0) { ++rows; col = 0; } continue; }
-        if (r.resSeq == -2) { col = static_cast<int>(r.chainId.size()) + 1; continue; }
+        if (r.resSeq == kSeparator) { if (col > 0) { ++rows; col = 0; } continue; }
+        if (r.resSeq == kChainLabel) { col = static_cast<int>(r.chainId.size()) + 1; continue; }
         if (col >= winWidth) { ++rows; col = 0; }
         ++col;
     }
@@ -219,6 +235,15 @@ void SeqBar::prevChain() {
         }
     }
     activeChain_ = chainIds_[0];
+}
+
+void SeqBar::scrollToChain(const std::string& chainId) {
+    for (int i = 0; i < static_cast<int>(residues_.size()); ++i) {
+        if (residues_[i].resSeq == kChainLabel && residues_[i].chainId == chainId) {
+            scrollOffset_ = i;
+            return;
+        }
+    }
 }
 
 } // namespace molterm

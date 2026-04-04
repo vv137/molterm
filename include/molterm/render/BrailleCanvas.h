@@ -21,6 +21,7 @@ public:
     void resize(int termW, int termH) override;
     void clear() override;
     void flush(Window& win) override;
+    void invalidate() override { prevCells_.clear(); }
 
     int subW() const override { return termW_ * 2; }
     int subH() const override { return termH_ * 4; }

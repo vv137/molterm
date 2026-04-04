@@ -198,7 +198,9 @@ private:
     std::string atomInfoString(const MolObject& mol, int atomIdx) const;
     void initRepresentations();
     void executeSearch(const std::string& query);
+public:
     void onResize();
+private:
 };
 
 } // namespace molterm

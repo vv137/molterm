@@ -20,6 +20,7 @@ public:
     virtual void resize(int termW, int termH) = 0;
     virtual void clear() = 0;
     virtual void flush(Window& win) = 0;
+    virtual void invalidate() {}  // force full flush on next frame
 
     // Sub-pixel resolution
     virtual int subW() const = 0;  // total sub-pixel width
