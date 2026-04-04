@@ -32,6 +32,18 @@
 
 namespace molterm {
 
+static int applyHeteroatomColors(MolObject& obj) {
+    const auto& atoms = obj.atoms();
+    int count = 0;
+    for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+        if (atoms[i].element != "C" && atoms[i].element != "H") {
+            obj.setAtomColor(i, ColorMapper::colorForElement(atoms[i].element));
+            ++count;
+        }
+    }
+    return count;
+}
+
 static const char* inspectLevelName(InspectLevel lvl) {
     switch (lvl) {
         case InspectLevel::Atom:    return "ATOM";
@@ -417,6 +429,7 @@ void Application::handleMouse(int /*key*/) {
             } else {
                 // Inspect mode — show info at current level
                 pickedAtomIdx_ = atomIdx;
+                focusResi_ = a.resSeq;
                 // Store in pick register (pk1-pk4, rotating)
                 pickRegs_[pickNext_] = atomIdx;
                 int pkNum = pickNext_ + 1;  // 1-based
@@ -461,6 +474,31 @@ void Application::handleMouse(int /*key*/) {
                             std::to_string(atoms.size()) + " atoms, " +
                             std::to_string(obj->bonds().size()) + " bonds)");
                         break;
+                }
+            }
+        }
+        // Click in seqbar → center on residue
+        else if (layout_.seqBarVisible()) {
+            int seqBarY = 1 + layout_.viewportHeight();
+            int seqBarH = layout_.seqBar().height();
+            if (event.y >= seqBarY && event.y < seqBarY + seqBarH) {
+                int resi = seqBar_.resSeqAtColumn(event.x, layout_.seqBarWrap(),
+                                                   layout_.seqBar().width());
+                if (resi >= 0) {
+                    focusResi_ = resi;
+                    // Center camera on this residue
+                    auto obj = tabMgr_.currentTab().currentObject();
+                    if (obj) {
+                        const auto& atoms = obj->atoms();
+                        for (const auto& a : atoms) {
+                            if (a.resSeq == resi && a.chainId == seqBar_.activeChain() && a.name == "CA") {
+                                tabMgr_.currentTab().camera().setCenter(a.x, a.y, a.z);
+                                cmdLine_.setMessage("Centered on " + a.chainId + "/" +
+                                    a.resName + " " + std::to_string(resi));
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -582,7 +620,7 @@ void Application::handleAction(Action action) {
         // Coloring
         case Action::ColorByElement: {
             auto obj = tab.currentObject();
-            if (obj) obj->setColorScheme(ColorScheme::Element);
+            if (obj) applyHeteroatomColors(*obj);
             break;
         }
         case Action::ColorByChain: {
@@ -705,7 +743,8 @@ void Application::handleAction(Action action) {
                 } else if (cmdName == "color") {
                     // Color name/scheme completion
                     for (const auto& c : {"element", "cpk", "chain", "ss", "secondary",
-                                           "bfactor", "b", "plddt", "rainbow", "restype", "type", "clear",
+                                           "bfactor", "b", "plddt", "rainbow", "restype", "type",
+                                           "heteroatom", "clear",
                                            "red", "green", "blue", "yellow", "magenta",
                                            "cyan", "white", "orange", "pink", "lime",
                                            "teal", "purple", "salmon", "slate", "gray"}) {
@@ -715,7 +754,8 @@ void Application::handleAction(Action action) {
                 } else if (cmdName == "set") {
                     for (const auto& o : {"renderer", "backbone_thickness", "bt",
                                            "wireframe_thickness", "wt", "ball_radius", "br",
-                                           "pan_speed", "ps", "fog", "auto_center", "panel"}) {
+                                           "pan_speed", "ps", "fog", "auto_center", "panel",
+                                           "seqbar", "seqwrap"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
                     }
@@ -907,6 +947,11 @@ void Application::handleAction(Action action) {
             break;
         }
 
+        case Action::ToggleSeqBar:
+            layout_.toggleSeqBar();
+            cmdLine_.setMessage(layout_.seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden");
+            break;
+
         case Action::ShowOverlay:
             overlayVisible_ = true;
             cmdLine_.setMessage("Overlays visible");
@@ -970,6 +1015,29 @@ void Application::renderFrame() {
         auto& tab = tabMgr_.currentTab();
         objectPanel_.render(layout_.objectPanel(), tab.objects(),
                            tab.selectedObjectIdx());
+    }
+
+    // Sequence bar
+    if (layout_.seqBarVisible()) {
+        auto obj = tabMgr_.currentTab().currentObject();
+        if (obj) {
+            seqBar_.update(*obj);
+            // Dynamic height for wrap mode
+            if (layout_.seqBarWrap()) {
+                int needed = std::min(seqBar_.wrapRows(layout_.seqBar().width()),
+                                      screen_.height() / 4);
+                if (needed != layout_.seqBar().height())
+                    layout_.setSeqBarHeight(std::max(1, needed));
+            } else {
+                if (layout_.seqBar().height() != 1)
+                    layout_.setSeqBarHeight(1);
+            }
+            const Selection* sele = nullptr;
+            auto selIt = namedSelections_.find("sele");
+            if (selIt != namedSelections_.end()) sele = &selIt->second;
+            seqBar_.render(layout_.seqBar(), focusResi_, sele,
+                          obj->colorScheme(), layout_.seqBarWrap());
+        }
     }
 
     // Status bar
@@ -1510,9 +1578,8 @@ void Application::registerCommands() {
 
         // Check if first arg is a color scheme name
         if (first == "element" || first == "cpk") {
-            obj->setColorScheme(ColorScheme::Element);
-            obj->clearAtomColors();
-            return "Coloring by element";
+            int count = applyHeteroatomColors(*obj);
+            return "Colored " + std::to_string(count) + " heteroatoms by element";
         }
         if (first == "chain") {
             // "color chain" with no more args → scheme
@@ -1548,6 +1615,10 @@ void Application::registerCommands() {
             obj->setColorScheme(ColorScheme::ResType);
             obj->clearAtomColors();
             return "Coloring by residue type (nonpolar/polar/acidic/basic)";
+        }
+        if (first == "heteroatom" || first == "hetero" || first == "het_color") {
+            int count = applyHeteroatomColors(*obj);
+            return "Colored " + std::to_string(count) + " heteroatoms by element";
         }
         if (first == "clear" || first == "reset") {
             obj->clearAtomColors();
@@ -1778,6 +1849,14 @@ void Application::registerCommands() {
         if (opt == "auto_center") {
             app.setAutoCenter(!app.autoCenter());
             return std::string("Auto-center on load: ") + (app.autoCenter() ? "on" : "off");
+        }
+        if (opt == "seqbar") {
+            app.layout().toggleSeqBar();
+            return app.layout().seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden";
+        }
+        if (opt == "seqwrap") {
+            app.layout().toggleSeqBarWrap();
+            return app.layout().seqBarWrap() ? "Sequence bar: wrap" : "Sequence bar: scroll";
         }
         return "Unknown option: " + opt;
     }, ":set <option> [value]", "Set option");

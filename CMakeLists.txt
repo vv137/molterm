@@ -83,6 +83,7 @@ set(MOLTERM_SOURCES
     src/tui/CommandLine.cpp
     src/tui/TabBar.cpp
     src/tui/ObjectPanel.cpp
+    src/tui/SeqBar.cpp
     # Render
     src/render/Camera.cpp
     src/render/ColorMapper.cpp

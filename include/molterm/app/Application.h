@@ -20,6 +20,7 @@
 #include "molterm/tui/Layout.h"
 #include "molterm/tui/ObjectPanel.h"
 #include "molterm/tui/Screen.h"
+#include "molterm/tui/SeqBar.h"
 #include "molterm/tui/StatusBar.h"
 #include "molterm/tui/TabBar.h"
 
@@ -104,6 +105,8 @@ private:
     StatusBar statusBar_;
     CommandLine cmdLine_;
     ObjectPanel objectPanel_;
+    SeqBar seqBar_;
+    int focusResi_ = -1;  // residue to center seqbar on
     KeymapManager keymapMgr_;
     std::unique_ptr<InputHandler> inputHandler_;
     CommandRegistry cmdRegistry_;

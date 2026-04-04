@@ -115,7 +115,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 
 | Key | Scheme |
 |-----|--------|
-| `ce` | Element (CPK) |
+| `ce` | Heteroatom element (N=blue O=red S=yellow, carbon unchanged) |
 | `cc` | Chain |
 | `cs` | Secondary structure |
 | `cb` | B-factor |
@@ -149,6 +149,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `P` | Screenshot (PNG, pixel renderer) |
 | `q` + `a-z` | Record macro |
 | `@` + `a-z` | Play macro |
+| `F` | Toggle sequence bar |
 | `?` | Help overlay |
 
 </details>
@@ -161,7 +162,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :fetch afdb:<uniprot_id>        " Download from AlphaFold DB (e.g. fetch afdb:P12345)
 :show <repr> [selection]         " Show repr (optionally for selection only)
 :hide <repr|all> [selection]    " Hide repr (optionally for selection only)
-:color <scheme>                 " element, chain, ss, bfactor, plddt, rainbow, restype, clear
+:color <scheme>                 " element/cpk, chain, ss, bfactor, plddt, rainbow, restype, heteroatom, clear
 :color <name> [selection]       " Per-atom color (red, blue, salmon, etc.) with optional selection
 :select <expr>                  " Select atoms (see Selection Algebra below)
 :select <name> = <expr>         " Named selection (e.g. :select s1 = $sele)
@@ -188,6 +189,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :screenshot [file.png]          " Save viewport as PNG (works in any renderer)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set fog <0-1>                  " Depth fog strength
+:set seqbar                     " Toggle sequence bar
+:set seqwrap                    " Toggle sequence wrap mode
 :set bt|wt|br <n>               " Backbone/wireframe thickness, ball radius
 :info                           " Show atom/bond count
 :q                              " Quit
@@ -249,7 +252,7 @@ Switch at runtime: `:set renderer braille|block|ascii|pixel` or `m` to toggle.
 
 | Scheme | Key | Description |
 |--------|-----|-------------|
-| Element (CPK) | `ce` | C=green N=blue O=red S=yellow P=magenta |
+| Heteroatom | `ce` | N=blue O=red S=yellow P=magenta (carbon unchanged) |
 | Chain | `cc` | Cycled per chain (green, cyan, magenta, yellow, red, blue) |
 | Secondary structure | `cs` | Helix=red Sheet=yellow Loop=green |
 | B-factor | `cb` | Blue→Green→Red gradient |
@@ -333,7 +336,7 @@ Configuration files in `~/.molterm/`:
 
 **State:** `prev_state`, `next_state`
 
-**Other:** `show_help`, `undo`, `redo`, `repeat_last`, `toggle_pixel`, `screenshot`, `start_macro`, `play_macro`
+**Other:** `show_help`, `undo`, `redo`, `repeat_last`, `toggle_pixel`, `toggle_seqbar`, `screenshot`, `start_macro`, `play_macro`
 
 **Command mode:** `execute`, `autocomplete`, `history_prev`, `history_next`, `delete_word`, `clear_line`
 
@@ -529,12 +532,21 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **`:run` script** — execute `.mt` command script files for automation (`:run setup.mt`)
 - [x] **BlockCanvas diff flush** — cell-level dirty tracking (same as BrailleCanvas) for SSH
 
+### Phase 6.5: Sequence Bar — DONE
+
+- [x] **Sequence bar** — 1-letter sequence display below viewport (`F` / `:set seqbar`)
+- [x] **Auto-scroll** — centers on inspected/clicked residue
+- [x] **Wrap mode** — `:set seqwrap` toggles between 1-row scroll and multi-row wrap
+- [x] **Selection highlight** — `$sele` atoms shown in reverse video
+- [x] **Color by scheme** — SS, chain, restype coloring on sequence text
+- [x] **Click to navigate** — click residue in seqbar to center camera on it
+- [x] **Multi-chain** — chain switcher via `SeqBar::nextChain()`/`prevChain()`
+
 ### Phase 7: Visualization
 
 - [ ] **Pixel-mode label rendering** — built-in bitmap font for labels rendered directly into RGB framebuffer
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
-- [ ] **Sequence bar** — bottom row showing 1-letter sequence, click to navigate to residue
 - [ ] **Contact map** — residue-residue Cα distance matrix overlay
 - [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
 

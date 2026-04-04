@@ -21,12 +21,19 @@ public:
     Window& tabBar() { return *tabBar_; }
     Window& viewport() { return *viewport_; }
     Window& objectPanel() { return *objectPanel_; }
+    Window& seqBar() { return *seqBar_; }
     Window& statusBar() { return *statusBar_; }
     Window& commandLine() { return *commandLine_; }
 
     bool panelVisible() const { return panelVisible_; }
     void togglePanel();
     void setPanel(bool visible);
+
+    bool seqBarVisible() const { return seqBarVisible_; }
+    void toggleSeqBar();
+    bool seqBarWrap() const { return seqBarWrap_; }
+    void toggleSeqBarWrap();
+    void setSeqBarHeight(int h);
 
     int viewportWidth() const;
     int viewportHeight() const;
@@ -37,12 +44,16 @@ private:
     std::unique_ptr<Window> tabBar_;
     std::unique_ptr<Window> viewport_;
     std::unique_ptr<Window> objectPanel_;
+    std::unique_ptr<Window> seqBar_;
     std::unique_ptr<Window> statusBar_;
     std::unique_ptr<Window> commandLine_;
 
     int screenH_ = 0, screenW_ = 0;
     bool panelVisible_ = false;
     int panelWidth_ = 22;
+    bool seqBarVisible_ = false;
+    bool seqBarWrap_ = false;
+    int seqBarHeight_ = 1;
 
     void rebuildWindows();
 };
