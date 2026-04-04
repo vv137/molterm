@@ -2433,6 +2433,11 @@ void Application::registerCommands() {
         return "Failed to save session";
     }, ":save", "Save session to ~/.molterm/autosave.toml");
 
+    cmdRegistry_.registerCmd("resume", [](Application& app, const ParsedCommand&) -> std::string {
+        std::string msg = SessionSaver::restoreSession(app);
+        return msg;
+    }, ":resume", "Restore session from ~/.molterm/autosave.toml");
+
     // Helper: resolve atom index from serial number string or pick register
     auto resolveAtomIdx = [](Application& app, const std::string& s) -> int {
         // Pick register: pk1..pk4
