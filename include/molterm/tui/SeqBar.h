@@ -38,12 +38,15 @@ public:
     static char toOneLetter(const std::string& resName);
 
 private:
+public:
     struct Residue {
-        int resSeq;
+        int resSeq;        // -1 = separator '|', -2 = chain label
         char letter;       // 1-letter code
         SSType ss;
         int firstAtomIdx;  // index of first atom in this residue
+        std::string chainId;
     };
+private:
 
     std::vector<Residue> residues_;
     std::vector<std::string> chainIds_;

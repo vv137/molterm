@@ -119,6 +119,8 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'g', 'S'},  Action::EnterSelectResidue, "Select residues (click)");
     km.bind(Mode::Normal, {'g', 'c'},  Action::EnterSelectChain,   "Select chains (click)");
     km.bind(Mode::Normal, {'F'},       Action::ToggleSeqBar, "Toggle sequence bar");
+    km.bind(Mode::Normal, {'}'},       Action::SeqBarNextChain, "Seqbar next chain");
+    km.bind(Mode::Normal, {'{'},       Action::SeqBarPrevChain, "Seqbar prev chain");
     km.bind(Mode::Normal, {'?'},       Action::ShowHelp,    "Show help");
     km.bind(Mode::Normal, {'u'},       Action::Undo,        "Undo");
     km.bind(Mode::Normal, {18},        Action::Redo,        "Redo (Ctrl+R)");

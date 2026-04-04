@@ -99,6 +99,8 @@ enum class Action {
 
     // Overlay / SeqBar / Preset / Inspect / Pick modes
     ToggleSeqBar,
+    SeqBarNextChain,
+    SeqBarPrevChain,
     ShowOverlay,
     HideOverlay,
     ApplyPreset,
@@ -184,6 +186,8 @@ inline std::string actionName(Action a) {
         case Action::ClearLine:      return "clear_line";
         case Action::ExecuteSearch:  return "execute_search";
         case Action::ToggleSeqBar: return "toggle_seqbar";
+        case Action::SeqBarNextChain: return "seqbar_next_chain";
+        case Action::SeqBarPrevChain: return "seqbar_prev_chain";
         case Action::ShowOverlay: return "show_overlay";
         case Action::HideOverlay: return "hide_overlay";
         case Action::ApplyPreset: return "apply_preset";
@@ -273,6 +277,8 @@ inline Action actionFromName(const std::string& name) {
     if (name == "clear_line")       return Action::ClearLine;
     if (name == "execute_search")   return Action::ExecuteSearch;
     if (name == "toggle_seqbar") return Action::ToggleSeqBar;
+    if (name == "seqbar_next_chain") return Action::SeqBarNextChain;
+    if (name == "seqbar_prev_chain") return Action::SeqBarPrevChain;
     if (name == "show_overlay") return Action::ShowOverlay;
     if (name == "hide_overlay") return Action::HideOverlay;
     if (name == "apply_preset") return Action::ApplyPreset;

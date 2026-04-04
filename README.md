@@ -149,7 +149,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `P` | Screenshot (PNG, pixel renderer) |
 | `q` + `a-z` | Record macro |
 | `@` + `a-z` | Play macro |
-| `F` | Toggle sequence bar |
+| `F` | Cycle sequence bar (hidden → scroll → wrap → hidden) |
+| `{` / `}` | Sequence bar prev/next chain |
 | `?` | Help overlay |
 
 </details>
@@ -336,7 +337,7 @@ Configuration files in `~/.molterm/`:
 
 **State:** `prev_state`, `next_state`
 
-**Other:** `show_help`, `undo`, `redo`, `repeat_last`, `toggle_pixel`, `toggle_seqbar`, `screenshot`, `start_macro`, `play_macro`
+**Other:** `show_help`, `undo`, `redo`, `repeat_last`, `toggle_pixel`, `toggle_seqbar`, `seqbar_next_chain`, `seqbar_prev_chain`, `screenshot`, `start_macro`, `play_macro`
 
 **Command mode:** `execute`, `autocomplete`, `history_prev`, `history_next`, `delete_word`, `clear_line`
 
@@ -534,13 +535,14 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 
 ### Phase 6.5: Sequence Bar — DONE
 
-- [x] **Sequence bar** — 1-letter sequence display below viewport (`F` / `:set seqbar`)
+- [x] **Sequence bar** — all chains shown (`A:MKTAY...|B:GATT...`), visible by default
+- [x] **F key cycling** — hidden → scroll → wrap → hidden
 - [x] **Auto-scroll** — centers on inspected/clicked residue
-- [x] **Wrap mode** — `:set seqwrap` toggles between 1-row scroll and multi-row wrap
+- [x] **Chain switcher** — `{`/`}` to cycle active chain in scroll mode
+- [x] **Wrap mode** — `:set seqwrap` for multi-row display (height capped at screen/4)
 - [x] **Selection highlight** — `$sele` atoms shown in reverse video
-- [x] **Color by scheme** — SS, chain, restype coloring on sequence text
+- [x] **Color by scheme** — SS, chain coloring on sequence text
 - [x] **Click to navigate** — click residue in seqbar to center camera on it
-- [x] **Multi-chain** — chain switcher via `SeqBar::nextChain()`/`prevChain()`
 
 ### Phase 7: Visualization
 

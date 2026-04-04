@@ -51,7 +51,7 @@ private:
     int screenH_ = 0, screenW_ = 0;
     bool panelVisible_ = false;
     int panelWidth_ = 22;
-    bool seqBarVisible_ = false;
+    bool seqBarVisible_ = true;
     bool seqBarWrap_ = false;
     int seqBarHeight_ = 1;
 

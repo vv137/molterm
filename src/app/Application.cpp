@@ -948,8 +948,28 @@ void Application::handleAction(Action action) {
         }
 
         case Action::ToggleSeqBar:
-            layout_.toggleSeqBar();
-            cmdLine_.setMessage(layout_.seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden");
+            // Cycle: hidden → scroll → wrap → hidden
+            if (!layout_.seqBarVisible()) {
+                layout_.toggleSeqBar();  // show
+                if (layout_.seqBarWrap()) layout_.toggleSeqBarWrap();  // ensure scroll mode first
+                cmdLine_.setMessage("Sequence bar: scroll");
+            } else if (!layout_.seqBarWrap()) {
+                layout_.toggleSeqBarWrap();  // scroll → wrap
+                cmdLine_.setMessage("Sequence bar: wrap");
+            } else {
+                layout_.toggleSeqBarWrap();  // back to scroll
+                layout_.toggleSeqBar();      // hide
+                cmdLine_.setMessage("Sequence bar: hidden");
+            }
+            break;
+
+        case Action::SeqBarNextChain:
+            seqBar_.nextChain();
+            cmdLine_.setMessage("Seqbar chain: " + seqBar_.activeChain());
+            break;
+        case Action::SeqBarPrevChain:
+            seqBar_.prevChain();
+            cmdLine_.setMessage("Seqbar chain: " + seqBar_.activeChain());
             break;
 
         case Action::ShowOverlay:

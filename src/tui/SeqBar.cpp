@@ -8,25 +8,21 @@
 
 namespace molterm {
 
-// 3-letter → 1-letter amino acid / nucleotide code
 char SeqBar::toOneLetter(const std::string& resName) {
     static const std::unordered_map<std::string, char> table = {
         {"ALA",'A'},{"VAL",'V'},{"LEU",'L'},{"ILE",'I'},{"PRO",'P'},
         {"PHE",'F'},{"TRP",'W'},{"MET",'M'},{"GLY",'G'},{"SER",'S'},
         {"THR",'T'},{"CYS",'C'},{"TYR",'Y'},{"ASN",'N'},{"GLN",'Q'},
         {"ASP",'D'},{"GLU",'E'},{"LYS",'K'},{"ARG",'R'},{"HIS",'H'},
-        // DNA
         {"DA",'a'},{"DT",'t'},{"DG",'g'},{"DC",'c'},
-        // RNA
         {"A",'a'},{"U",'u'},{"G",'g'},{"C",'c'},
-        // Modified / common
         {"MSE",'M'},{"SEC",'U'},{"PYL",'O'},
     };
     auto it = table.find(resName);
     return (it != table.end()) ? it->second : '?';
 }
 
-void SeqBar::update(const MolObject& mol, const std::string& activeChainId) {
+void SeqBar::update(const MolObject& mol, const std::string& /*activeChainId*/) {
     residues_.clear();
     chainIds_.clear();
 
@@ -35,28 +31,28 @@ void SeqBar::update(const MolObject& mol, const std::string& activeChainId) {
     int lastResSeq = -9999;
     std::string lastChain;
 
-    // Collect unique residues for each chain
+    // Extract all residues from all chains, with chain separator markers
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         const auto& a = atoms[i];
-        if (seenChains.find(a.chainId) == seenChains.end()) {
-            seenChains.insert(a.chainId);
-            chainIds_.push_back(a.chainId);
+
+        // New chain?
+        if (a.chainId != lastChain) {
+            if (seenChains.find(a.chainId) == seenChains.end()) {
+                seenChains.insert(a.chainId);
+                chainIds_.push_back(a.chainId);
+
+                // Insert separator marker (resSeq=-1 signals chain break)
+                if (!residues_.empty()) {
+                    residues_.push_back({-1, '|', SSType::Loop, -1, ""});
+                }
+                // Insert chain label marker
+                residues_.push_back({-2, ' ', SSType::Loop, -1, a.chainId});
+            }
+            lastChain = a.chainId;
+            lastResSeq = -9999;
         }
-    }
 
-    // Set active chain
-    if (!activeChainId.empty()) {
-        activeChain_ = activeChainId;
-    } else if (activeChain_.empty() && !chainIds_.empty()) {
-        activeChain_ = chainIds_[0];
-    }
-
-    // Extract residues for active chain
-    lastResSeq = -9999;
-    for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
-        const auto& a = atoms[i];
-        if (a.chainId != activeChain_) continue;
-        if (a.resSeq == lastResSeq) continue;  // dedup
+        if (a.resSeq == lastResSeq) continue;
         lastResSeq = a.resSeq;
 
         Residue r;
@@ -64,7 +60,19 @@ void SeqBar::update(const MolObject& mol, const std::string& activeChainId) {
         r.letter = toOneLetter(a.resName);
         r.ss = a.ssType;
         r.firstAtomIdx = i;
+        r.chainId = a.chainId;
         residues_.push_back(r);
+    }
+}
+
+static int colorForResidue(const SeqBar::Residue& r, ColorScheme scheme) {
+    switch (scheme) {
+        case ColorScheme::SecondaryStructure:
+            return ColorMapper::colorForSS(r.ss);
+        case ColorScheme::Chain:
+            return ColorMapper::colorForChain(r.chainId);
+        default:
+            return kColorOther;
     }
 }
 
@@ -75,15 +83,10 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
     int h = win.height();
     if (residues_.empty() || w < 5) return;
 
-    // Prefix: "A:" (chain label)
-    std::string prefix = activeChain_ + ":";
-    int prefixLen = static_cast<int>(prefix.size());
-
-    // Build full sequence string and colors
     int seqLen = static_cast<int>(residues_.size());
 
     if (!wrap) {
-        // 1-row mode: center on focusResi
+        // 1-row mode: auto-scroll to center on focusResi
         int focusIdx = -1;
         if (focusResi >= 0) {
             for (int i = 0; i < seqLen; ++i) {
@@ -91,136 +94,109 @@ void SeqBar::render(Window& win, int focusResi, const Selection* sele,
             }
         }
 
-        int visibleW = w - prefixLen - 8;  // room for [pos/total]
-        if (visibleW < 10) visibleW = w - prefixLen;
+        int visibleW = w - 8;  // room for position indicator
+        if (visibleW < 10) visibleW = w;
 
-        // Compute scroll offset to center focusIdx
         if (focusIdx >= 0) {
             scrollOffset_ = focusIdx - visibleW / 2;
         }
         scrollOffset_ = std::max(0, std::min(scrollOffset_, seqLen - visibleW));
         if (scrollOffset_ < 0) scrollOffset_ = 0;
 
-        // Draw prefix
-        win.printColored(0, 0, prefix, kColorPanelHeader);
-
-        // Draw sequence
         for (int i = 0; i < visibleW && scrollOffset_ + i < seqLen; ++i) {
             int ri = scrollOffset_ + i;
             const auto& r = residues_[ri];
-            int color = kColorOther;
 
-            // Color by scheme
-            switch (scheme) {
-                case ColorScheme::SecondaryStructure:
-                    color = ColorMapper::colorForSS(r.ss);
-                    break;
-                case ColorScheme::Chain:
-                    color = ColorMapper::colorForChain(activeChain_);
-                    break;
-                case ColorScheme::ResType:
-                    color = ColorMapper::colorForResType(
-                        std::string(1, r.letter));  // won't match 3-letter, fallback
-                    break;
-                default:
-                    color = kColorOther;
-                    break;
+            // Separator / chain label
+            if (r.resSeq == -1) {
+                win.addCharColored(0, i, '|', kColorSlate);
+                continue;
+            }
+            if (r.resSeq == -2) {
+                // Chain label: "A:"
+                std::string lbl = r.chainId + ":";
+                win.printColored(0, i, lbl, kColorPanelHeader);
+                continue;
             }
 
-            // Highlight if selected
-            bool selected = false;
-            if (sele) {
-                selected = sele->has(r.firstAtomIdx);
-            }
+            int color = colorForResidue(r, scheme);
+            bool selected = sele && r.firstAtomIdx >= 0 && sele->has(r.firstAtomIdx);
 
-            int x = prefixLen + i;
             if (selected) {
                 win.setAttr(A_REVERSE);
-                win.addCharColored(0, x, r.letter, color);
+                win.addCharColored(0, i, r.letter, color);
                 win.unsetAttr(A_REVERSE);
             } else {
-                win.addCharColored(0, x, r.letter, color);
-            }
-
-            // Cursor marker for focused residue
-            if (ri == focusIdx && h > 1) {
-                win.addCharColored(1, x, '^', kColorYellow);
+                win.addCharColored(0, i, r.letter, color);
             }
         }
 
-        // Position indicator
-        std::string pos = " [" + std::to_string(scrollOffset_ + 1) + "/" +
-                         std::to_string(seqLen) + "]";
+        // Position indicator at right edge
+        int totalRes = 0;
+        for (const auto& r : residues_) if (r.resSeq >= 0) ++totalRes;
+        std::string pos = "[" + std::to_string(totalRes) + "]";
         int posX = w - static_cast<int>(pos.size());
-        if (posX > prefixLen + visibleW)
+        if (posX > visibleW)
             win.printColored(0, posX, pos, kColorStatusBar);
 
     } else {
         // Wrap mode: fill rows left-to-right
-        int cols = w - prefixLen;
-        if (cols < 5) cols = w;
-        int row = 0;
+        int cols = w;
+        int row = 0, col = 0;
         for (int i = 0; i < seqLen && row < h; ++i) {
-            int col = i % cols;
-            if (col == 0 && i > 0) ++row;
+            const auto& r = residues_[i];
+
+            // Chain break: start new line
+            if (r.resSeq == -1) {
+                if (col > 0) { ++row; col = 0; }
+                continue;
+            }
+            if (r.resSeq == -2) {
+                // Chain label at start of new line
+                std::string lbl = r.chainId + ":";
+                if (row < h) win.printColored(row, 0, lbl, kColorPanelHeader);
+                col = static_cast<int>(lbl.size());
+                continue;
+            }
+
+            if (col >= cols) { ++row; col = 0; }
             if (row >= h) break;
 
-            // Draw prefix on each row start
-            if (col == 0) {
-                std::string rowPrefix = (i == 0) ? prefix :
-                    std::string(prefixLen, ' ');
-                win.printColored(row, 0, rowPrefix, kColorPanelHeader);
-            }
+            int color = colorForResidue(r, scheme);
+            bool selected = sele && r.firstAtomIdx >= 0 && sele->has(r.firstAtomIdx);
 
-            const auto& r = residues_[i];
-            int color = kColorOther;
-            switch (scheme) {
-                case ColorScheme::SecondaryStructure:
-                    color = ColorMapper::colorForSS(r.ss); break;
-                case ColorScheme::Chain:
-                    color = ColorMapper::colorForChain(activeChain_); break;
-                default: color = kColorOther; break;
-            }
-
-            bool selected = sele && sele->has(r.firstAtomIdx);
-            int x = prefixLen + col;
             if (selected) {
                 win.setAttr(A_REVERSE);
-                win.addCharColored(row, x, r.letter, color);
+                win.addCharColored(row, col, r.letter, color);
                 win.unsetAttr(A_REVERSE);
             } else {
-                win.addCharColored(row, x, r.letter, color);
+                win.addCharColored(row, col, r.letter, color);
             }
+            ++col;
         }
     }
 }
 
 int SeqBar::resSeqAtColumn(int col, bool wrap, int winWidth) const {
-    std::string prefix = activeChain_ + ":";
-    int prefixLen = static_cast<int>(prefix.size());
-    int seqCol = col - prefixLen;
-    if (seqCol < 0) return -1;
-
-    int idx;
     if (!wrap) {
-        idx = scrollOffset_ + seqCol;
-    } else {
-        // TODO: handle row for multi-line wrap
-        idx = seqCol;
+        int idx = scrollOffset_ + col;
+        if (idx >= 0 && idx < static_cast<int>(residues_.size()) && residues_[idx].resSeq >= 0)
+            return residues_[idx].resSeq;
     }
-
-    if (idx >= 0 && idx < static_cast<int>(residues_.size()))
-        return residues_[idx].resSeq;
+    (void)winWidth;
     return -1;
 }
 
 int SeqBar::wrapRows(int winWidth) const {
-    std::string prefix = activeChain_ + ":";
-    int prefixLen = static_cast<int>(prefix.size());
-    int cols = winWidth - prefixLen;
-    if (cols < 5) cols = winWidth;
-    int seqLen = static_cast<int>(residues_.size());
-    return (seqLen + cols - 1) / cols;
+    if (winWidth < 5) return 1;
+    int rows = 1, col = 0;
+    for (const auto& r : residues_) {
+        if (r.resSeq == -1) { if (col > 0) { ++rows; col = 0; } continue; }
+        if (r.resSeq == -2) { col = static_cast<int>(r.chainId.size()) + 1; continue; }
+        if (col >= winWidth) { ++rows; col = 0; }
+        ++col;
+    }
+    return rows;
 }
 
 void SeqBar::nextChain() {
