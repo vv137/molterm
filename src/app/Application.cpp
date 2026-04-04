@@ -907,7 +907,15 @@ void Application::handleAction(Action action) {
             break;
         }
 
-        // Apply smart default preset
+        case Action::ShowOverlay:
+            overlayVisible_ = true;
+            cmdLine_.setMessage("Overlays visible");
+            break;
+        case Action::HideOverlay:
+            overlayVisible_ = false;
+            cmdLine_.setMessage("Overlays hidden");
+            break;
+
         case Action::ApplyPreset: {
             auto obj = tab.currentObject();
             if (obj) {

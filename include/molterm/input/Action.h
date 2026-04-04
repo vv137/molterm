@@ -97,7 +97,9 @@ enum class Action {
     // Search mode
     ExecuteSearch,
 
-    // Preset / Inspect / Pick modes
+    // Overlay / Preset / Inspect / Pick modes
+    ShowOverlay,
+    HideOverlay,
     ApplyPreset,
     CycleInspectLevel,
     EnterSelectAtom,
@@ -180,6 +182,8 @@ inline std::string actionName(Action a) {
         case Action::DeleteWord:     return "delete_word";
         case Action::ClearLine:      return "clear_line";
         case Action::ExecuteSearch:  return "execute_search";
+        case Action::ShowOverlay: return "show_overlay";
+        case Action::HideOverlay: return "hide_overlay";
         case Action::ApplyPreset: return "apply_preset";
         case Action::CycleInspectLevel: return "cycle_inspect_level";
         case Action::EnterSelectAtom: return "enter_select_atom";
@@ -266,6 +270,8 @@ inline Action actionFromName(const std::string& name) {
     if (name == "delete_word")      return Action::DeleteWord;
     if (name == "clear_line")       return Action::ClearLine;
     if (name == "execute_search")   return Action::ExecuteSearch;
+    if (name == "show_overlay") return Action::ShowOverlay;
+    if (name == "hide_overlay") return Action::HideOverlay;
     if (name == "apply_preset") return Action::ApplyPreset;
     if (name == "cycle_inspect_level") return Action::CycleInspectLevel;
     if (name == "enter_select_atom") return Action::EnterSelectAtom;

@@ -84,6 +84,8 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'x', 'r'},  Action::HideRibbon,    "Hide ribbon");
     km.bind(Mode::Normal, {'x', 'k'},  Action::HideBackbone,  "Hide backbone");
     km.bind(Mode::Normal, {'x', 'a'},  Action::HideAll,       "Hide all");
+    km.bind(Mode::Normal, {'s', 'o'},  Action::ShowOverlay,   "Show overlays");
+    km.bind(Mode::Normal, {'x', 'o'},  Action::HideOverlay,   "Hide overlays");
 
     // Coloring (c + key)
     km.bind(Mode::Normal, {'c', 'e'},  Action::ColorByElement, "Color by element");
