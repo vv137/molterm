@@ -350,6 +350,8 @@ Configuration files in `~/.molterm/`:
 
 **Command mode:** `execute`, `autocomplete`, `history_prev`, `history_next`, `delete_word`, `clear_line`
 
+**Command line editing:** `Left`/`Right` cursor, `Home`/`Ctrl+A` start, `End`/`Ctrl+E` end, `Del` forward delete, `Ctrl+W` delete word, `Ctrl+U` clear
+
 </details>
 
 <details>
@@ -559,6 +561,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
 - [ ] **Contact map** — residue-residue Cα distance matrix overlay
+- [ ] **Interface search** — find inter-chain interface and visualize
 - [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
 
 ### Phase 8: Export + Generation
