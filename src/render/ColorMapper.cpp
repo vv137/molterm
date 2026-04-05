@@ -71,6 +71,13 @@ void ColorMapper::initColors() {
     init_pair(kColorResAcidic,   COLOR_RED,     -1);
     init_pair(kColorResBasic,    COLOR_BLUE,    -1);
 
+    // Heatmap gradient (8-color fallback)
+    init_pair(kColorHeatmap0, COLOR_BLUE,    -1);  // far
+    init_pair(kColorHeatmap1, COLOR_CYAN,    -1);
+    init_pair(kColorHeatmap2, COLOR_WHITE,   -1);  // medium
+    init_pair(kColorHeatmap3, COLOR_YELLOW,  -1);
+    init_pair(kColorHeatmap4, COLOR_RED,     -1);  // close
+
     // Extended colors (require 256-color terminal)
     if (COLORS >= 256) {
         init_pair(kColorOrange,  208, -1);  // orange
@@ -97,6 +104,12 @@ void ColorMapper::initColors() {
         init_pair(kColorResPolar,    119, -1);  // light green
         init_pair(kColorResAcidic,   196, -1);  // bright red
         init_pair(kColorResBasic,    69,  -1);  // bright blue
+        // Heatmap with 256-color precision
+        init_pair(kColorHeatmap0, 19,  -1);   // dark blue
+        init_pair(kColorHeatmap1, 75,  -1);   // light blue
+        init_pair(kColorHeatmap2, 250, -1);   // light gray
+        init_pair(kColorHeatmap3, 208, -1);   // orange
+        init_pair(kColorHeatmap4, 196, -1);   // bright red
     } else {
         init_pair(kColorOrange,  COLOR_YELLOW,  -1);
         init_pair(kColorPink,    COLOR_MAGENTA, -1);

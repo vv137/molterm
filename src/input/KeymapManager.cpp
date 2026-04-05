@@ -138,6 +138,9 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {']'},       Action::NextState,   "Next state");
     km.bind(Mode::Normal, {'['},       Action::PrevState,   "Prev state");
 
+    // Analysis
+    km.bind(Mode::Normal, {'I'},       Action::ToggleInterface,  "Toggle interface overlay");
+
     // Macro recording
     km.bind(Mode::Normal, {'q'},       Action::StartMacro,  "Record/stop macro");
     km.bind(Mode::Normal, {'@'},       Action::PlayMacro,   "Play macro");

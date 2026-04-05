@@ -77,6 +77,8 @@ set(MOLTERM_SOURCES
     # IO
     src/io/CifLoader.cpp
     src/io/Aligner.cpp
+    # Analysis
+    src/analysis/ContactMap.cpp
     # TUI
     src/tui/Screen.cpp
     src/tui/Window.cpp
@@ -86,6 +88,8 @@ set(MOLTERM_SOURCES
     src/tui/TabBar.cpp
     src/tui/ObjectPanel.cpp
     src/tui/SeqBar.cpp
+    src/tui/DensityMap.cpp
+    src/tui/ContactMapPanel.cpp
     # Render
     src/render/Camera.cpp
     src/render/ColorMapper.cpp

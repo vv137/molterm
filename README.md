@@ -34,6 +34,7 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 - **Screenshot from any renderer** — `:screenshot` renders offscreen via PixelCanvas even in braille/ASCII mode
 - **Multi-state animation** — NMR ensemble / trajectory state cycling with `[`/`]` keys
 - **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
+- **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode)
 - **Full customization** — keybindings, color themes, and settings via TOML configs in `~/.molterm/`
 - **Structured logging** — session log to `~/.molterm/molterm.log`
 
@@ -148,6 +149,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `[` / `]` | Prev/next state (NMR ensembles) |
 | `m` | Toggle braille/pixel renderer |
 | `P` | Screenshot (PNG, pixel renderer) |
+| `I` | Toggle interface overlay |
 | `q` + `a-z` | Record macro |
 | `@` + `a-z` | Play macro |
 | `F` | Cycle sequence bar (hidden → scroll → wrap → hidden) |
@@ -189,6 +191,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png]          " Save viewport as PNG (works in any renderer)
+:interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set fog <0-1>                  " Depth fog strength (default: 0.35)
 :set outline                    " Toggle silhouette outlines
@@ -200,6 +203,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set csd|cartoon_subdiv <n>     " Cartoon spline subdivisions (default: 8)
 :set seqbar                     " Toggle sequence bar
 :set seqwrap                    " Toggle sequence wrap mode
+:set ic|interface_color <name>   " Interface overlay color (default: yellow)
+:set it|interface_thickness <n>  " Interface line thickness in pixel mode (1-4, default: 2)
 :set bt|wt|br <n>               " Backbone/wireframe thickness, ball radius
 :info                           " Show atom/bond count
 :q                              " Quit
@@ -354,7 +359,7 @@ Configuration files in `~/.molterm/`:
 
 **State:** `prev_state`, `next_state`
 
-**Other:** `show_help`, `undo`, `redo`, `repeat_last`, `toggle_pixel`, `toggle_seqbar`, `seqbar_next_chain`, `seqbar_prev_chain`, `screenshot`, `start_macro`, `play_macro`
+**Other:** `show_help`, `undo`, `redo`, `repeat_last`, `toggle_pixel`, `toggle_seqbar`, `seqbar_next_chain`, `seqbar_prev_chain`, `screenshot`, `start_macro`, `play_macro`, `toggle_interface`
 
 **Command mode:** `execute`, `autocomplete`, `history_prev`, `history_next`, `delete_word`, `clear_line`
 
@@ -400,12 +405,14 @@ molterm/
 ├── CMakeLists.txt
 ├── include/molterm/
 │   ├── app/         Application, TabManager, Tab
-│   ├── core/        MolObject, AtomData, BondData, Selection, ObjectStore, Logger
+│   ├── analysis/    ContactMap (interface detection, distance matrix)
+│   ├── core/        MolObject, AtomData, BondData, Selection, ObjectStore, SpatialHash, Logger
 │   ├── io/          CifLoader, Aligner, SessionExporter
 │   ├── render/      Canvas (Braille/Block/Ascii/Pixel), Camera, ColorMapper, DepthBuffer
 │   │                GraphicsEncoder (Sixel/Kitty/iTerm2), ProtocolPicker
 │   ├── repr/        Representation (Wireframe/BallStick/Backbone/Spacefill/Cartoon/Ribbon)
-│   ├── tui/         Screen, Window, Layout, StatusBar, CommandLine, TabBar, ObjectPanel
+│   ├── tui/         Screen, Window, Layout, StatusBar, CommandLine, TabBar, ObjectPanel,
+│   │                SeqBar, DensityMap, ContactMapPanel
 │   ├── input/       InputHandler, Keymap (trie), KeymapManager, Action, Mode
 │   ├── cmd/         CommandParser, CommandRegistry, UndoStack
 │   └── config/      ConfigParser (TOML)
@@ -575,13 +582,18 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Cartoon braille** — SS-dependent thick lines (helix=1.2, sheet=1.8 wide, loop=0.4), sheet arrowheads
 - [x] **Configurable parameters** — `:set outline/ot/od`, `:set ch/csh/cl/csd` for cartoon radii/subdivisions
 
-### Phase 7: Visualization
+### Phase 7: Analysis + Visualization
 
+- [x] **Interface overlay** — `:interface [cutoff]` inter-chain contact dashed lines (closest heavy atom, configurable color/thickness, works in all renderers)
+- [x] **Analysis panel** — right-column split layout (ObjectPanel + AnalysisPanel), per-component dirty flags
+- [x] **DensityMap renderer** — reusable half-block (▀▄█) heatmap component for 2D density visualization
+- [x] **Heatmap colors** — 5-step blue→red gradient (kColorHeatmap0-4) in ncurses + PixelCanvas RGB
+- [x] **Pixel-mode overlays** — measurement/interface/selection overlays draw into PixelCanvas directly
+- [x] **PyMOL viewport size** — `:export` now includes `viewport 1280, 960` for standard figure dimensions
+- [x] **Contact map** (hidden) — `:contactmap [cutoff]` Cα-Cα distance heatmap panel (available via command)
 - [ ] **Pixel-mode label rendering** — built-in bitmap font for labels rendered directly into RGB framebuffer
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
-- [ ] **Contact map** — residue-residue Cα distance matrix overlay
-- [ ] **Interface search** — find inter-chain interface and visualize
 - [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
 
 ### Phase 8: Export + Generation

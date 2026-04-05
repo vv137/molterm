@@ -72,6 +72,12 @@ enum ColorPairId : int {
     kColorResPolar    = 91,  // green — SER THR CYS TYR ASN GLN
     kColorResAcidic   = 92,  // red — ASP GLU
     kColorResBasic    = 93,  // blue — LYS ARG HIS
+    // Heatmap gradient (contact map, density visualization)
+    kColorHeatmap0 = 100,  // dark blue (far / no contact)
+    kColorHeatmap1 = 101,  // light blue
+    kColorHeatmap2 = 102,  // white/gray (medium)
+    kColorHeatmap3 = 103,  // orange
+    kColorHeatmap4 = 104,  // red (close contact)
 };
 
 class ColorMapper {

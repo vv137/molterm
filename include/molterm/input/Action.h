@@ -115,6 +115,8 @@ enum class Action {
     StartMacro,
     PlayMacro,
     ColorByPLDDT,
+    ToggleContactMap,
+    ToggleInterface,
 };
 
 inline std::string actionName(Action a) {
@@ -203,6 +205,8 @@ inline std::string actionName(Action a) {
         case Action::ColorByRainbow: return "color_by_rainbow";
         case Action::PrevState:      return "prev_state";
         case Action::NextState:      return "next_state";
+        case Action::ToggleContactMap: return "toggle_contactmap";
+        case Action::ToggleInterface:  return "toggle_interface";
         default:                     return "unknown";
     }
 }
@@ -290,6 +294,8 @@ inline Action actionFromName(const std::string& name) {
     if (name == "screenshot")       return Action::Screenshot;
     if (name == "start_macro")      return Action::StartMacro;
     if (name == "play_macro")       return Action::PlayMacro;
+    if (name == "toggle_contactmap") return Action::ToggleContactMap;
+    if (name == "toggle_interface")  return Action::ToggleInterface;
     return Action::None;
 }
 

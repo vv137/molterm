@@ -851,6 +851,20 @@ void Application::handleAction(Action action) {
             break;
         }
 
+        // Contact map toggle
+        case Action::ToggleContactMap: {
+            std::string result = cmdRegistry_.execute(*this, "contactmap");
+            if (!result.empty()) cmdLine_.setMessage(result);
+            break;
+        }
+
+        // Interface overlay toggle
+        case Action::ToggleInterface: {
+            std::string result = cmdRegistry_.execute(*this, "interface");
+            if (!result.empty()) cmdLine_.setMessage(result);
+            break;
+        }
+
         // Renderer toggle (braille ↔ pixel)
         case Action::TogglePixelRenderer: {
             clearScreenAndRepaint();
@@ -1048,8 +1062,13 @@ void Application::handleSearchInput(int key) {
 void Application::renderFrame() {
     ++frameCounter_;
 
+    // Mark all components dirty for now. The dirty-flag infrastructure enables
+    // future per-component optimization (e.g., skip ObjectPanel when only camera moves).
+    layout_.markAllDirty();
+
     // Tab bar
-    tabBar_.render(layout_.tabBar(), tabMgr_.tabNames(), tabMgr_.currentIndex());
+    if (layout_.isDirty(Layout::Component::TabBar))
+        tabBar_.render(layout_.tabBar(), tabMgr_.tabNames(), tabMgr_.currentIndex());
 
     // Adjust seqbar height BEFORE rendering viewport (setSeqBarHeight rebuilds windows)
     if (layout_.seqBarVisible()) {
@@ -1079,14 +1098,19 @@ void Application::renderFrame() {
     tabMgr_.currentTab().camera().clearDirty();
 
     // Object panel
-    if (layout_.panelVisible()) {
+    if (layout_.panelVisible() && layout_.isDirty(Layout::Component::ObjectPanel)) {
         auto& tab = tabMgr_.currentTab();
         objectPanel_.render(layout_.objectPanel(), tab.objects(),
                            tab.selectedObjectIdx());
     }
 
+    // Analysis panel (contact map etc.)
+    if (layout_.analysisPanelVisible() && layout_.isDirty(Layout::Component::AnalysisPanel)) {
+        renderAnalysisPanel();
+    }
+
     // Sequence bar
-    if (layout_.seqBarVisible()) {
+    if (layout_.seqBarVisible() && layout_.isDirty(Layout::Component::SeqBar)) {
         auto obj = tabMgr_.currentTab().currentObject();
         if (obj) {
             const Selection* sele = nullptr;
@@ -1098,10 +1122,12 @@ void Application::renderFrame() {
     }
 
     // Status bar
-    updateStatusBar();
+    if (layout_.isDirty(Layout::Component::StatusBar))
+        updateStatusBar();
 
     // Command line
-    cmdLine_.render(layout_.commandLine());
+    if (layout_.isDirty(Layout::Component::CommandLine))
+        cmdLine_.render(layout_.commandLine());
 
     layout_.refreshAll();
     doupdate();
@@ -1194,6 +1220,7 @@ void Application::renderViewport() {
         line("MULTI-STATE       MACROS         OTHER");
         line(" [/] prev/next    q record       m  toggle pixel");
         line("     state        @ play          P  screenshot");
+        line("                                  I  interface");
         line("");
         line(":help  :load  :fetch  :align  :measure  :export");
         line("");
@@ -1231,17 +1258,66 @@ void Application::renderViewport() {
         }
     }
 
+    // Helper: draw a dashed line between two 3D atom positions.
+    // In pixel mode, draws directly into the canvas (sub-pixel space).
+    // In non-pixel mode, draws into the ncurses window (terminal space).
+    bool isPixel = (rendererType_ == RendererType::Pixel);
+    int subW = canvas_ ? canvas_->subW() : w;
+    int subH = canvas_ ? canvas_->subH() : h;
+    int scaleX = canvas_ ? canvas_->scaleX() : 1;
+    int scaleY = canvas_ ? canvas_->scaleY() : 1;
+
+    // thickness: pixel-mode line thickness in sub-pixels (1-4), ignored in non-pixel
+    auto drawDashedLine = [&](float sx1, float sy1, float d1,
+                              float sx2, float sy2, float d2,
+                              int color, int thickness = 2) {
+        if (isPixel) {
+            int isx1 = static_cast<int>(sx1), isy1 = static_cast<int>(sy1);
+            int isx2 = static_cast<int>(sx2), isy2 = static_cast<int>(sy2);
+            int steps = std::max(std::abs(isx2 - isx1), std::abs(isy2 - isy1));
+            if (steps == 0) steps = 1;
+            int dashLen = std::max(4, thickness * 2);
+            for (int s = 0; s <= steps; s += dashLen * 2) {
+                // Draw dash segment
+                for (int ds = 0; ds < dashLen && s + ds <= steps; ++ds) {
+                    float t = static_cast<float>(s + ds) / static_cast<float>(steps);
+                    int x = isx1 + static_cast<int>((isx2 - isx1) * t);
+                    int y = isy1 + static_cast<int>((isy2 - isy1) * t);
+                    float depth = d1 + (d2 - d1) * t;
+                    // Draw thickness x thickness dot cluster
+                    for (int dy = 0; dy < thickness; ++dy) {
+                        for (int dx = 0; dx < thickness; ++dx) {
+                            int px = x + dx - thickness / 2;
+                            int py = y + dy - thickness / 2;
+                            if (px >= 0 && px < subW && py >= 0 && py < subH)
+                                canvas_->drawDot(px, py, depth, color);
+                        }
+                    }
+                }
+            }
+        } else {
+            int tx1 = static_cast<int>(sx1) / scaleX, ty1 = static_cast<int>(sy1) / scaleY;
+            int tx2 = static_cast<int>(sx2) / scaleX, ty2 = static_cast<int>(sy2) / scaleY;
+            int steps = std::max(std::abs(tx2 - tx1), std::abs(ty2 - ty1));
+            if (steps == 0) steps = 1;
+            for (int s = 0; s <= steps; s += 2) {
+                float t = static_cast<float>(s) / static_cast<float>(steps);
+                int x = tx1 + static_cast<int>((tx2 - tx1) * t);
+                int y = ty1 + static_cast<int>((ty2 - ty1) * t);
+                if (x >= 0 && x < w && y >= 0 && y < h)
+                    win.addCharColored(y, x, '-', color);
+            }
+        }
+    };
+
     // Draw measurement dashed lines + labels
     {
         auto obj = tabMgr_.currentTab().currentObject();
-        int scaleX = canvas_ ? canvas_->scaleX() : 1;
-        int scaleY = canvas_ ? canvas_->scaleY() : 1;
         if (obj && !measurements_.empty()) {
             const auto& atoms = obj->atoms();
             auto& cam = tabMgr_.currentTab().camera();
             for (const auto& m : measurements_) {
                 if (m.atoms.size() < 2) continue;
-                // Draw lines between consecutive atoms in the measurement
                 for (size_t mi = 0; mi + 1 < m.atoms.size(); ++mi) {
                     int a1 = m.atoms[mi], a2 = m.atoms[mi + 1];
                     if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
@@ -1249,28 +1325,19 @@ void Application::renderViewport() {
                     float sx1, sy1, d1, sx2, sy2, d2;
                     cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
                     cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
-                    int tx1 = static_cast<int>(sx1) / scaleX, ty1 = static_cast<int>(sy1) / scaleY;
-                    int tx2 = static_cast<int>(sx2) / scaleX, ty2 = static_cast<int>(sy2) / scaleY;
-                    // Dashed line in terminal space
-                    int steps = std::max(std::abs(tx2 - tx1), std::abs(ty2 - ty1));
-                    if (steps == 0) steps = 1;
-                    for (int s = 0; s <= steps; s += 2) {  // skip every other for dashes
-                        float t = static_cast<float>(s) / static_cast<float>(steps);
-                        int x = tx1 + static_cast<int>((tx2 - tx1) * t);
-                        int y = ty1 + static_cast<int>((ty2 - ty1) * t);
-                        if (x >= 0 && x < w && y >= 0 && y < h)
-                            win.addCharColored(y, x, '-', kColorYellow);
-                    }
+                    drawDashedLine(sx1, sy1, d1, sx2, sy2, d2, kColorYellow);
                 }
-                // Label at midpoint of first segment
-                int a1 = m.atoms[0], a2 = m.atoms[1];
-                float sx1, sy1, d1, sx2, sy2, d2;
-                cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
-                cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
-                int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
-                int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
-                if (mx >= 0 && mx < w - static_cast<int>(m.label.size()) && my >= 0 && my < h)
-                    win.printColored(my, mx, m.label, kColorYellow);
+                // Label at midpoint of first segment (ncurses only, pixel labels are TODO)
+                if (!isPixel) {
+                    int a1 = m.atoms[0], a2 = m.atoms[1];
+                    float sx1, sy1, d1, sx2, sy2, d2;
+                    cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+                    cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                    int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
+                    int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
+                    if (mx >= 0 && mx < w - static_cast<int>(m.label.size()) && my >= 0 && my < h)
+                        win.printColored(my, mx, m.label, kColorYellow);
+                }
             }
         }
     }
@@ -1279,24 +1346,55 @@ void Application::renderViewport() {
     {
         auto selIt = namedSelections_.find("sele");
         if (selIt != namedSelections_.end() && !selIt->second.empty()) {
-            // Build proj cache if not already built this frame
             buildProjCache();
-            int scaleX = canvas_ ? canvas_->scaleX() : 1;
-            int scaleY = canvas_ ? canvas_->scaleY() : 1;
-            for (const auto& pa : projCache_) {
-                if (selIt->second.has(pa.idx)) {
-                    int tx = pa.sx / scaleX;
-                    int ty = pa.sy / scaleY;
-                    if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
-                        win.addCharColored(ty, tx, '*', kColorYellow);
+            if (isPixel) {
+                for (const auto& pa : projCache_) {
+                    if (selIt->second.has(pa.idx)) {
+                        if (pa.sx >= 0 && pa.sx < subW && pa.sy >= 0 && pa.sy < subH)
+                            canvas_->drawDot(pa.sx, pa.sy, pa.depth - 0.01f, kColorYellow);
                     }
                 }
+            } else {
+                for (const auto& pa : projCache_) {
+                    if (selIt->second.has(pa.idx)) {
+                        int tx = pa.sx / scaleX;
+                        int ty = pa.sy / scaleY;
+                        if (tx >= 0 && tx < w && ty >= 0 && ty < h)
+                            win.addCharColored(ty, tx, '*', kColorYellow);
+                    }
+                }
+            }
+        }
+    }
+
+    // Draw interface contact dashed lines
+    if (interfaceOverlay_ && !interfacePairs_.empty()) {
+        auto obj = tabMgr_.currentTab().currentObject();
+        if (obj) {
+            const auto& atoms = obj->atoms();
+            auto& cam = tabMgr_.currentTab().camera();
+            for (const auto& [a1, a2] : interfacePairs_) {
+                if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
+                if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
+                float sx1, sy1, d1, sx2, sy2, d2;
+                cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+                cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                drawDashedLine(sx1, sy1, d1, sx2, sy2, d2,
+                               interfaceColor_, interfaceThickness_);
             }
         }
     }
   } // overlayVisible_
 
     win.refresh();
+}
+
+void Application::renderAnalysisPanel() {
+    auto obj = tabMgr_.currentTab().currentObject();
+    if (obj) {
+        contactMapPanel_.update(*obj);
+    }
+    contactMapPanel_.render(layout_.analysisPanel());
 }
 
 void Application::updateStatusBar() {
@@ -1960,6 +2058,19 @@ void Application::registerCommands() {
             app.onResize();
             return app.layout().seqBarWrap() ? "Sequence bar: wrap" : "Sequence bar: scroll";
         }
+        if (opt == "interface_color" || opt == "ic") {
+            if (cmd.args.size() < 2) return "Usage: :set interface_color <color_name>";
+            int c = ColorMapper::colorByName(cmd.args[1]);
+            if (c < 0) return "Unknown color: " + cmd.args[1] + " (" + ColorMapper::availableColors() + ")";
+            app.interfaceColor_ = c;
+            return "Interface color: " + cmd.args[1];
+        }
+        if (opt == "interface_thickness" || opt == "it") {
+            if (cmd.args.size() < 2) return "Usage: :set interface_thickness <1-4>";
+            int val = std::stoi(cmd.args[1]);
+            app.interfaceThickness_ = std::max(1, std::min(4, val));
+            return "Interface thickness: " + std::to_string(app.interfaceThickness_);
+        }
         return "Unknown option: " + opt;
     }, ":set <option> [value]", "Set option");
 
@@ -2597,6 +2708,64 @@ void Application::registerCommands() {
         MLOG_INFO("%s", msg.c_str());
         return msg;
     }, ":dihedral [s1 s2 s3 s4]", "Dihedral (no args = pk1-pk4)");
+
+    // :contactmap [cutoff] — toggle contact map panel
+    cmdRegistry_.registerCmd("contactmap", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        float cutoff = 8.0f;
+        if (!cmd.args.empty()) {
+            try { cutoff = std::stof(cmd.args[0]); } catch (...) {}
+        }
+        app.layout().toggleAnalysisPanel();
+        if (app.layout().analysisPanelVisible()) {
+            auto obj = app.tabs().currentTab().currentObject();
+            if (obj) {
+                app.contactMapPanel_.update(*obj, cutoff);
+            }
+            if (app.canvas()) app.canvas()->invalidate();
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "Contact map visible (cutoff=%.1fA)", cutoff);
+            return buf;
+        }
+        if (app.canvas()) app.canvas()->invalidate();
+        return "Contact map hidden";
+    }, ":contactmap [cutoff]", "Toggle residue contact map panel");
+
+    // :cmap — alias for :contactmap
+    cmdRegistry_.registerCmd("cmap", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        return app.cmdRegistry().execute(app, cmd.args.empty() ? "contactmap" :
+            "contactmap " + cmd.args[0]);
+    }, ":cmap [cutoff]", "Alias for :contactmap");
+
+    cmdRegistry_.registerCmd("interface", [](Application& app, const ParsedCommand& cmd) -> std::string {
+        float cutoff = 4.5f;
+        if (!cmd.args.empty()) {
+            try { cutoff = std::stof(cmd.args[0]); } catch (...) {}
+        }
+        app.interfaceOverlay_ = !app.interfaceOverlay_;
+        if (app.interfaceOverlay_) {
+            auto obj = app.tabs().currentTab().currentObject();
+            if (!obj) {
+                app.interfaceOverlay_ = false;
+                return "No object loaded";
+            }
+            // Ensure residues are extracted (via contact map update), then
+            // compute interface using closest heavy atom distance
+            app.contactMapPanel_.update(*obj);
+            app.contactMapPanel_.contactMap().computeInterface(*obj, cutoff);
+            app.interfacePairs_ = app.contactMapPanel_.contactMap().interfacePairs();
+            if (app.interfacePairs_.empty()) {
+                app.interfaceOverlay_ = false;
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "No inter-chain contacts found (cutoff=%.1fA)", cutoff);
+                return buf;
+            }
+            return "Interface: " + std::to_string(app.interfacePairs_.size()) +
+                   " residue pairs (closest heavy atom <" +
+                   std::to_string(static_cast<int>(cutoff * 10) / 10.0f).substr(0, 3) + "A)";
+        }
+        app.interfacePairs_.clear();
+        return "Interface overlay hidden";
+    }, ":interface [cutoff]", "Toggle inter-chain contact overlay (closest heavy atom)");
 }
 
 } // namespace molterm

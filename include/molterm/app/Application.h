@@ -14,9 +14,11 @@
 #include "molterm/input/InputHandler.h"
 #include "molterm/input/KeymapManager.h"
 #include "molterm/render/Canvas.h"
+#include "molterm/render/ColorMapper.h"
 #include "molterm/render/ProtocolPicker.h"
 #include "molterm/repr/Representation.h"
 #include "molterm/tui/CommandLine.h"
+#include "molterm/tui/ContactMapPanel.h"
 #include "molterm/tui/Layout.h"
 #include "molterm/tui/ObjectPanel.h"
 #include "molterm/tui/Screen.h"
@@ -137,6 +139,12 @@ private:
     // Help overlay state
     bool helpOverlay_ = false;
 
+    // Contact map + interface overlay state
+    ContactMapPanel contactMapPanel_;
+    bool interfaceOverlay_ = false;
+    std::vector<std::pair<int,int>> interfacePairs_;  // cached atom index pairs for overlay
+    int interfaceColor_ = kColorYellow;
+    int interfaceThickness_ = 2; // pixel-mode line thickness (1-4)
 
     // Inspect / pick state (mouse-only)
     InspectLevel inspectLevel_ = InspectLevel::Atom;
@@ -200,6 +208,7 @@ private:
     void handleMouse(int key);
     void renderFrame();
     void renderViewport();
+    void renderAnalysisPanel();
     void updateStatusBar();
 
     void registerCommands();
