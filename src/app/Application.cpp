@@ -1242,6 +1242,8 @@ void Application::renderViewport() {
     cmdLine_.renderHistoryHint(win);
 
   if (overlayVisible_) {
+    bool isPixel = (rendererType_ == RendererType::Pixel);
+
     // Draw labels on viewport
     {
         buildProjCache();
@@ -1261,9 +1263,14 @@ void Application::renderViewport() {
 
                 const auto& a = atoms[pa.idx];
                 std::string lbl = a.resName + std::to_string(a.resSeq);
-                // Offset label to the right of atom
-                int lx = std::min(tx + 1, w - static_cast<int>(lbl.size()));
-                win.printColored(ty, lx, lbl, kColorWhite);
+                if (isPixel) {
+                    auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
+                    if (pc) pc->drawText(pa.sx + scaleX, pa.sy, pa.depth,
+                                         lbl, kColorWhite);
+                } else {
+                    int lx = std::min(tx + 1, w - static_cast<int>(lbl.size()));
+                    win.printColored(ty, lx, lbl, kColorWhite);
+                }
             }
         }
     }
@@ -1271,7 +1278,6 @@ void Application::renderViewport() {
     // Helper: draw a dashed line between two 3D atom positions.
     // In pixel mode, draws directly into the canvas (sub-pixel space).
     // In non-pixel mode, draws into the ncurses window (terminal space).
-    bool isPixel = (rendererType_ == RendererType::Pixel);
     int subW = canvas_ ? canvas_->subW() : w;
     int subH = canvas_ ? canvas_->subH() : h;
     int scaleX = canvas_ ? canvas_->scaleX() : 1;
@@ -1337,16 +1343,25 @@ void Application::renderViewport() {
                     cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
                     drawDashedLine(sx1, sy1, d1, sx2, sy2, d2, kColorYellow);
                 }
-                // Label at midpoint of first segment (ncurses only, pixel labels are TODO)
-                if (!isPixel) {
+                // Label at midpoint of first segment
+                {
                     int a1 = m.atoms[0], a2 = m.atoms[1];
                     float sx1, sy1, d1, sx2, sy2, d2;
                     cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
                     cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
-                    int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
-                    int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
-                    if (mx >= 0 && mx < w - static_cast<int>(m.label.size()) && my >= 0 && my < h)
-                        win.printColored(my, mx, m.label, kColorYellow);
+                    if (isPixel) {
+                        auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
+                        if (pc) {
+                            int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
+                            int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
+                            pc->drawText(lx, ly, (d1 + d2) / 2.0f, m.label, kColorYellow);
+                        }
+                    } else {
+                        int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
+                        int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
+                        if (mx >= 0 && mx < w - static_cast<int>(m.label.size()) && my >= 0 && my < h)
+                            win.printColored(my, mx, m.label, kColorYellow);
+                    }
                 }
             }
         }
