@@ -55,9 +55,12 @@ void RibbonRepr::render(const MolObject& mol, const Camera& cam,
     };
     std::vector<CaAtom> allCas;
 
+    auto atomVis = mol.atomVisMask(ReprType::Ribbon);
+
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         // Track both protein Cα and nucleic acid P atoms
         if (atoms[i].name != "CA" && atoms[i].name != "P") continue;
+        if (!atomVis.empty() && !atomVis[i]) continue;
 
         CaAtom ca;
         ca.atomIdx = i;

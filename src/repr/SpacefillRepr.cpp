@@ -32,11 +32,14 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
     const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
     auto rf = [&](int i) { return rbw ? (*rbw)[i] : -1.0f; };
 
+    auto atomVis = mol.atomVisMask(ReprType::Spacefill);
+
     struct ProjAtom { int idx; int sx, sy; float depth; int radius; int color; };
     std::vector<ProjAtom> projected;
     projected.reserve(atoms.size());
 
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+        if (!atomVis.empty() && !atomVis[i]) continue;
         const auto& a = atoms[i];
         float fsx, fsy, depth;
         cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);

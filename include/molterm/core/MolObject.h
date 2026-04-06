@@ -59,7 +59,11 @@ public:
     void hideRepr(ReprType r);
     void hideReprForAtoms(ReprType r, const std::vector<int>& indices);
     void hideAllRepr();
+    void hideAllReprForAtoms(const std::vector<int>& indices);
     bool hasPerAtomRepr() const { return !reprAtomMask_.empty(); }
+
+    // Build per-atom visibility mask for a given repr (empty if no per-atom state)
+    std::vector<bool> atomVisMask(ReprType r) const;
 
     // Coloring
     ColorScheme colorScheme() const { return colorScheme_; }

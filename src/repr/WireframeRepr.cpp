@@ -18,6 +18,9 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     if (r < 1) r = 1;
     bool thick = (r > 1);
 
+    auto atomVis = mol.atomVisMask(ReprType::Wireframe);
+    auto vis = [&](int i) { return atomVis.empty() || atomVis[i]; };
+
     // Pre-project all atoms using cached projection
     struct Projected { float sx, sy, depth; bool valid; };
     std::vector<Projected> proj(atoms.size());
@@ -44,6 +47,7 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     for (const auto& bond : bonds) {
         if (bond.atom1 < 0 || bond.atom1 >= static_cast<int>(atoms.size())) continue;
         if (bond.atom2 < 0 || bond.atom2 >= static_cast<int>(atoms.size())) continue;
+        if (!vis(bond.atom1) || !vis(bond.atom2)) continue;
         const auto& p1 = proj[bond.atom1];
         const auto& p2 = proj[bond.atom2];
         if (!p1.valid || !p2.valid) continue;
@@ -67,6 +71,7 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     for (size_t i = 0; i < atoms.size(); ++i) {
         if (skipAtomDots) break;
         if (!proj[i].valid) continue;
+        if (!vis(static_cast<int>(i))) continue;
         int sx = static_cast<int>(std::round(proj[i].sx));
         int sy = static_cast<int>(std::round(proj[i].sy));
         int color = ColorMapper::colorForAtom(atoms[i], scheme, mol.atomColor(static_cast<int>(i)), rf(static_cast<int>(i)));

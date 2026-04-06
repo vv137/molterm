@@ -50,6 +50,13 @@ void MolObject::hideAllRepr() {
     reprAtomMask_.clear();
 }
 
+void MolObject::hideAllReprForAtoms(const std::vector<int>& indices) {
+    for (auto& [r, visible] : reprVisible_) {
+        if (!visible) continue;
+        hideReprForAtoms(r, indices);
+    }
+}
+
 bool MolObject::reprVisibleForAtom(ReprType r, int atomIdx) const {
     if (!reprVisible(r)) return false;
     auto it = reprAtomMask_.find(r);
@@ -146,6 +153,14 @@ bool MolObject::prevState() {
     return setActiveState(next);
 }
 
+std::vector<bool> MolObject::atomVisMask(ReprType r) const {
+    if (!hasPerAtomRepr()) return {};
+    std::vector<bool> mask(atoms_.size());
+    for (size_t i = 0; i < atoms_.size(); ++i)
+        mask[i] = reprVisibleForAtom(r, static_cast<int>(i));
+    return mask;
+}
+
 void MolObject::applySmartDefaults() {
     bool hasProtein = false;
     bool hasNA = false;
@@ -187,7 +202,7 @@ void MolObject::applySmartDefaults() {
     }
 
     if (hasLigand && !ligandAtoms.empty()) {
-        showReprForAtoms(ReprType::BallStick, ligandAtoms);
+        showReprForAtoms(ReprType::Wireframe, ligandAtoms);
     }
 }
 

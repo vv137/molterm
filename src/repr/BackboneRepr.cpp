@@ -15,6 +15,8 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
     int r = static_cast<int>(thickness_ * static_cast<float>(canvas.scaleX()) + 0.5f);
     if (r < 1) r = 1;
 
+    auto atomVis = mol.atomVisMask(ReprType::Backbone);
+
     // Collect Cα atoms grouped by chain
     int sw = canvas.subW(), sh = canvas.subH();
     int margin = r * 3;
@@ -29,6 +31,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
         if (a.name != "CA") continue;
+        if (!atomVis.empty() && !atomVis[i]) continue;
 
         CaAtom ca;
         ca.idx = i;

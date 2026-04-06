@@ -40,11 +40,14 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     int coilSegments = 8;
     if (atoms.size() > 5000) coilSegments = 4;
 
+    auto atomVis = mol.atomVisMask(ReprType::Cartoon);
+
     // Collect Cα/P atoms
     struct CaAtom { int idx; float x, y, z; SSType ss; std::string chain; };
     std::vector<CaAtom> cas;
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         if (atoms[i].name != "CA" && atoms[i].name != "P") continue;
+        if (!atomVis.empty() && !atomVis[i]) continue;
         cas.push_back({i, atoms[i].x, atoms[i].y, atoms[i].z,
                        atoms[i].ssType, atoms[i].chainId});
     }
@@ -376,6 +379,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     while (ai < static_cast<int>(atoms.size())) {
         const auto& a0 = atoms[ai];
         if (!isNucleotide(a0.resName)) { ++ai; continue; }
+        if (!atomVis.empty() && !atomVis[ai]) { ++ai; continue; }
 
         int resStart = ai;
         while (ai < static_cast<int>(atoms.size()) &&

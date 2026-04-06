@@ -16,6 +16,9 @@ void BallStickRepr::render(const MolObject& mol, const Camera& cam,
     int radius = ballRadius_ * canvas.scaleX();
     if (radius < 1) radius = 1;
 
+    auto atomVis = mol.atomVisMask(ReprType::BallStick);
+    auto vis = [&](int i) { return atomVis.empty() || atomVis[i]; };
+
     int sw = canvas.subW(), sh = canvas.subH();
     int margin = radius * 2;
     struct Projected { float sx, sy, depth; bool valid; };
@@ -31,6 +34,7 @@ void BallStickRepr::render(const MolObject& mol, const Camera& cam,
     for (const auto& bond : bonds) {
         if (bond.atom1 < 0 || bond.atom1 >= static_cast<int>(atoms.size())) continue;
         if (bond.atom2 < 0 || bond.atom2 >= static_cast<int>(atoms.size())) continue;
+        if (!vis(bond.atom1) || !vis(bond.atom2)) continue;
         const auto& p1 = proj[bond.atom1];
         const auto& p2 = proj[bond.atom2];
         if (!p1.valid || !p2.valid) continue;
@@ -53,6 +57,7 @@ void BallStickRepr::render(const MolObject& mol, const Camera& cam,
     // Draw atoms as filled circles (on top)
     for (size_t i = 0; i < atoms.size(); ++i) {
         if (!proj[i].valid) continue;
+        if (!vis(static_cast<int>(i))) continue;
         int sx = static_cast<int>(std::round(proj[i].sx));
         int sy = static_cast<int>(std::round(proj[i].sy));
         int color = ColorMapper::colorForAtom(atoms[i], scheme, mol.atomColor(static_cast<int>(i)), rf(static_cast<int>(i)));
