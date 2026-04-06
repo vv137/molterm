@@ -122,6 +122,7 @@ public:
         if (ch == '-' && pos_ + 1 < input_.size() && std::isdigit(input_[pos_+1])) {
             // Could be negative number or range dash
             // Check if previous token was a number — then it's a range dash
+            ++pos_;
             return {Token::Dash, "-"};
         }
         if (ch == '-') { ++pos_; return {Token::Dash, "-"}; }
