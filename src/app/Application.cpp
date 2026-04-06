@@ -1099,7 +1099,8 @@ void Application::renderFrame() {
     }
 
     // Viewport — render to canvas but defer pixel flush
-    if (layout_.isDirty(Layout::Component::Viewport))
+    bool viewportRendered = layout_.isDirty(Layout::Component::Viewport);
+    if (viewportRendered)
         renderViewport();
 
     // Clear camera dirty flag after rendering (so caches like Spacefill sort work)
@@ -1141,7 +1142,7 @@ void Application::renderFrame() {
     doupdate();
 
     // Pixel graphics must be written AFTER doupdate() so ncurses doesn't overwrite.
-    if (rendererType_ == RendererType::Pixel) {
+    if (rendererType_ == RendererType::Pixel && viewportRendered) {
         canvas_->flush(layout_.viewport());
     }
 }

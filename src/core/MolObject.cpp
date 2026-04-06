@@ -192,7 +192,7 @@ void MolObject::applySmartDefaults() {
     hideAllRepr();
 
     if (hasProtein || hasNA) {
-        if (atoms_.size() > 50000) {
+        if (atoms_.size() > 200000) {
             // Very large: backbone only
             showRepr(ReprType::Backbone);
         } else {

@@ -30,7 +30,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
     std::vector<CaAtom> cas;
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
-        if (a.name != "CA") continue;
+        if (a.name != "CA" && a.name != "P") continue;
         if (!atomVis.empty() && !atomVis[i]) continue;
 
         CaAtom ca;
