@@ -564,6 +564,7 @@ void Application::handleAction(Action action) {
         case Action::Redraw:
             clearScreenAndRepaint();
             layout_.markAllDirty(); needsRedraw_ = true;
+            framesToSkip_ = 0;
             break;
 
         // Objects — viewport + panels + seqbar + status
