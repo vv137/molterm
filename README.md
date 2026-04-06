@@ -17,7 +17,7 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 
 ## Features
 
-- **Smart defaults** — auto-detects protein/nucleic/ligand content: cartoon for macromolecules, ball-and-stick for ligands, chain coloring (`gd` / `:preset` to re-apply)
+- **Smart defaults** — auto-detects protein/nucleic/ligand content: cartoon for macromolecules, wireframe for ligands, chain coloring (`gd` / `:preset` to re-apply)
 - **3-tier bond detection** — standard residue table (20 AA + 8 nucleotides, with bond order) → inter-residue peptide/phosphodiester bonds → distance fallback for ligands
 - **Multi-renderer pipeline** — Unicode Braille (8x resolution), half-block, ASCII, and native pixel protocols (Sixel, Kitty, iTerm2) with auto-detection
 - **VIM-like modal interface** — Normal, Command, Search modes with trie-based multi-key bindings (`sw`, `dd`, `gt`, etc.)
@@ -165,7 +165,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :fetch <pdb_id>                 " Download from RCSB PDB (e.g. fetch 1abc)
 :fetch afdb:<uniprot_id>        " Download from AlphaFold DB (e.g. fetch afdb:P12345)
 :show <repr> [selection]         " Show repr (optionally for selection only)
-:hide <repr|all> [selection]    " Hide repr (optionally for selection only)
+:hide [repr|all] [selection]    " Hide repr (optionally for selection only)
 :color <scheme>                 " element/cpk, chain, ss, bfactor, plddt, rainbow, restype, heteroatom, clear
 :color <name> [selection]       " Per-atom color (red, blue, salmon, etc.) with optional selection
 :select <expr>                  " Select atoms (see Selection Algebra below)
@@ -539,7 +539,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 ### Phase 5.5: Smart Defaults + Interaction — DONE
 
 - [x] **3-tier bond detection** — standard residue table (20 AA + 8 NA with bond order) → peptide/phosphodiester inter-residue → distance fallback for ligands
-- [x] **Smart default repr** — auto-detect protein/NA/ligand: cartoon for macromolecules, ball-and-stick for ligands, chain coloring
+- [x] **Smart default repr** — auto-detect protein/NA/ligand: cartoon for macromolecules, wireframe for ligands, chain coloring
 - [x] **`:preset` / `gd`** — re-apply smart defaults on demand
 - [x] **VMD-like residue type coloring** — `ct` / `:color restype` (nonpolar/polar/acidic/basic)
 - [x] **Mouse-only inspect** — click to inspect at atom/residue/chain/object level, `I` cycles
