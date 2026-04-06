@@ -756,7 +756,8 @@ void Application::handleAction(Action action) {
                                            "pan_speed", "ps", "fog", "outline", "outline_threshold", "ot",
                                            "outline_darken", "od", "cartoon_helix", "ch",
                                            "cartoon_sheet", "csh", "cartoon_loop", "cl",
-                                           "cartoon_subdiv", "csd", "auto_center", "panel",
+                                           "cartoon_subdiv", "csd", "lod_medium", "lod_low",
+                                           "backbone_cutoff", "auto_center", "panel",
                                            "seqbar", "seqwrap"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
@@ -2065,6 +2066,21 @@ void Application::registerCommands() {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
             if (ct) { ct->setSubdivisions(std::stoi(cmd.args[1])); return "Cartoon subdivisions: " + cmd.args[1]; }
             return "Cartoon repr not found";
+        }
+        if (opt == "lod_medium") {
+            if (cmd.args.size() < 2) return "Usage: :set lod_medium <atom_count>";
+            Representation::lodMediumThreshold = std::stoul(cmd.args[1]);
+            return "LOD medium threshold: " + cmd.args[1];
+        }
+        if (opt == "lod_low") {
+            if (cmd.args.size() < 2) return "Usage: :set lod_low <atom_count>";
+            Representation::lodLowThreshold = std::stoul(cmd.args[1]);
+            return "LOD low threshold: " + cmd.args[1];
+        }
+        if (opt == "backbone_cutoff") {
+            if (cmd.args.size() < 2) return "Usage: :set backbone_cutoff <atom_count>";
+            Representation::backboneCutoff = std::stoul(cmd.args[1]);
+            return "Backbone fallback cutoff: " + cmd.args[1];
         }
         if (opt == "auto_center") {
             app.setAutoCenter(!app.autoCenter());

@@ -1,5 +1,6 @@
 #include "molterm/core/MolObject.h"
 #include "molterm/core/BondTable.h"
+#include "molterm/repr/Representation.h"
 #include <algorithm>
 #include <limits>
 
@@ -192,7 +193,7 @@ void MolObject::applySmartDefaults() {
     hideAllRepr();
 
     if (hasProtein || hasNA) {
-        if (atoms_.size() > 200000) {
+        if (atoms_.size() > Representation::backboneCutoff) {
             // Very large: backbone only
             showRepr(ReprType::Backbone);
         } else {

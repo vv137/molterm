@@ -107,6 +107,7 @@ set(MOLTERM_SOURCES
     # Repr
     src/repr/WireframeRepr.cpp
     src/repr/BallStickRepr.cpp
+    src/repr/Representation.cpp
     src/repr/BackboneRepr.cpp
     src/repr/SpacefillRepr.cpp
     src/repr/CartoonRepr.cpp

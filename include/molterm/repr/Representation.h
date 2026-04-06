@@ -62,13 +62,17 @@ protected:
     }
 
     // Adjust subdivision level based on atom count (for LOD).
-    static int adjustLOD(int baseSub, size_t atomCount,
-                         size_t mediumThreshold = 5000,
-                         size_t lowThreshold = 20000) {
-        if (atomCount > lowThreshold) return std::max(2, baseSub / 4);
-        if (atomCount > mediumThreshold) return std::max(3, baseSub / 2);
+    static int adjustLOD(int baseSub, size_t atomCount) {
+        if (atomCount > lodLowThreshold) return std::max(2, baseSub / 4);
+        if (atomCount > lodMediumThreshold) return std::max(3, baseSub / 2);
         return baseSub;
     }
+
+public:
+    // Global rendering thresholds (configurable via :set)
+    static size_t lodMediumThreshold;   // default 5000
+    static size_t lodLowThreshold;      // default 20000
+    static size_t backboneCutoff;       // default 200000
 };
 
 } // namespace molterm
