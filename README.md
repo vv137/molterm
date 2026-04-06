@@ -476,7 +476,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] ColorMapper — element/chain/SS/B-factor color schemes
 - [x] WireframeRepr — half-bond coloring, atom dots
 - [x] BallStickRepr — filled circles with adaptive radius
-- [x] BackboneRepr — Cα–Cα chain trace
+- [x] BackboneRepr — Cα/P chain trace (protein + nucleic acid)
 - [x] Mouse support — scroll wheel zoom, tab bar click
 - [x] Runtime renderer switching — `:set renderer ascii|braille|block`
 
