@@ -27,8 +27,6 @@ private:
     float sheetWidth_ = 4.0f;
     float loopWidth_ = 1.0f;
     int subdivisions_ = 8;
-
-    static float catmullRom(float p0, float p1, float p2, float p3, float t);
 };
 
 } // namespace molterm

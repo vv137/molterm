@@ -1,53 +1,26 @@
 #include "molterm/repr/CartoonRepr.h"
-#include "molterm/render/ColorMapper.h"
+#include "molterm/repr/ReprUtil.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
 namespace molterm {
 
-float CartoonRepr::catmullRom(float p0, float p1, float p2, float p3, float t) {
-    float t2 = t * t, t3 = t2 * t;
-    return 0.5f * ((2.0f * p1) +
-                   (-p0 + p2) * t +
-                   (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
-                   (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
-}
-
-static float len3(float x, float y, float z) { return std::sqrt(x*x + y*y + z*z); }
-static void normalize3(float& x, float& y, float& z) {
-    float l = len3(x, y, z);
-    if (l > 1e-8f) { x /= l; y /= l; z /= l; }
-}
-static void cross3(float ax, float ay, float az, float bx, float by, float bz,
-                   float& ox, float& oy, float& oz) {
-    ox = ay*bz - az*by; oy = az*bx - ax*bz; oz = ax*by - ay*bx;
-}
-
 void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                          Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Cartoon)) return;
+    auto ctx = makeContext(mol, ReprType::Cartoon);
+    const auto& atoms = ctx.atoms;
 
-    const auto& atoms = mol.atoms();
-    auto scheme = mol.colorScheme();
-    const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
-    auto rf = [&](int i) -> float { return rbw ? (*rbw)[i] : -1.0f; };
-
-    int subdiv = subdivisions_;
-    if (atoms.size() > 20000) subdiv = std::max(2, subdiv / 4);
-    else if (atoms.size() > 5000) subdiv = std::max(3, subdiv / 2);
-
-    int coilSegments = 8;
-    if (atoms.size() > 5000) coilSegments = 4;
-
-    auto atomVis = mol.atomVisMask(ReprType::Cartoon);
+    int subdiv = adjustLOD(subdivisions_, atoms.size());
+    int coilSegments = (atoms.size() > 5000) ? 4 : 8;
 
     // Collect Cα/P atoms
     struct CaAtom { int idx; float x, y, z; SSType ss; std::string chain; };
     std::vector<CaAtom> cas;
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         if (atoms[i].name != "CA" && atoms[i].name != "P") continue;
-        if (!atomVis.empty() && !atomVis[i]) continue;
+        if (!ctx.visible(i)) continue;
         cas.push_back({i, atoms[i].x, atoms[i].y, atoms[i].z,
                        atoms[i].ssType, atoms[i].chainId});
     }
@@ -71,10 +44,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             int i2 = static_cast<int>(cStart) + std::min(seg + 1, cLen - 1);
             int i3 = static_cast<int>(cStart) + std::min(seg + 2, cLen - 1);
 
-            int col1 = ColorMapper::colorForAtom(atoms[cas[i1].idx], scheme,
-                mol.atomColor(cas[i1].idx), rf(cas[i1].idx));
-            int col2 = ColorMapper::colorForAtom(atoms[cas[i2].idx], scheme,
-                mol.atomColor(cas[i2].idx), rf(cas[i2].idx));
+            int col1 = ctx.colorFor(cas[i1].idx);
+            int col2 = ctx.colorFor(cas[i2].idx);
 
             // Detect sheet→non-sheet transition for arrowhead
             bool isSheetEnd = (cas[i1].ss == SSType::Sheet && cas[i2].ss != SSType::Sheet);
@@ -95,8 +66,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         // Last point
         auto& last = cas[cEnd - 1];
         spine.push_back({last.x, last.y, last.z, last.ss,
-            ColorMapper::colorForAtom(atoms[last.idx], scheme,
-                mol.atomColor(last.idx), rf(last.idx)), -1.0f});
+            ctx.colorFor(last.idx), -1.0f});
 
         int nPts = static_cast<int>(spine.size());
         if (nPts < 2) { cStart = cEnd; continue; }
@@ -379,7 +349,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     while (ai < static_cast<int>(atoms.size())) {
         const auto& a0 = atoms[ai];
         if (!isNucleotide(a0.resName)) { ++ai; continue; }
-        if (!atomVis.empty() && !atomVis[ai]) { ++ai; continue; }
+        if (!ctx.visible(ai)) { ++ai; continue; }
 
         int resStart = ai;
         while (ai < static_cast<int>(atoms.size()) &&

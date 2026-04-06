@@ -1,48 +1,18 @@
 #include "molterm/repr/RibbonRepr.h"
-#include "molterm/render/ColorMapper.h"
+#include "molterm/repr/ReprUtil.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
 namespace molterm {
 
-float RibbonRepr::catmullRom(float p0, float p1, float p2, float p3, float t) {
-    float t2 = t * t, t3 = t2 * t;
-    return 0.5f * ((2.0f * p1) +
-                   (-p0 + p2) * t +
-                   (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
-                   (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
-}
-
-// Normalize a 3D vector in place; returns length
-static float normalize3(float& x, float& y, float& z) {
-    float len = std::sqrt(x*x + y*y + z*z);
-    if (len > 1e-8f) { x /= len; y /= len; z /= len; }
-    return len;
-}
-
-// Cross product: out = a × b
-static void cross3(float ax, float ay, float az,
-                   float bx, float by, float bz,
-                   float& ox, float& oy, float& oz) {
-    ox = ay*bz - az*by;
-    oy = az*bx - ax*bz;
-    oz = ax*by - ay*bx;
-}
-
 void RibbonRepr::render(const MolObject& mol, const Camera& cam,
                          Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Ribbon)) return;
+    auto ctx = makeContext(mol, ReprType::Ribbon);
+    const auto& atoms = ctx.atoms;
 
-    const auto& atoms = mol.atoms();
-    auto scheme = mol.colorScheme();
-    const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
-    auto rf = [&](int i) -> float { return rbw ? (*rbw)[i] : -1.0f; };
-
-    // LOD: reduce subdivisions for large structures
-    int subdiv = subdivisions_;
-    if (atoms.size() > 20000) subdiv = std::max(2, subdiv / 4);
-    else if (atoms.size() > 5000) subdiv = std::max(3, subdiv / 2);
+    int subdiv = adjustLOD(subdivisions_, atoms.size());
 
     // Collect Cα atoms with C and O atoms for guide vectors
     struct CaAtom {
@@ -112,10 +82,8 @@ void RibbonRepr::render(const MolObject& mol, const Camera& cam,
             const auto& ca0 = allCas[i0]; const auto& ca1 = allCas[i1];
             const auto& ca2 = allCas[i2]; const auto& ca3 = allCas[i3];
 
-            int color1 = ColorMapper::colorForAtom(atoms[ca1.atomIdx], scheme,
-                mol.atomColor(ca1.atomIdx), rf(ca1.atomIdx));
-            int color2 = ColorMapper::colorForAtom(atoms[ca2.atomIdx], scheme,
-                mol.atomColor(ca2.atomIdx), rf(ca2.atomIdx));
+            int color1 = ctx.colorFor(ca1.atomIdx);
+            int color2 = ctx.colorFor(ca2.atomIdx);
 
             float w1, w2;
             auto ssWidth = [&](SSType ss) -> float {
@@ -189,8 +157,7 @@ void RibbonRepr::render(const MolObject& mol, const Camera& cam,
             const auto& last = allCas[chainEnd - 1];
             float w = (last.ss == SSType::Helix) ? helixWidth_ * 0.15f :
                       (last.ss == SSType::Sheet) ? sheetWidth_ * 0.15f : loopWidth_ * 0.08f;
-            int color = ColorMapper::colorForAtom(atoms[last.atomIdx], scheme,
-                mol.atomColor(last.atomIdx), rf(last.atomIdx));
+            int color = ctx.colorFor(last.atomIdx);
             // Use previous point's direction for edge offset
             if (!ribbon.empty()) {
                 auto& prev = ribbon.back();

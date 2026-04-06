@@ -1,7 +1,6 @@
 #pragma once
 
 #include "molterm/repr/Representation.h"
-#include "molterm/render/ColorMapper.h"
 
 namespace molterm {
 

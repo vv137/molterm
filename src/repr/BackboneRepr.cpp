@@ -7,15 +7,9 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
                           Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Backbone)) return;
 
-    const auto& atoms = mol.atoms();
-    auto scheme = mol.colorScheme();
-    const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
-    auto rf = [&](int i) { return rbw ? (*rbw)[i] : -1.0f; };
-
-    int r = static_cast<int>(thickness_ * static_cast<float>(canvas.scaleX()) + 0.5f);
-    if (r < 1) r = 1;
-
-    auto atomVis = mol.atomVisMask(ReprType::Backbone);
+    auto ctx = makeContext(mol, ReprType::Backbone);
+    const auto& atoms = ctx.atoms;
+    int r = toSubPixels(thickness_, canvas.scaleX());
 
     // Collect Cα atoms grouped by chain
     int sw = canvas.subW(), sh = canvas.subH();
@@ -31,7 +25,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
         if (a.name != "CA" && a.name != "P") continue;
-        if (!atomVis.empty() && !atomVis[i]) continue;
+        if (!ctx.visible(static_cast<int>(i))) continue;
 
         CaAtom ca;
         ca.idx = i;
@@ -52,7 +46,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         int y1 = static_cast<int>(std::round(cas[i].sy));
         float d0 = cas[i-1].depth, d1 = cas[i].depth;
 
-        int color = ColorMapper::colorForAtom(atoms[cas[i-1].idx], scheme, mol.atomColor(static_cast<int>(cas[i-1].idx)), rf(static_cast<int>(cas[i-1].idx)));
+        int color = ctx.colorFor(static_cast<int>(cas[i-1].idx));
 
         if (r <= 1) {
             canvas.drawLine(x0, y0, d0, x1, y1, d1, color);
@@ -69,7 +63,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         if (!ca.visible) continue;
         int sx = static_cast<int>(std::round(ca.sx));
         int sy = static_cast<int>(std::round(ca.sy));
-        int color = ColorMapper::colorForAtom(atoms[ca.idx], scheme, mol.atomColor(static_cast<int>(ca.idx)), rf(static_cast<int>(ca.idx)));
+        int color = ctx.colorFor(static_cast<int>(ca.idx));
         canvas.drawCircle(sx, sy, ca.depth, r, color, true);
     }
 }

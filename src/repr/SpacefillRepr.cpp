@@ -26,20 +26,16 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
                            Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Spacefill)) return;
 
+    auto ctx = makeContext(mol, ReprType::Spacefill);
+    const auto& atoms = ctx.atoms;
     int cw = canvas.subW(), ch = canvas.subH();
-    const auto& atoms = mol.atoms();
-    auto scheme = mol.colorScheme();
-    const std::vector<float>* rbw = (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
-    auto rf = [&](int i) { return rbw ? (*rbw)[i] : -1.0f; };
-
-    auto atomVis = mol.atomVisMask(ReprType::Spacefill);
 
     struct ProjAtom { int idx; int sx, sy; float depth; int radius; int color; };
     std::vector<ProjAtom> projected;
     projected.reserve(atoms.size());
 
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
-        if (!atomVis.empty() && !atomVis[i]) continue;
+        if (!ctx.visible(i)) continue;
         const auto& a = atoms[i];
         float fsx, fsy, depth;
         cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);
@@ -50,7 +46,7 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
         int r = static_cast<int>(vdw * scale_ * static_cast<float>(canvas.scaleX()) * cam.zoom() + 0.5f);
         if (r < 1) r = 1;
 
-        int color = ColorMapper::colorForAtom(a, scheme, mol.atomColor(i), rf(i));
+        int color = ctx.colorFor(i);
         projected.push_back({i,
             static_cast<int>(std::round(fsx)),
             static_cast<int>(std::round(fsy)),
