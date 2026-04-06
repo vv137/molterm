@@ -13,7 +13,6 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
 
     // Collect Cα atoms grouped by chain
     int sw = canvas.subW(), sh = canvas.subH();
-    int margin = r * 3;
 
     struct CaAtom {
         size_t idx;
@@ -31,8 +30,7 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
         ca.idx = i;
         ca.chainId = a.chainId;
         cam.projectCached(a.x, a.y, a.z, ca.sx, ca.sy, ca.depth);
-        ca.visible = (ca.sx >= -margin && ca.sx < sw + margin &&
-                      ca.sy >= -margin && ca.sy < sh + margin);
+        ca.visible = inFrustum(ca.sx, ca.sy, sw, sh, r * 3);
         cas.push_back(ca);
     }
 

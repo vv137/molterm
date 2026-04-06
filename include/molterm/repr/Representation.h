@@ -61,6 +61,12 @@ protected:
         return std::max(minVal, r);
     }
 
+    // Frustum check: is a projected point within canvas bounds + margin?
+    static bool inFrustum(float sx, float sy, int canvasW, int canvasH, int margin) {
+        return sx >= -margin && sx < canvasW + margin &&
+               sy >= -margin && sy < canvasH + margin;
+    }
+
     // Adjust subdivision level based on atom count (for LOD).
     static int adjustLOD(int baseSub, size_t atomCount) {
         if (atomCount > lodLowThreshold) return std::max(2, baseSub / 4);

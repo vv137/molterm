@@ -21,8 +21,7 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
         cam.projectCached(a.x, a.y, a.z, proj[i].sx, proj[i].sy, proj[i].depth);
-        proj[i].valid = (proj[i].sx >= 0 && proj[i].sx < cw &&
-                         proj[i].sy >= 0 && proj[i].sy < ch);
+        proj[i].valid = inFrustum(proj[i].sx, proj[i].sy, cw, ch, r * 2);
     }
 
     // Helper: draw a line segment, thin or thick

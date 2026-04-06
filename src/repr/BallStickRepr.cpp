@@ -13,14 +13,12 @@ void BallStickRepr::render(const MolObject& mol, const Camera& cam,
     int radius = toSubPixels(ballRadius_, canvas.scaleX());
 
     int sw = canvas.subW(), sh = canvas.subH();
-    int margin = radius * 2;
     struct Projected { float sx, sy, depth; bool valid; };
     std::vector<Projected> proj(atoms.size());
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
         cam.projectCached(a.x, a.y, a.z, proj[i].sx, proj[i].sy, proj[i].depth);
-        proj[i].valid = (proj[i].sx >= -margin && proj[i].sx < sw + margin &&
-                         proj[i].sy >= -margin && proj[i].sy < sh + margin);
+        proj[i].valid = inFrustum(proj[i].sx, proj[i].sy, sw, sh, radius * 2);
     }
 
     // Draw bonds as thin lines

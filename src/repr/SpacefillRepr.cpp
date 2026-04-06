@@ -39,11 +39,10 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
         const auto& a = atoms[i];
         float fsx, fsy, depth;
         cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);
-        if (fsx < -100 || fsx > cw + 100 || fsy < -100 || fsy > ch + 100)
-            continue;
 
         float vdw = vdwRadius(a.element);
         int r = static_cast<int>(vdw * scale_ * static_cast<float>(canvas.scaleX()) * cam.zoom() + 0.5f);
+        if (!inFrustum(fsx, fsy, cw, ch, r)) continue;
         if (r < 1) r = 1;
 
         int color = ctx.colorFor(i);
