@@ -36,7 +36,7 @@ static int applyHeteroatomColors(MolObject& obj) {
     const auto& atoms = obj.atoms();
     int count = 0;
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
-        if (atoms[i].element != "C" && atoms[i].element != "H") {
+        if (atoms[i].element != "C") {
             obj.setAtomColor(i, ColorMapper::colorForElement(atoms[i].element));
             ++count;
         }
@@ -184,6 +184,7 @@ void Application::setRenderer(RendererType type) {
 
 int Application::run() {
     running_ = true;
+    layout_.markAllDirty();
     needsRedraw_ = true;
     framesToSkip_ = 0;
 
@@ -196,17 +197,19 @@ int Application::run() {
         if (needsRedraw_) {
             if (framesToSkip_ > 0) {
                 --framesToSkip_;
+                // Don't clear needsRedraw_ — the skipped frame must still render
             } else {
                 auto t0 = std::chrono::steady_clock::now();
                 renderFrame();
                 auto t1 = std::chrono::steady_clock::now();
                 lastFrameMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
+                // Only skip continuous camera motion frames, not discrete commands
                 if (lastFrameMs_ > 100) {
                     framesToSkip_ = std::min(3, static_cast<int>(lastFrameMs_ / 50));
                 }
+                needsRedraw_ = false;
             }
-            needsRedraw_ = false;
         }
 
         processInput();
@@ -242,6 +245,7 @@ std::string Application::loadFile(const std::string& path) {
         auto ptr = store_.add(std::move(obj));
         tabMgr_.currentTab().addObject(ptr);
         if (autoCenter_) tabMgr_.currentTab().centerView();
+        layout_.markAllDirty();
         needsRedraw_ = true;
 
         std::string msg = "Loaded " + name + ": " +
@@ -279,6 +283,8 @@ void Application::processInput() {
         } else {
             cmdLine_.setMessage("Invalid macro register (use a-z)");
         }
+        layout_.markDirty(Layout::Component::CommandLine);
+        layout_.markDirty(Layout::Component::StatusBar);
         needsRedraw_ = true;
         return;
     }
@@ -286,8 +292,10 @@ void Application::processInput() {
         macroPlayAwaitingRegister_ = false;
         if (key >= 'a' && key <= 'z') {
             playMacro(static_cast<char>(key));
+            layout_.markAllDirty();  // macro playback can affect anything
         } else {
             cmdLine_.setMessage("Invalid macro register (use a-z)");
+            layout_.markDirty(Layout::Component::CommandLine);
         }
         needsRedraw_ = true;
         return;
@@ -296,6 +304,7 @@ void Application::processInput() {
     // Dismiss help overlay on any key
     if (helpOverlay_) {
         helpOverlay_ = false;
+        layout_.markDirty(Layout::Component::Viewport);
         needsRedraw_ = true;
         return;
     }
@@ -326,21 +335,35 @@ void Application::handleMouse(int /*key*/) {
     MEVENT event;
     if (getmouse(&event) != OK) return;
 
+    using C = Layout::Component;
     auto& tab = tabMgr_.currentTab();
     auto& cam = tab.camera();
 
     needsRedraw_ = true;
 
-    // Scroll wheel for zoom
+    // Scroll wheel for zoom — only viewport + status bar
     if (event.bstate & BUTTON4_PRESSED) {
         cam.zoomBy(1.15f);
+        layout_.markDirty(C::Viewport);
+        layout_.markDirty(C::StatusBar);
+        return;
     }
 #ifdef BUTTON5_PRESSED
-    else if (event.bstate & BUTTON5_PRESSED) {
+    if (event.bstate & BUTTON5_PRESSED) {
         cam.zoomBy(1.0f / 1.15f);
+        layout_.markDirty(C::Viewport);
+        layout_.markDirty(C::StatusBar);
+        return;
     }
 #endif
-    else if (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED)) {
+
+    // Non-scroll clicks: may affect all visible components
+    layout_.markDirty(C::Viewport);
+    layout_.markDirty(C::CommandLine);
+    layout_.markDirty(C::StatusBar);
+    layout_.markDirty(C::SeqBar);
+
+    if (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED)) {
         // Check if click is in tab bar region (row 0)
         if (event.y == 0) {
             auto names = tabMgr_.tabNames();
@@ -429,8 +452,8 @@ void Application::handleMouse(int /*key*/) {
             } else {
                 // Inspect mode — show info at current level
                 pickedAtomIdx_ = atomIdx;
-                focusResi_ = a.resSeq;
-                focusChain_ = a.chainId;
+                activeViewState().focusResi = a.resSeq;
+                activeViewState().focusChain = a.chainId;
                 // Store in pick register (pk1-pk4, rotating)
                 pickRegs_[pickNext_] = atomIdx;
                 int pkNum = pickNext_ + 1;  // 1-based
@@ -484,11 +507,11 @@ void Application::handleMouse(int /*key*/) {
             int seqBarH = layout_.seqBar().height();
             if (event.y >= seqBarY && event.y < seqBarY + seqBarH) {
                 std::string clickChain;
-                int resi = seqBar_.resSeqAtColumn(event.x, layout_.seqBarWrap(),
+                int resi = activeSeqBar().resSeqAtColumn(event.x, layout_.seqBarWrap(),
                                                    layout_.seqBar().width(), &clickChain);
                 if (resi >= 0) {
-                    focusResi_ = resi;
-                    focusChain_ = clickChain;
+                    activeViewState().focusResi = resi;
+                    activeViewState().focusChain = clickChain;
                     auto obj = tabMgr_.currentTab().currentObject();
                     if (obj) {
                         const auto& atoms = obj->atoms();
@@ -511,38 +534,51 @@ void Application::handleMouse(int /*key*/) {
 }
 
 void Application::handleAction(Action action) {
+    using C = Layout::Component;
     auto& tab = tabMgr_.currentTab();
     auto& cam = tab.camera();
     float rs = cam.rotationSpeed();
 
-    needsRedraw_ = true;
+    // Helper: mark specific components dirty and request redraw
+    auto dirty = [&](std::initializer_list<C> components) {
+        for (auto c : components) layout_.markDirty(c);
+        needsRedraw_ = true;
+    };
 
     switch (action) {
-        // Navigation
-        case Action::RotateLeft:   cam.rotateY(-rs);  break;
-        case Action::RotateRight:  cam.rotateY(rs);   break;
-        case Action::RotateUp:     cam.rotateX(-rs);  break;
-        case Action::RotateDown:   cam.rotateX(rs);   break;
-        case Action::RotateCW:    cam.rotateZ(rs);   break;
-        case Action::RotateCCW:   cam.rotateZ(-rs);  break;
-        case Action::PanLeft:     cam.pan(-cam.panSpeed(), 0);    break;
-        case Action::PanRight:    cam.pan(cam.panSpeed(), 0);     break;
-        case Action::PanUp:       cam.pan(0, -cam.panSpeed());    break;
-        case Action::PanDown:     cam.pan(0, cam.panSpeed());     break;
-        case Action::ZoomIn:      cam.zoomBy(1.2f);  break;
-        case Action::ZoomOut:     cam.zoomBy(1.0f/1.2f); break;
-        case Action::ResetView:   cam.reset(); tab.centerView(); break;
-        case Action::CenterSelection: tab.centerView(); break;
+        // Navigation — only viewport + status bar
+        case Action::RotateLeft:   cam.rotateY(-rs);  dirty({C::Viewport, C::StatusBar}); break;
+        case Action::RotateRight:  cam.rotateY(rs);   dirty({C::Viewport, C::StatusBar}); break;
+        case Action::RotateUp:     cam.rotateX(-rs);  dirty({C::Viewport, C::StatusBar}); break;
+        case Action::RotateDown:   cam.rotateX(rs);   dirty({C::Viewport, C::StatusBar}); break;
+        case Action::RotateCW:    cam.rotateZ(rs);    dirty({C::Viewport, C::StatusBar}); break;
+        case Action::RotateCCW:   cam.rotateZ(-rs);   dirty({C::Viewport, C::StatusBar}); break;
+        case Action::PanLeft:     cam.pan(-cam.panSpeed(), 0);  dirty({C::Viewport, C::StatusBar}); break;
+        case Action::PanRight:    cam.pan(cam.panSpeed(), 0);   dirty({C::Viewport, C::StatusBar}); break;
+        case Action::PanUp:       cam.pan(0, -cam.panSpeed());  dirty({C::Viewport, C::StatusBar}); break;
+        case Action::PanDown:     cam.pan(0, cam.panSpeed());   dirty({C::Viewport, C::StatusBar}); break;
+        case Action::ZoomIn:      cam.zoomBy(1.2f);  dirty({C::Viewport, C::StatusBar}); break;
+        case Action::ZoomOut:     cam.zoomBy(1.0f/1.2f); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::ResetView:   cam.reset(); tab.centerView(); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::CenterSelection: tab.centerView(); dirty({C::Viewport, C::StatusBar}); break;
         case Action::Redraw:
             clearScreenAndRepaint();
+            layout_.markAllDirty(); needsRedraw_ = true;
             break;
 
-        // Objects
-        case Action::NextObject:    tab.selectNextObject(); break;
-        case Action::PrevObject:    tab.selectPrevObject(); break;
+        // Objects — viewport + panels + seqbar + status
+        case Action::NextObject:
+            tab.selectNextObject();
+            dirty({C::Viewport, C::ObjectPanel, C::SeqBar, C::StatusBar});
+            break;
+        case Action::PrevObject:
+            tab.selectPrevObject();
+            dirty({C::Viewport, C::ObjectPanel, C::SeqBar, C::StatusBar});
+            break;
         case Action::ToggleVisible: {
             auto obj = tab.currentObject();
             if (obj) obj->toggleVisible();
+            dirty({C::Viewport, C::ObjectPanel, C::StatusBar});
             break;
         }
         case Action::DeleteObject: {
@@ -552,118 +588,73 @@ void Application::handleAction(Action action) {
                 if (obj) store_.remove(obj->name());
                 tab.removeObject(idx);
             }
+            dirty({C::Viewport, C::ObjectPanel, C::SeqBar, C::StatusBar});
             break;
         }
 
-        // Representations
-        case Action::ShowWireframe: {
-            auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::Wireframe);
-            break;
-        }
-        case Action::ShowBallStick: {
-            auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::BallStick);
-            break;
-        }
-        case Action::ShowSpacefill: {
-            auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::Spacefill);
-            break;
-        }
-        case Action::ShowCartoon: {
-            auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::Cartoon);
-            break;
-        }
-        case Action::ShowRibbon: {
-            auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::Ribbon);
-            break;
-        }
-        case Action::ShowBackbone: {
-            auto obj = tab.currentObject();
-            if (obj) obj->showRepr(ReprType::Backbone);
-            break;
-        }
-        case Action::HideWireframe: {
-            auto obj = tab.currentObject();
-            if (obj) obj->hideRepr(ReprType::Wireframe);
-            break;
-        }
-        case Action::HideBallStick: {
-            auto obj = tab.currentObject();
-            if (obj) obj->hideRepr(ReprType::BallStick);
-            break;
-        }
-        case Action::HideSpacefill: {
-            auto obj = tab.currentObject();
-            if (obj) obj->hideRepr(ReprType::Spacefill);
-            break;
-        }
-        case Action::HideCartoon: {
-            auto obj = tab.currentObject();
-            if (obj) obj->hideRepr(ReprType::Cartoon);
-            break;
-        }
-        case Action::HideRibbon: {
-            auto obj = tab.currentObject();
-            if (obj) obj->hideRepr(ReprType::Ribbon);
-            break;
-        }
-        case Action::HideBackbone: {
-            auto obj = tab.currentObject();
-            if (obj) obj->hideRepr(ReprType::Backbone);
-            break;
-        }
-        case Action::HideAll: {
-            auto obj = tab.currentObject();
-            if (obj) obj->hideAllRepr();
-            break;
-        }
+        // Representations — viewport only
+        case Action::ShowWireframe: { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Wireframe); dirty({C::Viewport}); break; }
+        case Action::ShowBallStick: { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::BallStick); dirty({C::Viewport}); break; }
+        case Action::ShowSpacefill: { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Spacefill); dirty({C::Viewport}); break; }
+        case Action::ShowCartoon:   { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Cartoon);   dirty({C::Viewport}); break; }
+        case Action::ShowRibbon:    { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Ribbon);    dirty({C::Viewport}); break; }
+        case Action::ShowBackbone:  { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Backbone);  dirty({C::Viewport}); break; }
+        case Action::HideWireframe: { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Wireframe); dirty({C::Viewport}); break; }
+        case Action::HideBallStick: { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::BallStick); dirty({C::Viewport}); break; }
+        case Action::HideSpacefill: { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Spacefill); dirty({C::Viewport}); break; }
+        case Action::HideCartoon:   { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Cartoon);   dirty({C::Viewport}); break; }
+        case Action::HideRibbon:    { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Ribbon);    dirty({C::Viewport}); break; }
+        case Action::HideBackbone:  { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Backbone);  dirty({C::Viewport}); break; }
+        case Action::HideAll:       { auto obj = tab.currentObject(); if (obj) obj->hideAllRepr();                 dirty({C::Viewport}); break; }
 
-        // Coloring
-        case Action::ColorByElement: {
-            auto obj = tab.currentObject();
-            if (obj) applyHeteroatomColors(*obj);
-            break;
-        }
-        case Action::ColorByChain: {
-            auto obj = tab.currentObject();
-            if (obj) obj->setColorScheme(ColorScheme::Chain);
-            break;
-        }
-        case Action::ColorBySS: {
-            auto obj = tab.currentObject();
-            if (obj) obj->setColorScheme(ColorScheme::SecondaryStructure);
-            break;
-        }
-        case Action::ColorByBFactor: {
-            auto obj = tab.currentObject();
-            if (obj) obj->setColorScheme(ColorScheme::BFactor);
-            break;
-        }
+        // Coloring — viewport + seqbar
+        case Action::ColorByElement: { auto obj = tab.currentObject(); if (obj) applyHeteroatomColors(*obj); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByChain:   { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::Chain);              dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorBySS:      { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::SecondaryStructure); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByBFactor: { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::BFactor);            dirty({C::Viewport, C::SeqBar}); break; }
 
-        // Tabs
-        case Action::NextTab:  tabMgr_.nextTab(); break;
-        case Action::PrevTab:  tabMgr_.prevTab(); break;
-        case Action::NewTab:   tabMgr_.addTab(); break;
-        case Action::CloseTab: tabMgr_.closeCurrentTab(); break;
+        // Tabs — swap view state on switch (applyViewState marks changed components dirty)
+        case Action::NextTab:
+            tabMgr_.nextTab();
+            layout_.applyViewState(activeViewState());
+            layout_.markAllDirty(); needsRedraw_ = true;
+            break;
+        case Action::PrevTab:
+            tabMgr_.prevTab();
+            layout_.applyViewState(activeViewState());
+            layout_.markAllDirty(); needsRedraw_ = true;
+            break;
+        case Action::NewTab:
+            tabMgr_.addTab();
+            dirty({C::TabBar});
+            break;
+        case Action::CloseTab:
+            tabMgr_.closeCurrentTab();
+            layout_.applyViewState(activeViewState());
+            layout_.markAllDirty(); needsRedraw_ = true;
+            break;
 
-        // Panel
-        case Action::TogglePanel: layout_.togglePanel(); break;
+        // Panel — update both Layout and current tab's view state
+        case Action::TogglePanel:
+            layout_.togglePanel();
+            activeViewState().panelVisible = layout_.panelVisible();
+            dirty({C::Viewport, C::ObjectPanel});
+            break;
 
-        // Mode transitions
+        // Mode transitions — command line only
         case Action::EnterCommand:
             inputHandler_->setMode(Mode::Command);
             cmdLine_.activate(':');
+            dirty({C::CommandLine, C::StatusBar});
             break;
         case Action::EnterSearch:
             inputHandler_->setMode(Mode::Search);
             cmdLine_.activate('/');
+            dirty({C::CommandLine, C::StatusBar});
             break;
         case Action::EnterVisual:
             inputHandler_->setMode(Mode::Visual);
+            dirty({C::StatusBar});
             break;
         case Action::ExitToNormal:
             inputHandler_->setMode(Mode::Normal);
@@ -674,9 +665,10 @@ void Application::handleAction(Action action) {
                 cmdLine_.setMessage("Inspect mode | sele=" +
                     std::to_string(namedSelections_["sele"].size()));
             }
+            dirty({C::CommandLine, C::StatusBar});
             break;
 
-        // Command mode actions
+        // Command mode actions — commands can affect any component
         case Action::ExecuteCommand: {
             std::string input = cmdLine_.input();
             cmdLine_.pushHistory(input);
@@ -684,6 +676,7 @@ void Application::handleAction(Action action) {
             inputHandler_->setMode(Mode::Normal);
             std::string result = cmdRegistry_.execute(*this, input);
             if (!result.empty()) cmdLine_.setMessage(result);
+            layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
         case Action::Autocomplete: {
@@ -782,28 +775,29 @@ void Application::handleAction(Action action) {
                     cmdLine_.setMessage(msg);
                 }
             }
+            dirty({C::CommandLine});
             break;
         }
-        case Action::HistoryPrev: cmdLine_.historyPrev(); break;
-        case Action::HistoryNext: cmdLine_.historyNext(); break;
-        case Action::DeleteWord:  cmdLine_.deleteWord();  break;
-        case Action::ClearLine:   cmdLine_.clearInput();  break;
+        case Action::HistoryPrev: cmdLine_.historyPrev(); dirty({C::CommandLine}); break;
+        case Action::HistoryNext: cmdLine_.historyNext(); dirty({C::CommandLine}); break;
+        case Action::DeleteWord:  cmdLine_.deleteWord();  dirty({C::CommandLine}); break;
+        case Action::ClearLine:   cmdLine_.clearInput();  dirty({C::CommandLine}); break;
 
-        // Search
+        // Search — viewport (highlights) + command line + status
         case Action::ExecuteSearch: {
             std::string query = cmdLine_.input();
             cmdLine_.deactivate();
             inputHandler_->setMode(Mode::Normal);
             executeSearch(query);
+            dirty({C::Viewport, C::CommandLine, C::StatusBar});
             break;
         }
 
-        // Help
         // Search navigation
         case Action::SearchNext: {
             if (searchMatches_.empty()) {
                 cmdLine_.setMessage("No search results");
-                break;
+                dirty({C::CommandLine}); break;
             }
             auto obj = tab.currentObject();
             if (!obj) break;
@@ -813,12 +807,13 @@ void Application::handleAction(Action action) {
                                "/" + std::to_string(searchMatches_.size()) + "] " +
                                a.chainId + " " + a.resName + " " + std::to_string(a.resSeq) +
                                " " + a.name);
+            dirty({C::Viewport, C::CommandLine});
             break;
         }
         case Action::SearchPrev: {
             if (searchMatches_.empty()) {
                 cmdLine_.setMessage("No search results");
-                break;
+                dirty({C::CommandLine}); break;
             }
             auto obj = tab.currentObject();
             if (!obj) break;
@@ -829,43 +824,49 @@ void Application::handleAction(Action action) {
                                "/" + std::to_string(searchMatches_.size()) + "] " +
                                a.chainId + " " + a.resName + " " + std::to_string(a.resSeq) +
                                " " + a.name);
+            dirty({C::Viewport, C::CommandLine});
             break;
         }
 
-        // Undo/Redo
+        // Undo/Redo — can affect anything
         case Action::Undo: {
             std::string msg = undoStack_.undo();
             cmdLine_.setMessage(msg.empty() ? "Nothing to undo" : msg);
+            layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
         case Action::Redo: {
             std::string msg = undoStack_.redo();
             cmdLine_.setMessage(msg.empty() ? "Nothing to redo" : msg);
+            layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
 
-        // Screenshot
+        // Screenshot — command line message only
         case Action::Screenshot: {
             std::string result = cmdRegistry_.execute(*this, "screenshot");
             if (!result.empty()) cmdLine_.setMessage(result);
+            dirty({C::CommandLine});
             break;
         }
 
-        // Contact map toggle
+        // Contact map toggle — affects panels + viewport
         case Action::ToggleContactMap: {
             std::string result = cmdRegistry_.execute(*this, "contactmap");
             if (!result.empty()) cmdLine_.setMessage(result);
+            layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
 
-        // Interface overlay toggle
+        // Interface overlay toggle — viewport + panels
         case Action::ToggleInterface: {
             std::string result = cmdRegistry_.execute(*this, "interface");
             if (!result.empty()) cmdLine_.setMessage(result);
+            layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
 
-        // Renderer toggle (braille ↔ pixel)
+        // Renderer toggle — full redraw
         case Action::TogglePixelRenderer: {
             clearScreenAndRepaint();
             framesToSkip_ = 0;
@@ -879,42 +880,32 @@ void Application::handleAction(Action action) {
                 const char* name = (pc && pc->encoder()) ? pc->encoder()->name() : "PIXEL";
                 cmdLine_.setMessage(std::string("Renderer: ") + name);
             }
+            layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
 
-        // Macro recording
+        // Macro recording — command line message
         case Action::StartMacro:
             if (macroRecording_) {
-                // 'q' again while recording → stop (register already known)
                 stopMacroRecord();
             } else {
                 macroAwaitingRegister_ = true;
                 cmdLine_.setMessage("Record macro: press register (a-z)");
             }
+            dirty({C::CommandLine, C::StatusBar});
             break;
         case Action::PlayMacro:
             macroPlayAwaitingRegister_ = true;
             cmdLine_.setMessage("Play macro: press register (a-z)");
+            dirty({C::CommandLine, C::StatusBar});
             break;
 
-        // pLDDT coloring
-        case Action::ColorByPLDDT: {
-            auto obj = tab.currentObject();
-            if (obj) obj->setColorScheme(ColorScheme::PLDDT);
-            break;
-        }
-        case Action::ColorByRainbow: {
-            auto obj = tab.currentObject();
-            if (obj) obj->setColorScheme(ColorScheme::Rainbow);
-            break;
-        }
-        case Action::ColorByResType: {
-            auto obj = tab.currentObject();
-            if (obj) obj->setColorScheme(ColorScheme::ResType);
-            break;
-        }
+        // More coloring — viewport + seqbar
+        case Action::ColorByPLDDT:   { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::PLDDT);   dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByRainbow: { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::Rainbow); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByResType: { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::ResType); dirty({C::Viewport, C::SeqBar}); break; }
 
-        // Multi-state cycling
+        // Multi-state cycling — viewport + seqbar + status
         case Action::NextState: {
             auto obj = tab.currentObject();
             if (obj && obj->stateCount() > 1) {
@@ -924,6 +915,7 @@ void Application::handleAction(Action action) {
             } else {
                 cmdLine_.setMessage("Single-state structure");
             }
+            dirty({C::Viewport, C::SeqBar, C::CommandLine, C::StatusBar});
             break;
         }
         case Action::PrevState: {
@@ -935,24 +927,27 @@ void Application::handleAction(Action action) {
             } else {
                 cmdLine_.setMessage("Single-state structure");
             }
+            dirty({C::Viewport, C::SeqBar, C::CommandLine, C::StatusBar});
             break;
         }
 
-        // Inspect (mouse-only — 'i' just shows level info)
+        // Inspect — command line message
         case Action::Inspect:
             cmdLine_.setMessage(std::string("Click to inspect | gs/gS/gc to select | Level: ") +
                 inspectLevelName(inspectLevel_));
+            dirty({C::CommandLine});
             break;
 
-        // Cycle inspect level: Atom → Residue → Chain → Object
+        // Cycle inspect level
         case Action::CycleInspectLevel: {
             inspectLevel_ = static_cast<InspectLevel>(
                 (static_cast<int>(inspectLevel_) + 1) % 4);
             cmdLine_.setMessage(std::string("Inspect level: ") + inspectLevelName(inspectLevel_));
+            dirty({C::CommandLine});
             break;
         }
 
-        // Pick mode: toggle atom/residue/chain selection mode
+        // Pick mode
         case Action::EnterSelectAtom:
         case Action::EnterSelectResidue:
         case Action::EnterSelectChain: {
@@ -966,6 +961,7 @@ void Application::handleAction(Action action) {
                     std::to_string(namedSelections_["sele"].size()));
             else
                 cmdLine_.setMessage("Inspect mode");
+            dirty({C::CommandLine, C::StatusBar});
             break;
         }
 
@@ -982,6 +978,9 @@ void Application::handleAction(Action action) {
                 layout_.toggleSeqBar();
                 cmdLine_.setMessage("Sequence bar: hidden");
             }
+            // Sync to per-tab view state
+            activeViewState().seqBarVisible = layout_.seqBarVisible();
+            activeViewState().seqBarWrap = layout_.seqBarWrap();
             if (canvas_) canvas_->invalidate();
             onResize();
             break;
@@ -989,26 +988,30 @@ void Application::handleAction(Action action) {
 
         case Action::SeqBarNextChain:
             if (layout_.seqBarVisible() && !layout_.seqBarWrap()) {
-                seqBar_.nextChain();
-                seqBar_.scrollToChain(seqBar_.activeChain());
-                cmdLine_.setMessage("Chain: " + seqBar_.activeChain());
+                activeSeqBar().nextChain();
+                activeSeqBar().scrollToChain(activeSeqBar().activeChain());
+                cmdLine_.setMessage("Chain: " + activeSeqBar().activeChain());
             }
+            dirty({C::SeqBar, C::CommandLine});
             break;
         case Action::SeqBarPrevChain:
             if (layout_.seqBarVisible() && !layout_.seqBarWrap()) {
-                seqBar_.prevChain();
-                seqBar_.scrollToChain(seqBar_.activeChain());
-                cmdLine_.setMessage("Chain: " + seqBar_.activeChain());
+                activeSeqBar().prevChain();
+                activeSeqBar().scrollToChain(activeSeqBar().activeChain());
+                cmdLine_.setMessage("Chain: " + activeSeqBar().activeChain());
             }
+            dirty({C::SeqBar, C::CommandLine});
             break;
 
         case Action::ShowOverlay:
             overlayVisible_ = true;
             cmdLine_.setMessage("Overlays visible");
+            dirty({C::Viewport, C::CommandLine});
             break;
         case Action::HideOverlay:
             overlayVisible_ = false;
             cmdLine_.setMessage("Overlays hidden");
+            dirty({C::Viewport, C::CommandLine});
             break;
 
         case Action::ApplyPreset: {
@@ -1017,11 +1020,13 @@ void Application::handleAction(Action action) {
                 obj->applySmartDefaults();
                 cmdLine_.setMessage("Applied default preset");
             }
+            dirty({C::Viewport, C::CommandLine});
             break;
         }
 
         case Action::ShowHelp:
             helpOverlay_ = true;
+            dirty({C::Viewport});
             break;
 
         default:
@@ -1062,9 +1067,8 @@ void Application::handleSearchInput(int key) {
 void Application::renderFrame() {
     ++frameCounter_;
 
-    // Mark all components dirty for now. The dirty-flag infrastructure enables
-    // future per-component optimization (e.g., skip ObjectPanel when only camera moves).
-    layout_.markAllDirty();
+    // Dirty flags are now set selectively by handleAction/handleMouse/onResize.
+    // No blanket markAllDirty() here.
 
     // Tab bar
     if (layout_.isDirty(Layout::Component::TabBar))
@@ -1074,17 +1078,19 @@ void Application::renderFrame() {
     if (layout_.seqBarVisible()) {
         auto obj = tabMgr_.currentTab().currentObject();
         if (obj) {
-            seqBar_.update(*obj);
+            activeSeqBar().update(*obj);
             if (layout_.seqBarWrap()) {
-                int needed = std::min(seqBar_.wrapRows(layout_.seqBar().width()),
+                int needed = std::min(activeSeqBar().wrapRows(layout_.seqBar().width()),
                                       screen_.height() / 4);
                 if (needed != layout_.seqBar().height()) {
                     layout_.setSeqBarHeight(std::max(1, needed));
+                    activeViewState().seqBarHeight = layout_.seqBar().height();
                     if (canvas_) canvas_->invalidate();
                 }
             } else {
                 if (layout_.seqBar().height() != 1) {
                     layout_.setSeqBarHeight(1);
+                    activeViewState().seqBarHeight = 1;
                     if (canvas_) canvas_->invalidate();
                 }
             }
@@ -1092,7 +1098,8 @@ void Application::renderFrame() {
     }
 
     // Viewport — render to canvas but defer pixel flush
-    renderViewport();
+    if (layout_.isDirty(Layout::Component::Viewport))
+        renderViewport();
 
     // Clear camera dirty flag after rendering (so caches like Spacefill sort work)
     tabMgr_.currentTab().camera().clearDirty();
@@ -1116,7 +1123,7 @@ void Application::renderFrame() {
             const Selection* sele = nullptr;
             auto selIt = namedSelections_.find("sele");
             if (selIt != namedSelections_.end()) sele = &selIt->second;
-            seqBar_.render(layout_.seqBar(), focusResi_, focusChain_, sele,
+            activeSeqBar().render(layout_.seqBar(), activeViewState().focusResi, activeViewState().focusChain, sele,
                           obj->colorScheme(), layout_.seqBarWrap());
         }
     }
@@ -1444,6 +1451,7 @@ void Application::onResize() {
     endwin();
     refresh();
     layout_.resize(screen_.height(), screen_.width());
+    layout_.markAllDirty();
     if (canvas_) canvas_->invalidate();
     framesToSkip_ = 0;
     needsRedraw_ = true;
@@ -1699,7 +1707,7 @@ void Application::registerCommands() {
         return "Showing " + cmd.args[0];
     }, ":show <repr> [selection]", "Show representation (optionally for selection)");
 
-    // :hide <repr|all> [selection]
+    // :hide [repr|all] [selection]
     cmdRegistry_.registerCmd("hide", [resolveRepr](Application& app, const ParsedCommand& cmd) -> std::string {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return "No object selected";
@@ -1708,7 +1716,20 @@ void Application::registerCommands() {
             return "Hidden all representations";
         }
         ReprType rt;
-        if (!resolveRepr(cmd.args[0], rt)) return "Unknown representation: " + cmd.args[0];
+        bool hasRepr = resolveRepr(cmd.args[0], rt);
+
+        if (!hasRepr) {
+            // No repr specified — treat all args as selection, hide all reprs for those atoms
+            std::string expr;
+            for (size_t i = 0; i < cmd.args.size(); ++i) {
+                if (i > 0) expr += " ";
+                expr += cmd.args[i];
+            }
+            auto sel = app.parseSelection(expr, *obj);
+            if (sel.empty()) return "No atoms match: " + expr;
+            obj->hideAllReprForAtoms(std::vector<int>(sel.indices().begin(), sel.indices().end()));
+            return "Hidden all representations for " + std::to_string(sel.size()) + " atoms";
+        }
 
         if (cmd.args.size() > 1) {
             std::string expr;
@@ -1723,7 +1744,7 @@ void Application::registerCommands() {
         }
         obj->hideRepr(rt);
         return "Hidden " + cmd.args[0];
-    }, ":hide <repr|all> [selection]", "Hide representation (optionally for selection)");
+    }, ":hide [repr|all] [selection]", "Hide representation (optionally for selection)");
 
     // :color <scheme>
     cmdRegistry_.registerCmd("color", [](Application& app, const ParsedCommand& cmd) -> std::string {
@@ -1937,6 +1958,7 @@ void Application::registerCommands() {
         const auto& opt = cmd.args[0];
         if (opt == "panel") {
             app.layout().togglePanel();
+            app.tabs().currentTab().viewState().panelVisible = app.layout().panelVisible();
             return app.layout().panelVisible() ? "Panel visible" : "Panel hidden";
         }
         if (opt == "renderer" || opt == "render") {
@@ -2048,12 +2070,16 @@ void Application::registerCommands() {
         }
         if (opt == "seqbar") {
             app.layout().toggleSeqBar();
+            auto& vs = app.tabs().currentTab().viewState();
+            vs.seqBarVisible = app.layout().seqBarVisible();
             if (app.canvas()) app.canvas()->invalidate();
             app.onResize();
             return app.layout().seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden";
         }
         if (opt == "seqwrap") {
             app.layout().toggleSeqBarWrap();
+            auto& vs = app.tabs().currentTab().viewState();
+            vs.seqBarWrap = app.layout().seqBarWrap();
             if (app.canvas()) app.canvas()->invalidate();
             app.onResize();
             return app.layout().seqBarWrap() ? "Sequence bar: wrap" : "Sequence bar: scroll";
@@ -2716,6 +2742,7 @@ void Application::registerCommands() {
             try { cutoff = std::stof(cmd.args[0]); } catch (...) {}
         }
         app.layout().toggleAnalysisPanel();
+        app.tabs().currentTab().viewState().analysisPanelVisible = app.layout().analysisPanelVisible();
         if (app.layout().analysisPanelVisible()) {
             auto obj = app.tabs().currentTab().currentObject();
             if (obj) {

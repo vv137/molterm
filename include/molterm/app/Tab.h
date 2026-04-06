@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "molterm/app/TabViewState.h"
 #include "molterm/core/MolObject.h"
 #include "molterm/render/Camera.h"
 
@@ -31,6 +32,10 @@ public:
     Camera& camera() { return camera_; }
     const Camera& camera() const { return camera_; }
 
+    // Per-tab view state (SeqBar, panel visibility, etc.)
+    TabViewState& viewState() { return viewState_; }
+    const TabViewState& viewState() const { return viewState_; }
+
     // Center camera on all loaded objects
     void centerView();
 
@@ -39,6 +44,7 @@ private:
     std::vector<std::shared_ptr<MolObject>> objects_;
     int selectedIdx_ = -1;
     Camera camera_;
+    TabViewState viewState_;
 };
 
 } // namespace molterm

@@ -5,13 +5,14 @@
 #include <vector>
 
 #include "molterm/core/MolObject.h"
+#include "molterm/tui/Widget.h"
 #include "molterm/tui/Window.h"
 
 namespace molterm {
 
 class Selection;
 
-class SeqBar {
+class SeqBar : public Widget {
 public:
     // Extract sequence from a MolObject
     void update(const MolObject& mol, const std::string& activeChainId = "");

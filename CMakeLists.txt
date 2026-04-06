@@ -82,6 +82,7 @@ set(MOLTERM_SOURCES
     # TUI
     src/tui/Screen.cpp
     src/tui/Window.cpp
+    src/tui/Constraint.cpp
     src/tui/Layout.cpp
     src/tui/StatusBar.cpp
     src/tui/CommandLine.cpp

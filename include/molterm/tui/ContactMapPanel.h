@@ -5,11 +5,12 @@
 
 #include "molterm/analysis/ContactMap.h"
 #include "molterm/tui/DensityMap.h"
+#include "molterm/tui/Widget.h"
 #include "molterm/tui/Window.h"
 
 namespace molterm {
 
-class ContactMapPanel {
+class ContactMapPanel : public Widget {
 public:
     // Recompute contact map for the given object
     void update(const MolObject& mol, float cutoff = 8.0f);

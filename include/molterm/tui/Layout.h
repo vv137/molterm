@@ -7,6 +7,15 @@
 
 namespace molterm {
 
+struct TabViewState;  // forward decl
+
+// Axis-aligned rectangle for layout computation
+struct Rect {
+    int y = 0, x = 0, h = 0, w = 0;
+    bool operator==(const Rect& o) const { return y == o.y && x == o.x && h == o.h && w == o.w; }
+    bool operator!=(const Rect& o) const { return !(*this == o); }
+};
+
 // Manages the main screen layout:
 //   [TabBar]
 //   [Viewport          | ObjectPanel  ]
@@ -20,6 +29,10 @@ public:
 
     void init(int screenH, int screenW);
     void resize(int screenH, int screenW);
+
+    // Apply per-tab view state (panel/seqbar visibility).
+    // Only rebuilds windows if geometry actually changed.
+    void applyViewState(const TabViewState& vs);
 
     Window& tabBar() { return *tabBar_; }
     Window& viewport() { return *viewport_; }
@@ -60,10 +73,13 @@ public:
     void markDirty(Component c);
     void markAllDirty();
     bool isDirty(Component c) const;
+    uint8_t dirtyFlags() const { return dirtyFlags_; }
 
     void refreshAll();
 
 private:
+    static constexpr int kNumComponents = 7;
+
     std::unique_ptr<Window> tabBar_;
     std::unique_ptr<Window> viewport_;
     std::unique_ptr<Window> objectPanel_;
@@ -71,6 +87,9 @@ private:
     std::unique_ptr<Window> seqBar_;
     std::unique_ptr<Window> statusBar_;
     std::unique_ptr<Window> commandLine_;
+
+    // Cached rects for incremental rebuild (Phase 3)
+    Rect rects_[kNumComponents] = {};
 
     int screenH_ = 0, screenW_ = 0;
     bool panelVisible_ = false;
@@ -82,7 +101,14 @@ private:
 
     uint8_t dirtyFlags_ = 0xFF; // all dirty initially
 
-    void rebuildWindows();
+    // Compute rects for all 7 components based on current flags/dimensions.
+    // Returns true if any rect changed vs cached.
+    bool computeRects(Rect out[kNumComponents]) const;
+
+    // Apply computed rects: resize only changed windows, mark them dirty.
+    void applyRects(const Rect newRects[kNumComponents]);
+
+    void updateLayout();
 };
 
 } // namespace molterm

@@ -1,4 +1,6 @@
 #include "molterm/tui/Layout.h"
+#include "molterm/tui/Constraint.h"
+#include "molterm/app/TabViewState.h"
 
 namespace molterm {
 
@@ -7,52 +9,61 @@ Layout::Layout() = default;
 void Layout::init(int screenH, int screenW) {
     screenH_ = screenH;
     screenW_ = screenW;
-    rebuildWindows();
+    updateLayout();
 }
 
 void Layout::resize(int screenH, int screenW) {
     screenH_ = screenH;
     screenW_ = screenW;
-    rebuildWindows();
+    updateLayout();
+}
+
+void Layout::applyViewState(const TabViewState& vs) {
+    panelVisible_ = vs.panelVisible;
+    analysisPanelVisible_ = vs.analysisPanelVisible;
+    seqBarVisible_ = vs.seqBarVisible;
+    seqBarWrap_ = vs.seqBarWrap;
+    seqBarHeight_ = vs.seqBarHeight;
+    updateLayout();
 }
 
 void Layout::togglePanel() {
     panelVisible_ = !panelVisible_;
-    rebuildWindows();
+    updateLayout();
 }
 
 void Layout::setPanel(bool visible) {
     if (panelVisible_ != visible) {
         panelVisible_ = visible;
-        rebuildWindows();
+        updateLayout();
     }
 }
 
 void Layout::toggleAnalysisPanel() {
     analysisPanelVisible_ = !analysisPanelVisible_;
-    rebuildWindows();
+    updateLayout();
 }
 
 void Layout::setAnalysisPanel(bool visible) {
     if (analysisPanelVisible_ != visible) {
         analysisPanelVisible_ = visible;
-        rebuildWindows();
+        updateLayout();
     }
 }
 
 void Layout::toggleSeqBar() {
     seqBarVisible_ = !seqBarVisible_;
-    rebuildWindows();
+    updateLayout();
 }
 
 void Layout::toggleSeqBarWrap() {
     seqBarWrap_ = !seqBarWrap_;
-    rebuildWindows();
+    updateLayout();
 }
 
 void Layout::setSeqBarHeight(int h) {
     seqBarHeight_ = std::max(1, h);
-    rebuildWindows();
+    updateLayout();
 }
 
 int Layout::viewportWidth() const {
@@ -96,66 +107,115 @@ void Layout::refreshAll() {
     refresh(Component::CommandLine,   commandLine_.get());
 }
 
-void Layout::rebuildWindows() {
-    // Layout:
-    // Row 0:              TabBar (1 line)
-    // Row 1..H-N:         Viewport [| ObjectPanel / AnalysisPanel]
-    // Row H-N..H-N+seqH:  SeqBar (optional, 1+ lines)
-    // Row H-2:            StatusBar (1 line)
-    // Row H-1:            CommandLine (1 line)
+// --- Constraint-based layout computation ---
 
-    int tabH = 1;
+bool Layout::computeRects(Rect out[kNumComponents]) const {
+    // Cap seqbar height
     int seqH = seqBarVisible_ ? seqBarHeight_ : 0;
-    int statusH = 1;
-    int cmdH = 1;
-    int vpH = screenH_ - tabH - seqH - statusH - cmdH;
-    if (vpH < 1) vpH = 1;
+    int maxSeqH = screenH_ / 4;
+    if (seqH > maxSeqH) seqH = maxSeqH;
 
-    // Right column: visible when either panel is active
+    // Right column width
     bool rightCol = panelVisible_ || analysisPanelVisible_;
-    int vpW = screenW_;
     int panelW = 0;
     if (rightCol) {
         panelW = panelWidth_;
         if (panelW > screenW_ / 2) panelW = screenW_ / 2;
-        vpW = screenW_ - panelW;
     }
 
-    // Cap seqbar height to avoid eating entire viewport
-    int maxSeqH = screenH_ / 4;
-    if (seqH > maxSeqH) { seqH = maxSeqH; vpH = screenH_ - tabH - seqH - statusH - cmdH; }
+    // ── Vertical strip: TabBar | MiddleRow | SeqBar | StatusBar | CommandLine ──
+    std::vector<LayoutSlot> vSlots = {
+        {SizePolicy::Fixed, 1,    true,  0, 0},                     // 0: TabBar
+        {SizePolicy::Fill,  1,    true,  1, 0},                     // 1: Middle row (viewport + panels)
+        {SizePolicy::Fixed, std::max(1, seqH), seqBarVisible_, 0, 0}, // 2: SeqBar
+        {SizePolicy::Fixed, 1,    true,  0, 0},                     // 3: StatusBar
+        {SizePolicy::Fixed, 1,    true,  0, 0},                     // 4: CommandLine
+    };
+    Rect screenRect = {0, 0, screenH_, screenW_};
+    auto vRects = solveLayout(screenRect, SplitDir::Vertical, vSlots);
 
-    tabBar_ = std::make_unique<Window>(tabH, screenW_, 0, 0);
-    viewport_ = std::make_unique<Window>(vpH, vpW, tabH, 0);
+    // ── Horizontal strip for middle row: Viewport | RightColumn ──
+    std::vector<LayoutSlot> hSlots = {
+        {SizePolicy::Fill,  1,    true, 1, 0},              // 0: Viewport
+        {SizePolicy::Fixed, panelW, rightCol, 0, 0},        // 1: Right column
+    };
+    auto hRects = solveLayout(vRects[1], SplitDir::Horizontal, hSlots);
 
-    // Right column split: ObjectPanel (top) + AnalysisPanel (bottom)
+    // ── Vertical split of right column: ObjectPanel | AnalysisPanel ──
+    Rect objRect, anlRect;
     if (rightCol) {
         if (panelVisible_ && analysisPanelVisible_) {
-            // Split: ObjectPanel gets top portion, AnalysisPanel gets rest
+            int vpH = hRects[1].h;
             int objH = std::min(12, vpH / 3);
             if (objH < 3) objH = 3;
             int anlH = vpH - objH;
             if (anlH < 1) { anlH = 1; objH = vpH - 1; }
-            objectPanel_ = std::make_unique<Window>(objH, panelW, tabH, vpW);
-            analysisPanel_ = std::make_unique<Window>(anlH, panelW, tabH + objH, vpW);
+            std::vector<LayoutSlot> pSlots = {
+                {SizePolicy::Fixed, objH, true, 3, 0},
+                {SizePolicy::Fill,  1,    true, 1, 0},
+            };
+            auto pRects = solveLayout(hRects[1], SplitDir::Vertical, pSlots);
+            objRect = pRects[0];
+            anlRect = pRects[1];
         } else if (panelVisible_) {
-            objectPanel_ = std::make_unique<Window>(vpH, panelW, tabH, vpW);
-            analysisPanel_ = std::make_unique<Window>(0, 0, tabH + vpH, vpW);
+            objRect = hRects[1];
+            anlRect = {hRects[1].y + hRects[1].h, hRects[1].x, 0, 0};
         } else {
-            // Only analysis panel
-            objectPanel_ = std::make_unique<Window>(0, 0, tabH, screenW_);
-            analysisPanel_ = std::make_unique<Window>(vpH, panelW, tabH, vpW);
+            objRect = {hRects[1].y, screenW_, 0, 0};
+            anlRect = hRects[1];
         }
     } else {
-        objectPanel_ = std::make_unique<Window>(vpH, 0, tabH, screenW_);
-        analysisPanel_ = std::make_unique<Window>(0, 0, tabH, screenW_);
+        int tabH = vRects[0].h;
+        int vpH = hRects[0].h;
+        objRect = {tabH, screenW_, vpH, 0};
+        anlRect = {tabH, screenW_, 0, 0};
     }
 
-    seqBar_ = std::make_unique<Window>(std::max(1, seqH), screenW_, tabH + vpH, 0);
-    statusBar_ = std::make_unique<Window>(statusH, screenW_, tabH + vpH + seqH, 0);
-    commandLine_ = std::make_unique<Window>(cmdH, screenW_, tabH + vpH + seqH + statusH, 0);
+    // Assemble output: [TabBar, Viewport, ObjectPanel, AnalysisPanel, SeqBar, StatusBar, CommandLine]
+    out[0] = vRects[0];       // TabBar
+    out[1] = hRects[0];       // Viewport
+    out[2] = objRect;         // ObjectPanel
+    out[3] = anlRect;         // AnalysisPanel
+    out[4] = vRects[2];       // SeqBar
+    out[5] = vRects[3];       // StatusBar
+    out[6] = vRects[4];       // CommandLine
 
-    markAllDirty();
+    // Check if anything changed
+    bool changed = false;
+    for (int i = 0; i < kNumComponents; ++i) {
+        if (out[i] != rects_[i]) { changed = true; break; }
+    }
+    return changed;
+}
+
+void Layout::applyRects(const Rect newRects[kNumComponents]) {
+    std::unique_ptr<Window>* windows[kNumComponents] = {
+        &tabBar_, &viewport_, &objectPanel_, &analysisPanel_,
+        &seqBar_, &statusBar_, &commandLine_
+    };
+
+    for (int i = 0; i < kNumComponents; ++i) {
+        const auto& r = newRects[i];
+        if (!*windows[i]) {
+            *windows[i] = std::make_unique<Window>(r.h, r.w, r.y, r.x);
+            markDirty(static_cast<Component>(i));
+        } else if (newRects[i] != rects_[i]) {
+            (*windows[i])->resize(r.h, r.w, r.y, r.x);
+            markDirty(static_cast<Component>(i));
+        }
+        rects_[i] = newRects[i];
+    }
+}
+
+void Layout::updateLayout() {
+    if (screenH_ <= 0 || screenW_ <= 0) return;
+
+    Rect newRects[kNumComponents];
+    bool changed = computeRects(newRects);
+
+    if (changed || !tabBar_) {
+        applyRects(newRects);
+    }
 }
 
 } // namespace molterm

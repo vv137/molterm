@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "molterm/app/TabManager.h"
+#include "molterm/app/TabViewState.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/cmd/UndoStack.h"
 #include "molterm/core/ObjectStore.h"
@@ -113,9 +114,9 @@ private:
     StatusBar statusBar_;
     CommandLine cmdLine_;
     ObjectPanel objectPanel_;
-    SeqBar seqBar_;
-    int focusResi_ = -1;
-    std::string focusChain_;  // chain of focused residue for seqbar scroll
+    // SeqBar is per-tab via TabViewState (accessed through activeSeqBar())
+    SeqBar& activeSeqBar() { return tabMgr_.currentTab().viewState().seqBar; }
+    TabViewState& activeViewState() { return tabMgr_.currentTab().viewState(); }
     KeymapManager keymapMgr_;
     std::unique_ptr<InputHandler> inputHandler_;
     CommandRegistry cmdRegistry_;

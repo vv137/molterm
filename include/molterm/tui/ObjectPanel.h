@@ -5,11 +5,12 @@
 #include <vector>
 
 #include "molterm/core/MolObject.h"
+#include "molterm/tui/Widget.h"
 #include "molterm/tui/Window.h"
 
 namespace molterm {
 
-class ObjectPanel {
+class ObjectPanel : public Widget {
 public:
     void render(Window& win,
                 const std::vector<std::shared_ptr<MolObject>>& objects,
