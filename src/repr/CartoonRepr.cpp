@@ -6,6 +6,14 @@
 
 namespace molterm {
 
+static bool isNucleotide(const std::string& rn) {
+    return rn == "A" || rn == "G" || rn == "C" || rn == "U" ||
+           rn == "DA" || rn == "DG" || rn == "DC" || rn == "DT" || rn == "DU" ||
+           rn == "ADE" || rn == "GUA" || rn == "CYT" || rn == "URA" || rn == "THY";
+}
+
+// ─── Main render entry point ─────────────────────────────────────────────────
+
 void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                          Canvas& canvas) {
     if (!mol.visible() || !mol.reprVisible(ReprType::Cartoon)) return;
@@ -16,7 +24,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     int coilSegments = (atoms.size() > 5000) ? 4 : 8;
 
     // Collect Cα/P atoms
-    struct CaAtom { int idx; float x, y, z; SSType ss; std::string chain; };
     std::vector<CaAtom> cas;
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         if (atoms[i].name != "CA" && atoms[i].name != "P") continue;
@@ -30,229 +37,230 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     while (cStart < cas.size()) {
         size_t cEnd = cStart + 1;
         while (cEnd < cas.size() && cas[cEnd].chain == cas[cStart].chain) ++cEnd;
-        int cLen = static_cast<int>(cEnd - cStart);
-        if (cLen < 2) { cStart = cEnd; continue; }
-
-        // Step 1: Generate spline points
-        struct SplinePoint { float x, y, z; SSType ss; int color; float arrowFrac; };
-        std::vector<SplinePoint> spine;
-        spine.reserve(cLen * subdiv + 1);
-
-        for (int seg = 0; seg < cLen - 1; ++seg) {
-            int i0 = static_cast<int>(cStart) + std::max(0, seg - 1);
-            int i1 = static_cast<int>(cStart) + seg;
-            int i2 = static_cast<int>(cStart) + std::min(seg + 1, cLen - 1);
-            int i3 = static_cast<int>(cStart) + std::min(seg + 2, cLen - 1);
-
-            int col1 = ctx.colorFor(cas[i1].idx);
-            int col2 = ctx.colorFor(cas[i2].idx);
-
-            // Detect sheet→non-sheet transition for arrowhead
-            bool isSheetEnd = (cas[i1].ss == SSType::Sheet && cas[i2].ss != SSType::Sheet);
-
-            for (int s = 0; s < subdiv; ++s) {
-                float t = static_cast<float>(s) / static_cast<float>(subdiv);
-                float af = isSheetEnd ? t : -1.0f;  // arrowFrac: 0→1 along arrowhead segment
-                spine.push_back({
-                    catmullRom(cas[i0].x, cas[i1].x, cas[i2].x, cas[i3].x, t),
-                    catmullRom(cas[i0].y, cas[i1].y, cas[i2].y, cas[i3].y, t),
-                    catmullRom(cas[i0].z, cas[i1].z, cas[i2].z, cas[i3].z, t),
-                    (t < 0.5f) ? cas[i1].ss : cas[i2].ss,
-                    (t < 0.5f) ? col1 : col2,
-                    af
-                });
-            }
-        }
-        // Last point
-        auto& last = cas[cEnd - 1];
-        spine.push_back({last.x, last.y, last.z, last.ss,
-            ctx.colorFor(last.idx), -1.0f});
-
-        int nPts = static_cast<int>(spine.size());
-        if (nPts < 2) { cStart = cEnd; continue; }
-
-        // Step 2: Compute tangents
-        std::vector<float> tx(nPts), ty(nPts), tz(nPts);
-        for (int i = 0; i < nPts; ++i) {
-            int prev = std::max(0, i - 1), next = std::min(nPts - 1, i + 1);
-            tx[i] = spine[next].x - spine[prev].x;
-            ty[i] = spine[next].y - spine[prev].y;
-            tz[i] = spine[next].z - spine[prev].z;
-            normalize3(tx[i], ty[i], tz[i]);
-        }
-
-        // Step 3: Parallel-transport frame
-        std::vector<float> nx(nPts), ny(nPts), nz(nPts);
-        std::vector<float> bx(nPts), by(nPts), bz(nPts);
-
-        // Initial normal: perpendicular to first tangent
-        if (std::abs(tx[0]) < 0.9f) {
-            cross3(tx[0], ty[0], tz[0], 1, 0, 0, nx[0], ny[0], nz[0]);
-        } else {
-            cross3(tx[0], ty[0], tz[0], 0, 1, 0, nx[0], ny[0], nz[0]);
-        }
-        normalize3(nx[0], ny[0], nz[0]);
-        cross3(tx[0], ty[0], tz[0], nx[0], ny[0], nz[0], bx[0], by[0], bz[0]);
-        normalize3(bx[0], by[0], bz[0]);
-
-        // Propagate frame
-        for (int i = 1; i < nPts; ++i) {
-            // Project previous normal onto plane perpendicular to current tangent
-            float dot = nx[i-1]*tx[i] + ny[i-1]*ty[i] + nz[i-1]*tz[i];
-            nx[i] = nx[i-1] - dot * tx[i];
-            ny[i] = ny[i-1] - dot * ty[i];
-            nz[i] = nz[i-1] - dot * tz[i];
-            float l = len3(nx[i], ny[i], nz[i]);
-            if (l < 1e-6f) { nx[i] = nx[i-1]; ny[i] = ny[i-1]; nz[i] = nz[i-1]; }
-            else { nx[i] /= l; ny[i] /= l; nz[i] /= l; }
-            cross3(tx[i], ty[i], tz[i], nx[i], ny[i], nz[i], bx[i], by[i], bz[i]);
-            normalize3(bx[i], by[i], bz[i]);
-        }
-
-        // Step 4: Generate cross-section rings and emit triangles
-        // For PixelCanvas: project vertices and rasterize triangles
-        // For text canvases: fallback to thick lines (circle stamp)
-
-        bool useTriangles = (canvas.scaleX() >= 8);  // pixel canvas only
-
-        auto ssHalfW = [&](SSType ss) -> float {
-            switch (ss) {
-                case SSType::Helix: return helixRadius_;
-                case SSType::Sheet: return sheetRadius_;
-                default:            return loopRadius_;
-            }
-        };
-        auto ssHalfH = [&](SSType ss) -> float {
-            switch (ss) {
-                case SSType::Helix: return 0.3f;
-                case SSType::Sheet: return 0.15f;
-                default:            return loopRadius_;
-            }
-        };
-
-        if (useTriangles) {
-            struct Vert { float x, y, z; };
-            auto makeRing = [&](int i) -> std::vector<Vert> {
-                float hw = ssHalfW(spine[i].ss);
-                float hh = ssHalfH(spine[i].ss);
-                bool isCoil = (spine[i].ss == SSType::Loop);
-
-                if (spine[i].arrowFrac >= 0.0f) {
-                    float af = spine[i].arrowFrac;
-                    if (af < 0.5f) hw *= (1.0f + af * 1.2f);
-                    else { hw *= (2.0f * (1.0f - af) * 1.6f); if (hw < 0.05f) hw = 0.05f; }
-                }
-
-                std::vector<Vert> ring;
-                if (isCoil) {
-                    for (int s = 0; s < coilSegments; ++s) {
-                        float angle = 2.0f * 3.14159265f * s / coilSegments;
-                        float c = std::cos(angle), si = std::sin(angle);
-                        ring.push_back({
-                            spine[i].x + hw * (c * nx[i] + si * bx[i]),
-                            spine[i].y + hw * (c * ny[i] + si * by[i]),
-                            spine[i].z + hw * (c * nz[i] + si * bz[i])
-                        });
-                    }
-                } else {
-                    ring.push_back({spine[i].x + hw*bx[i] + hh*nx[i],
-                                    spine[i].y + hw*by[i] + hh*ny[i],
-                                    spine[i].z + hw*bz[i] + hh*nz[i]});
-                    ring.push_back({spine[i].x - hw*bx[i] + hh*nx[i],
-                                    spine[i].y - hw*by[i] + hh*ny[i],
-                                    spine[i].z - hw*bz[i] + hh*nz[i]});
-                    ring.push_back({spine[i].x - hw*bx[i] - hh*nx[i],
-                                    spine[i].y - hw*by[i] - hh*ny[i],
-                                    spine[i].z - hw*bz[i] - hh*nz[i]});
-                    ring.push_back({spine[i].x + hw*bx[i] - hh*nx[i],
-                                    spine[i].y + hw*by[i] - hh*ny[i],
-                                    spine[i].z + hw*bz[i] - hh*nz[i]});
-                }
-                return ring;
-            };
-
-            auto prevRing = makeRing(0);
-            for (int i = 1; i < nPts; ++i) {
-                auto ring = makeRing(i);
-                int color = spine[i].color;
-                int n = static_cast<int>(std::min(prevRing.size(), ring.size()));
-
-                for (int j = 0; j < n; ++j) {
-                    int j1 = (j + 1) % n;
-                    auto& a = prevRing[j]; auto& b = prevRing[j1];
-                    auto& c = ring[j1];    auto& d = ring[j];
-
-                    float as, ay, ad, bs, by2, bd, cs, cy, cd, ds, dy, dd;
-                    cam.projectCached(a.x, a.y, a.z, as, ay, ad);
-                    cam.projectCached(b.x, b.y, b.z, bs, by2, bd);
-                    cam.projectCached(c.x, c.y, c.z, cs, cy, cd);
-                    cam.projectCached(d.x, d.y, d.z, ds, dy, dd);
-
-                    canvas.drawTriangle(as, ay, ad, bs, by2, bd, ds, dy, dd, color);
-                    canvas.drawTriangle(bs, by2, bd, cs, cy, cd, ds, dy, dd, color);
-                }
-                prevRing = std::move(ring);
-            }
-        } else {
-            // Braille/block/ascii: thick circle-stamped spline lines
-            // SS-dependent radius with sheet arrowheads + Lambert pseudo-shading
-            float scaleF = static_cast<float>(canvas.scaleX());
-            const auto& rot = cam.rotation();
-            // Camera Z-axis in world space (view direction)
-            float camZx = rot[6], camZy = rot[7], camZz = rot[8];
-
-            for (int i = 1; i < nPts; ++i) {
-                float sx0, sy0, d0, sx1, sy1, d1;
-                cam.projectCached(spine[i-1].x, spine[i-1].y, spine[i-1].z, sx0, sy0, d0);
-                cam.projectCached(spine[i].x, spine[i].y, spine[i].z, sx1, sy1, d1);
-
-                // SS-dependent base radius (sheet wider, loop thinner)
-                SSType ss = spine[i-1].ss;
-                float baseR;
-                switch (ss) {
-                    case SSType::Helix: baseR = 1.2f; break;
-                    case SSType::Sheet: baseR = 1.8f; break;  // wide flat
-                    default:            baseR = 0.4f; break;  // thin coil
-                }
-
-                // Sheet arrowhead: widen then taper
-                float af = spine[i-1].arrowFrac;
-                if (af >= 0.0f) {
-                    if (af < 0.4f)
-                        baseR *= (1.0f + af * 1.5f);   // widen to ~1.6x
-                    else
-                        baseR *= std::max(0.2f, 2.0f * (1.0f - af));  // taper to point
-                }
-
-                float hw = baseR * scaleF * cam.zoom();
-                // Minimum radius = 2 sub-pixels to avoid 1-pixel thin lines in braille
-                int r = std::max(2, static_cast<int>(hw + 0.5f));
-                int color = spine[i-1].color;
-
-                // Lambert shading: vary radius gently (keep minimum thickness)
-                float dotVal = std::abs(tx[i-1]*camZx + ty[i-1]*camZy + tz[i-1]*camZz);
-                float brightness = 1.0f - dotVal * 0.35f;  // subtle: 65-100% range
-                int shadedR = std::max(2, static_cast<int>(r * brightness));
-
-                Canvas::bresenham(static_cast<int>(sx0), static_cast<int>(sy0), d0,
-                                  static_cast<int>(sx1), static_cast<int>(sy1), d1,
-                    [&](int x, int y, float d) {
-                        canvas.drawCircle(x, y, d, shadedR, color, true);
-                    });
-            }
-        }
-
+        renderChain(cas, cStart, cEnd, subdiv, coilSegments, ctx, cam, canvas);
         cStart = cEnd;
     }
 
-    // ── Nucleic acid base ladders ──────────────────────────────────────────
-    // Draw C1'→base stick + regular polygon ring shapes (hexagon/pentagon).
+    // Nucleic acid base ladders
+    renderNucleicBases(mol, ctx, cam, canvas);
+}
 
-    auto isNucleotide = [](const std::string& rn) -> bool {
-        return rn == "A" || rn == "G" || rn == "C" || rn == "U" ||
-               rn == "DA" || rn == "DG" || rn == "DC" || rn == "DT" || rn == "DU" ||
-               rn == "ADE" || rn == "GUA" || rn == "CYT" || rn == "URA" || rn == "THY";
+// ─── Per-chain spline + rendering ────────────────────────────────────────────
+
+void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
+                              size_t end, int subdiv, int coilSegments,
+                              const RenderContext& ctx,
+                              const Camera& cam, Canvas& canvas) const {
+    int cLen = static_cast<int>(end - start);
+    if (cLen < 2) return;
+
+    // Step 1: Generate spline points
+    std::vector<SplinePoint> spine;
+    spine.reserve(cLen * subdiv + 1);
+
+    for (int seg = 0; seg < cLen - 1; ++seg) {
+        int i0 = static_cast<int>(start) + std::max(0, seg - 1);
+        int i1 = static_cast<int>(start) + seg;
+        int i2 = static_cast<int>(start) + std::min(seg + 1, cLen - 1);
+        int i3 = static_cast<int>(start) + std::min(seg + 2, cLen - 1);
+
+        int col1 = ctx.colorFor(cas[i1].idx);
+        int col2 = ctx.colorFor(cas[i2].idx);
+
+        // Detect sheet→non-sheet transition for arrowhead
+        bool isSheetEnd = (cas[i1].ss == SSType::Sheet && cas[i2].ss != SSType::Sheet);
+
+        for (int s = 0; s < subdiv; ++s) {
+            float t = static_cast<float>(s) / static_cast<float>(subdiv);
+            float af = isSheetEnd ? t : -1.0f;
+            spine.push_back({
+                catmullRom(cas[i0].x, cas[i1].x, cas[i2].x, cas[i3].x, t),
+                catmullRom(cas[i0].y, cas[i1].y, cas[i2].y, cas[i3].y, t),
+                catmullRom(cas[i0].z, cas[i1].z, cas[i2].z, cas[i3].z, t),
+                (t < 0.5f) ? cas[i1].ss : cas[i2].ss,
+                (t < 0.5f) ? col1 : col2,
+                af
+            });
+        }
+    }
+    // Last point
+    auto& last = cas[end - 1];
+    spine.push_back({last.x, last.y, last.z, last.ss,
+        ctx.colorFor(last.idx), -1.0f});
+
+    int nPts = static_cast<int>(spine.size());
+    if (nPts < 2) return;
+
+    // Step 2: Compute tangents
+    std::vector<float> tx(nPts), ty(nPts), tz(nPts);
+    for (int i = 0; i < nPts; ++i) {
+        int prev = std::max(0, i - 1), next = std::min(nPts - 1, i + 1);
+        tx[i] = spine[next].x - spine[prev].x;
+        ty[i] = spine[next].y - spine[prev].y;
+        tz[i] = spine[next].z - spine[prev].z;
+        normalize3(tx[i], ty[i], tz[i]);
+    }
+
+    // Step 3: Parallel-transport frame
+    std::vector<float> nx(nPts), ny(nPts), nz(nPts);
+    std::vector<float> bx(nPts), by(nPts), bz(nPts);
+
+    // Initial normal: perpendicular to first tangent
+    if (std::abs(tx[0]) < 0.9f) {
+        cross3(tx[0], ty[0], tz[0], 1, 0, 0, nx[0], ny[0], nz[0]);
+    } else {
+        cross3(tx[0], ty[0], tz[0], 0, 1, 0, nx[0], ny[0], nz[0]);
+    }
+    normalize3(nx[0], ny[0], nz[0]);
+    cross3(tx[0], ty[0], tz[0], nx[0], ny[0], nz[0], bx[0], by[0], bz[0]);
+    normalize3(bx[0], by[0], bz[0]);
+
+    // Propagate frame
+    for (int i = 1; i < nPts; ++i) {
+        float dot = nx[i-1]*tx[i] + ny[i-1]*ty[i] + nz[i-1]*tz[i];
+        nx[i] = nx[i-1] - dot * tx[i];
+        ny[i] = ny[i-1] - dot * ty[i];
+        nz[i] = nz[i-1] - dot * tz[i];
+        float l = len3(nx[i], ny[i], nz[i]);
+        if (l < 1e-6f) { nx[i] = nx[i-1]; ny[i] = ny[i-1]; nz[i] = nz[i-1]; }
+        else { nx[i] /= l; ny[i] /= l; nz[i] /= l; }
+        cross3(tx[i], ty[i], tz[i], nx[i], ny[i], nz[i], bx[i], by[i], bz[i]);
+        normalize3(bx[i], by[i], bz[i]);
+    }
+
+    // Step 4: Generate cross-section rings and emit triangles
+    bool useTriangles = (canvas.scaleX() >= 8);
+
+    auto ssHalfW = [&](SSType ss) -> float {
+        switch (ss) {
+            case SSType::Helix: return helixRadius_;
+            case SSType::Sheet: return sheetRadius_;
+            default:            return loopRadius_;
+        }
     };
+    auto ssHalfH = [&](SSType ss) -> float {
+        switch (ss) {
+            case SSType::Helix: return 0.3f;
+            case SSType::Sheet: return 0.15f;
+            default:            return loopRadius_;
+        }
+    };
+
+    if (useTriangles) {
+        struct Vert { float x, y, z; };
+        auto makeRing = [&](int i) -> std::vector<Vert> {
+            float hw = ssHalfW(spine[i].ss);
+            float hh = ssHalfH(spine[i].ss);
+            bool isCoil = (spine[i].ss == SSType::Loop);
+
+            if (spine[i].arrowFrac >= 0.0f) {
+                float af = spine[i].arrowFrac;
+                if (af < 0.5f) hw *= (1.0f + af * 1.2f);
+                else { hw *= (2.0f * (1.0f - af) * 1.6f); if (hw < 0.05f) hw = 0.05f; }
+            }
+
+            std::vector<Vert> ring;
+            if (isCoil) {
+                for (int s = 0; s < coilSegments; ++s) {
+                    float angle = 2.0f * 3.14159265f * s / coilSegments;
+                    float c = std::cos(angle), si = std::sin(angle);
+                    ring.push_back({
+                        spine[i].x + hw * (c * nx[i] + si * bx[i]),
+                        spine[i].y + hw * (c * ny[i] + si * by[i]),
+                        spine[i].z + hw * (c * nz[i] + si * bz[i])
+                    });
+                }
+            } else {
+                ring.push_back({spine[i].x + hw*bx[i] + hh*nx[i],
+                                spine[i].y + hw*by[i] + hh*ny[i],
+                                spine[i].z + hw*bz[i] + hh*nz[i]});
+                ring.push_back({spine[i].x - hw*bx[i] + hh*nx[i],
+                                spine[i].y - hw*by[i] + hh*ny[i],
+                                spine[i].z - hw*bz[i] + hh*nz[i]});
+                ring.push_back({spine[i].x - hw*bx[i] - hh*nx[i],
+                                spine[i].y - hw*by[i] - hh*ny[i],
+                                spine[i].z - hw*bz[i] - hh*nz[i]});
+                ring.push_back({spine[i].x + hw*bx[i] - hh*nx[i],
+                                spine[i].y + hw*by[i] - hh*ny[i],
+                                spine[i].z + hw*bz[i] - hh*nz[i]});
+            }
+            return ring;
+        };
+
+        auto prevRing = makeRing(0);
+        for (int i = 1; i < nPts; ++i) {
+            auto ring = makeRing(i);
+            int color = spine[i].color;
+            int n = static_cast<int>(std::min(prevRing.size(), ring.size()));
+
+            for (int j = 0; j < n; ++j) {
+                int j1 = (j + 1) % n;
+                auto& a = prevRing[j]; auto& b = prevRing[j1];
+                auto& c = ring[j1];    auto& d = ring[j];
+
+                float as, ay, ad, bs, by2, bd, cs, cy, cd, ds, dy, dd;
+                cam.projectCached(a.x, a.y, a.z, as, ay, ad);
+                cam.projectCached(b.x, b.y, b.z, bs, by2, bd);
+                cam.projectCached(c.x, c.y, c.z, cs, cy, cd);
+                cam.projectCached(d.x, d.y, d.z, ds, dy, dd);
+
+                canvas.drawTriangle(as, ay, ad, bs, by2, bd, ds, dy, dd, color);
+                canvas.drawTriangle(bs, by2, bd, cs, cy, cd, ds, dy, dd, color);
+            }
+            prevRing = std::move(ring);
+        }
+    } else {
+        // Braille/block/ascii: thick circle-stamped spline lines
+        float scaleF = static_cast<float>(canvas.scaleX());
+        const auto& rot = cam.rotation();
+        float camZx = rot[6], camZy = rot[7], camZz = rot[8];
+
+        for (int i = 1; i < nPts; ++i) {
+            float sx0, sy0, d0, sx1, sy1, d1;
+            cam.projectCached(spine[i-1].x, spine[i-1].y, spine[i-1].z, sx0, sy0, d0);
+            cam.projectCached(spine[i].x, spine[i].y, spine[i].z, sx1, sy1, d1);
+
+            SSType ss = spine[i-1].ss;
+            float baseR;
+            switch (ss) {
+                case SSType::Helix: baseR = 1.2f; break;
+                case SSType::Sheet: baseR = 1.8f; break;
+                default:            baseR = 0.4f; break;
+            }
+
+            float af = spine[i-1].arrowFrac;
+            if (af >= 0.0f) {
+                if (af < 0.4f)
+                    baseR *= (1.0f + af * 1.5f);
+                else
+                    baseR *= std::max(0.2f, 2.0f * (1.0f - af));
+            }
+
+            float hw = baseR * scaleF * cam.zoom();
+            int r = std::max(2, static_cast<int>(hw + 0.5f));
+            int color = spine[i-1].color;
+
+            float dotVal = std::abs(tx[i-1]*camZx + ty[i-1]*camZy + tz[i-1]*camZz);
+            float brightness = 1.0f - dotVal * 0.35f;
+            int shadedR = std::max(2, static_cast<int>(r * brightness));
+
+            Canvas::bresenham(static_cast<int>(sx0), static_cast<int>(sy0), d0,
+                              static_cast<int>(sx1), static_cast<int>(sy1), d1,
+                [&](int x, int y, float d) {
+                    canvas.drawCircle(x, y, d, shadedR, color, true);
+                });
+        }
+    }
+}
+
+// ─── Nucleic acid base ladders ───────────────────────────────────────────────
+
+void CartoonRepr::renderNucleicBases(const MolObject& /* mol */,
+                                     const RenderContext& ctx,
+                                     const Camera& cam,
+                                     Canvas& canvas) const {
+    const auto& atoms = ctx.atoms;
+
     auto isPurine = [](const std::string& rn) -> bool {
         return rn == "A" || rn == "G" || rn == "DA" || rn == "DG" || rn == "ADE" || rn == "GUA";
     };
@@ -265,14 +273,12 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         return kColorOther;
     };
 
-    // Helper: find atom by name in residue range
     auto findAtom = [&](int start, int end, const char* name) -> int {
         for (int j = start; j < end; ++j)
             if (atoms[j].name == name) return j;
         return -1;
     };
 
-    // Helper: compute ring center and normal from atom positions
     auto ringGeometry = [&](const std::vector<int>& indices,
                             float& cx, float& cy, float& cz,
                             float& nnx, float& nny, float& nnz) {
@@ -280,7 +286,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         for (int idx : indices) { cx += atoms[idx].x; cy += atoms[idx].y; cz += atoms[idx].z; }
         float n = static_cast<float>(indices.size());
         cx /= n; cy /= n; cz /= n;
-        // Normal from first 3 atoms
         if (indices.size() >= 3) {
             float ax = atoms[indices[1]].x - atoms[indices[0]].x;
             float ay = atoms[indices[1]].y - atoms[indices[0]].y;
@@ -293,11 +298,9 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         } else { nnx = 0; nny = 0; nnz = 1; }
     };
 
-    // Helper: draw regular polygon in 3D (n sides, center, normal, radius, in-plane ref)
     auto drawRegularPolygon = [&](float cx, float cy, float cz,
                                   float nnx, float nny, float nnz,
                                   float radius, int nSides, int color) {
-        // Build in-plane axes
         float ux, uy, uz;
         if (std::abs(nnx) < 0.9f) { cross3(nnx, nny, nnz, 1, 0, 0, ux, uy, uz); }
         else { cross3(nnx, nny, nnz, 0, 1, 0, ux, uy, uz); }
@@ -306,7 +309,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         cross3(nnx, nny, nnz, ux, uy, uz, vx, vy, vz);
         normalize3(vx, vy, vz);
 
-        // Generate vertices (max 9 sides = purine ring)
         constexpr float PI = 3.14159265f;
         constexpr int kMaxSides = 9;
         float vsx[kMaxSides], vsy[kMaxSides], vsz[kMaxSides];
@@ -321,7 +323,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         }
 
         if (canvas.scaleX() >= 8) {
-            // Pixel: filled triangles
             float csx, csy, csd;
             cam.projectCached(cx, cy, cz, csx, csy, csd);
             for (int s = 0; s < nSides; ++s) {
@@ -331,7 +332,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
                                     vsx[s1], vsy[s1], vsz[s1], color);
             }
         } else {
-            // Braille/block: outline only
             for (int s = 0; s < nSides; ++s) {
                 int s1 = (s + 1) % nSides;
                 canvas.drawLine(static_cast<int>(vsx[s]), static_cast<int>(vsy[s]), vsz[s],
@@ -340,9 +340,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         }
     };
 
-    // Pyrimidine 6-ring atom names
     static const char* k6ring[] = {"N1","C2","N3","C4","C5","C6"};
-    // Purine 5-ring atom names (fused ring)
     static const char* k5ring[] = {"C4","C5","N7","C8","N9"};
 
     int ai = 0;
@@ -357,7 +355,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             ++ai;
         int resEnd = ai;
 
-        // Find C1'
         int c1idx = findAtom(resStart, resEnd, "C1'");
         if (c1idx < 0) c1idx = findAtom(resStart, resEnd, "C1*");
         if (c1idx < 0) continue;
@@ -365,7 +362,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         bool purine = isPurine(a0.resName);
         int color = baseColor(a0.resName);
 
-        // 6-membered ring (both purine and pyrimidine have it)
         int hex[6], hexN = 0;
         for (auto* name : k6ring) {
             int idx = findAtom(resStart, resEnd, name);
@@ -386,7 +382,6 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             drawRegularPolygon(hcx, hcy, hcz, hnx, hny, hnz, 1.2f, 6, color);
         }
 
-        // 5-membered ring (purine only)
         if (purine) {
             int pent[5], pentN = 0;
             for (auto* name : k5ring) {

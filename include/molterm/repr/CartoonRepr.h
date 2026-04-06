@@ -1,6 +1,8 @@
 #pragma once
 
 #include "molterm/repr/Representation.h"
+#include <string>
+#include <vector>
 
 namespace molterm {
 
@@ -23,6 +25,15 @@ public:
     void setSubdivisions(int n) { subdivisions_ = n; }
 
 private:
+    struct CaAtom { int idx; float x, y, z; SSType ss; std::string chain; };
+    struct SplinePoint { float x, y, z; SSType ss; int color; float arrowFrac; };
+
+    void renderChain(const std::vector<CaAtom>& cas, size_t start, size_t end,
+                     int subdiv, int coilSegs, const RenderContext& ctx,
+                     const Camera& cam, Canvas& canvas) const;
+    void renderNucleicBases(const MolObject& mol, const RenderContext& ctx,
+                            const Camera& cam, Canvas& canvas) const;
+
     float helixRadius_ = 0.8f;
     float sheetRadius_ = 0.7f;
     float loopRadius_ = 0.25f;
