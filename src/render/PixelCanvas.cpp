@@ -1,6 +1,9 @@
 #include "molterm/render/PixelCanvas.h"
 #include "molterm/render/ColorMapper.h"
 
+#include "stb_truetype.h"
+#include "font_data.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -17,6 +20,8 @@ PixelCanvas::PixelCanvas(std::unique_ptr<GraphicsEncoder> encoder)
     : encoder_(std::move(encoder)) {
     queryCellSize();
 }
+
+PixelCanvas::~PixelCanvas() = default;
 
 void PixelCanvas::queryCellSize() {
     struct winsize ws = {};
@@ -220,8 +225,107 @@ void PixelCanvas::drawTriangle(float x0, float y0, float z0,
     }
 }
 
-void PixelCanvas::drawChar(int, int, float, char, int) {
-    // No glyph rasterizer — labels not rendered in pixel mode
+// ── Font rasterization ──────────────────────────────────────────────────────
+
+struct PixelCanvas::FontState {
+    stbtt_fontinfo info{};
+    bool ready = false;
+};
+
+void PixelCanvas::initFont() {
+    if (font_ && font_->ready) return;
+    font_ = std::make_unique<FontState>();
+    if (stbtt_InitFont(&font_->info, kEmbeddedFont,
+                       stbtt_GetFontOffsetForIndex(kEmbeddedFont, 0))) {
+        font_->ready = true;
+    }
+}
+
+void PixelCanvas::drawChar(int termX, int termY, float depth,
+                           char ch, int colorPair) {
+    // Render a single character at terminal cell coordinates
+    int sx = termX * cellPixW_;
+    int sy = termY * cellPixH_;
+    char buf[2] = {ch, '\0'};
+    drawText(sx, sy, depth, buf, colorPair);
+}
+
+void PixelCanvas::drawText(int sx, int sy, float /* depth */,
+                           const std::string& text, int colorPair) {
+    initFont();
+    if (!font_ || !font_->ready) return;
+    if (text.empty()) return;
+
+    auto c = colorPairToRGB(colorPair);
+
+    // Scale font to match cell height (use ~60% of cell for ascender)
+    float fontHeight = static_cast<float>(cellPixH_) * 0.7f;
+    float scale = stbtt_ScaleForPixelHeight(&font_->info, fontHeight);
+
+    int ascent = 0, descent = 0, lineGap = 0;
+    stbtt_GetFontVMetrics(&font_->info, &ascent, &descent, &lineGap);
+    int baseline = sy + static_cast<int>(static_cast<float>(ascent) * scale);
+
+    float xpos = static_cast<float>(sx);
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        int ch = static_cast<unsigned char>(text[i]);
+
+        int advance = 0, lsb = 0;
+        stbtt_GetCodepointHMetrics(&font_->info, ch, &advance, &lsb);
+
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        stbtt_GetCodepointBitmapBox(&font_->info, ch, scale, scale, &x0, &y0, &x1, &y1);
+
+        int gw = x1 - x0, gh = y1 - y0;
+        if (gw <= 0 || gh <= 0) {
+            xpos += static_cast<float>(advance) * scale;
+            continue;
+        }
+
+        // Rasterize glyph to temp bitmap
+        std::vector<unsigned char> bitmap(gw * gh);
+        stbtt_MakeCodepointBitmap(&font_->info, bitmap.data(), gw, gh, gw,
+                                   scale, scale, ch);
+
+        // Blit to framebuffer with alpha blending
+        int gx = static_cast<int>(xpos) + x0;
+        int gy = baseline + y0;
+        for (int row = 0; row < gh; ++row) {
+            for (int col = 0; col < gw; ++col) {
+                int px = gx + col;
+                int py = gy + row;
+                if (!inBounds(px, py)) continue;
+
+                unsigned char alpha = bitmap[row * gw + col];
+                if (alpha == 0) continue;
+
+                size_t idx = (static_cast<size_t>(py) * pixW_ + px) * 3;
+                if (alpha >= 240) {
+                    // Opaque — write directly
+                    rgb_[idx]     = c.r;
+                    rgb_[idx + 1] = c.g;
+                    rgb_[idx + 2] = c.b;
+                } else {
+                    // Alpha blend
+                    float a = static_cast<float>(alpha) / 255.0f;
+                    float inv = 1.0f - a;
+                    rgb_[idx]     = static_cast<uint8_t>(c.r * a + rgb_[idx]     * inv);
+                    rgb_[idx + 1] = static_cast<uint8_t>(c.g * a + rgb_[idx + 1] * inv);
+                    rgb_[idx + 2] = static_cast<uint8_t>(c.b * a + rgb_[idx + 2] * inv);
+                }
+            }
+        }
+
+        xpos += static_cast<float>(advance) * scale;
+
+        // Kerning
+        if (i + 1 < text.size()) {
+            int kern = stbtt_GetCodepointKernAdvance(&font_->info, ch,
+                static_cast<unsigned char>(text[i + 1]));
+            xpos += static_cast<float>(kern) * scale;
+        }
+    }
 }
 
 // ── Post-processing ─────────────────────────────────────────────────────────

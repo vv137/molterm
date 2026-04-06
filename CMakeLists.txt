@@ -99,6 +99,7 @@ set(MOLTERM_SOURCES
     src/render/BrailleCanvas.cpp
     src/render/BlockCanvas.cpp
     src/render/PixelCanvas.cpp
+    src/render/stb_truetype_impl.cpp
     src/render/SixelEncoder.cpp
     src/render/KittyEncoder.cpp
     src/render/ITermEncoder.cpp
@@ -131,12 +132,28 @@ set(MOLTERM_SOURCES
     src/io/SessionSaver.cpp
 )
 
+# ── Embedded font ────────────────────────────────────────────────────────────
+
+set(FONT_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/resources/SpaceMono-Regular.ttf")
+set(FONT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/font_data.h")
+add_custom_command(
+    OUTPUT "${FONT_HEADER}"
+    COMMAND ${CMAKE_COMMAND} -DINPUT=${FONT_INPUT} -DOUTPUT=${FONT_HEADER}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/resources/embed_font.cmake"
+    DEPENDS "${FONT_INPUT}" "${CMAKE_CURRENT_SOURCE_DIR}/resources/embed_font.cmake"
+    COMMENT "Embedding font as C header"
+)
+add_custom_target(generate_font DEPENDS "${FONT_HEADER}")
+
 # ── Target ───────────────────────────────────────────────────────────────────
 
 add_executable(molterm ${MOLTERM_SOURCES})
+add_dependencies(molterm generate_font)
 
 target_include_directories(molterm PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
     $<$<NOT:$<BOOL:${NCURSESW_FOUND}>>:${CURSES_INCLUDE_DIR}>
 )
 

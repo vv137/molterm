@@ -16,6 +16,7 @@ namespace molterm {
 class PixelCanvas : public Canvas {
 public:
     explicit PixelCanvas(std::unique_ptr<GraphicsEncoder> encoder);
+    ~PixelCanvas() override;
 
     void resize(int termW, int termH) override;
     void clear() override;
@@ -39,6 +40,10 @@ public:
                       int colorPair) override;
     void drawChar(int termX, int termY, float depth,
                   char ch, int colorPair) override;
+
+    // Render a text string at sub-pixel coordinates with depth testing.
+    void drawText(int sx, int sy, float depth,
+                  const std::string& text, int colorPair);
 
     // Access framebuffer (for post-processing like depth fog)
     uint8_t* rgbData() { return rgb_.data(); }
@@ -82,6 +87,11 @@ private:
     std::vector<uint8_t> preFogRgb_;  // snapshot before fog for PNG export
 
     void queryCellSize();
+    void initFont();
+
+    // stb_truetype font state (lazy-initialized on first drawText call)
+    struct FontState;
+    std::unique_ptr<FontState> font_;
 
     bool inBounds(int sx, int sy) const {
         return sx >= 0 && sx < pixW_ && sy >= 0 && sy < pixH_;
