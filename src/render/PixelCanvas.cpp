@@ -854,12 +854,6 @@ PixelCanvas::RGB PixelCanvas::colorPairToRGB(int colorPair) {
         case kColorChainD:      return {255, 220, 30};   // yellow
         case kColorChainE:      return {255, 40, 40};    // red
         case kColorChainF:      return {50, 80, 255};    // blue
-        case kColorChainG:      return {255, 140, 30};   // orange
-        case kColorChainH:      return {120, 240, 30};   // lime
-        case kColorChainI:      return {30, 180, 180};   // teal
-        case kColorChainJ:      return {150, 50, 220};   // purple
-        case kColorChainK:      return {255, 130, 200};  // pink
-        case kColorChainL:      return {130, 160, 200};  // slate
         case kColorHelix:       return {255, 60, 60};
         case kColorSheet:       return {255, 220, 30};
         case kColorLoop:        return {34, 200, 34};

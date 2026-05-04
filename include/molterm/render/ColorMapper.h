@@ -18,23 +18,16 @@ enum ColorPairId : int {
     kColorHydrogen = 6,
     kColorIron = 7,
     kColorOther = 8,
-    // Chain colors — 12 distinct hues so heptamers/octamers/decamers/
-    // dodecamers (common assemblies up to ATP-synthase rings) all get
-    // unique colors before the cycle repeats. ID 10-15 kept for the
-    // original six; G-L moved to 110-115 to avoid collisions with the
-    // SS / B-factor / UI ranges that grew up around 20-45.
+    // Chain colors — 6 base hues; chains 7..12 are aliased through the
+    // named-color slots (Orange/Lime/Teal/Purple/Pink/Slate) so a 12-mer
+    // gets distinct hues before the cycle repeats. Done via aliasing rather
+    // than a separate G-L block to keep one source of truth per hue.
     kColorChainA = 10,
     kColorChainB = 11,
     kColorChainC = 12,
     kColorChainD = 13,
     kColorChainE = 14,
     kColorChainF = 15,
-    kColorChainG = 110,
-    kColorChainH = 111,
-    kColorChainI = 112,
-    kColorChainJ = 113,
-    kColorChainK = 114,
-    kColorChainL = 115,
     // SS colors
     kColorHelix = 20,
     kColorSheet = 21,
