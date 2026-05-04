@@ -229,6 +229,8 @@ void Application::setRenderer(RendererType type) {
 }
 
 int Application::run() {
+    if (quitRequested_) return 0;  // script quit before the main loop ever started
+    if (isHeadless()) return 0;    // no TUI: nothing to render or read input from
     running_ = true;
     layout_.markAllDirty();
     needsRedraw_ = true;
@@ -269,6 +271,7 @@ void Application::quit(bool force) {
     SessionSaver::saveSession(*this);
     MLOG_INFO("Quitting MolTerm");
     running_ = false;
+    quitRequested_ = true;
 }
 
 std::string Application::loadFile(const std::string& path) {
@@ -276,9 +279,11 @@ std::string Application::loadFile(const std::string& path) {
 
     // Show loading message immediately
     cmdLine_.setMessage("Loading " + path + "...");
-    cmdLine_.render(layout_.commandLine());
-    layout_.commandLine().refresh();
-    doupdate();
+    if (!isHeadless()) {
+        cmdLine_.render(layout_.commandLine());
+        layout_.commandLine().refresh();
+        doupdate();
+    }
 
     try {
         auto obj = CifLoader::loadAuto(path);
@@ -1978,9 +1983,32 @@ void Application::registerCommands() {
         return {true, "Zoomed to " + std::to_string(indices.size()) + " atoms"};
     }, ":zoom [selection]", "Center and zoom to fit selection");
 
-    // :orient [selection] — align principal axes
+    // :orient [view <vx>,<vy>,<vz>] [selection] — align PCA axes, optionally view from a
+    // direction expressed in the PCA frame (e1=longest, e2=mid, e3=shortest).
+    // Default v_pca = (0,0,1): look down the shortest axis (flat face on screen).
     cmdRegistry_.registerCmd("orient", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto [indices, err] = resolveAtoms(app, cmd);
+        double vx = 0.0, vy = 0.0, vz = 1.0;
+        int selStart = 0;
+        if (!cmd.args.empty() && cmd.args[0] == "view") {
+            // Parser splits on whitespace AND commas, so "view 1,1,0" and "view 1 1 0"
+            // both arrive as four separate args.
+            if (cmd.args.size() < 4) {
+                return {false, "Usage: :orient view <vx> <vy> <vz> [selection]"};
+            }
+            try {
+                vx = std::stod(cmd.args[1]);
+                vy = std::stod(cmd.args[2]);
+                vz = std::stod(cmd.args[3]);
+            } catch (...) {
+                return {false, "Invalid view vector: " + cmd.args[1] + " " + cmd.args[2] + " " + cmd.args[3]};
+            }
+            double vlen = std::sqrt(vx*vx + vy*vy + vz*vz);
+            if (vlen < 1e-10) return {false, "View vector cannot be zero"};
+            vx /= vlen; vy /= vlen; vz /= vlen;
+            selStart = 4;
+        }
+
+        auto [indices, err] = resolveAtoms(app, cmd, selStart);
         if (!err.empty()) return {false, err};
         auto obj = app.tabs().currentTab().currentObject();
         auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
@@ -1988,54 +2016,113 @@ void Application::registerCommands() {
         cam.setCenter(cx, cy, cz);
         if (span > 0.0f) cam.setZoom(40.0f / span);
 
-        // Compute covariance matrix of atom positions (relative to center)
-        // then find principal axis via power iteration
+        if (indices.size() < 2) {
+            return {true, "Centered (need >=2 atoms for orientation)"};
+        }
+
         const auto& atoms = obj->atoms();
-        double cov[3][3] = {};
+        double A[3][3] = {};
         for (int i : indices) {
             double dx = atoms[i].x - cx, dy = atoms[i].y - cy, dz = atoms[i].z - cz;
-            cov[0][0] += dx * dx; cov[0][1] += dx * dy; cov[0][2] += dx * dz;
-            cov[1][0] += dy * dx; cov[1][1] += dy * dy; cov[1][2] += dy * dz;
-            cov[2][0] += dz * dx; cov[2][1] += dz * dy; cov[2][2] += dz * dz;
+            A[0][0] += dx*dx; A[0][1] += dx*dy; A[0][2] += dx*dz;
+            A[1][1] += dy*dy; A[1][2] += dy*dz;
+            A[2][2] += dz*dz;
+        }
+        A[1][0] = A[0][1]; A[2][0] = A[0][2]; A[2][1] = A[1][2];
+
+        // Jacobi eigendecomposition for symmetric 3x3
+        double V[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
+        for (int sweep = 0; sweep < 50; ++sweep) {
+            double off = std::abs(A[0][1]) + std::abs(A[0][2]) + std::abs(A[1][2]);
+            if (off < 1e-12) break;
+            for (int p = 0; p < 3; ++p) {
+                for (int q = p + 1; q < 3; ++q) {
+                    double apq = A[p][q];
+                    if (std::abs(apq) < 1e-15) continue;
+                    double theta = (A[q][q] - A[p][p]) / (2.0 * apq);
+                    double t = (theta >= 0)
+                        ? 1.0 / (theta + std::sqrt(1.0 + theta*theta))
+                        : 1.0 / (theta - std::sqrt(1.0 + theta*theta));
+                    double c = 1.0 / std::sqrt(1.0 + t*t);
+                    double s = t * c;
+                    double app_old = A[p][p], aqq_old = A[q][q];
+                    A[p][p] = app_old - t*apq;
+                    A[q][q] = aqq_old + t*apq;
+                    A[p][q] = A[q][p] = 0.0;
+                    for (int r = 0; r < 3; ++r) {
+                        if (r != p && r != q) {
+                            double arp = A[r][p], arq = A[r][q];
+                            A[r][p] = A[p][r] = c*arp - s*arq;
+                            A[r][q] = A[q][r] = s*arp + c*arq;
+                        }
+                    }
+                    for (int r = 0; r < 3; ++r) {
+                        double vrp = V[r][p], vrq = V[r][q];
+                        V[r][p] = c*vrp - s*vrq;
+                        V[r][q] = s*vrp + c*vrq;
+                    }
+                }
+            }
         }
 
-        // Power iteration for dominant eigenvector (longest axis)
-        double v[3] = {1.0, 0.5, 0.25};
-        for (int iter = 0; iter < 50; ++iter) {
-            double nv[3] = {
-                cov[0][0]*v[0] + cov[0][1]*v[1] + cov[0][2]*v[2],
-                cov[1][0]*v[0] + cov[1][1]*v[1] + cov[1][2]*v[2],
-                cov[2][0]*v[0] + cov[2][1]*v[1] + cov[2][2]*v[2],
-            };
-            double len = std::sqrt(nv[0]*nv[0] + nv[1]*nv[1] + nv[2]*nv[2]);
-            if (len < 1e-10) break;
-            v[0] = nv[0] / len; v[1] = nv[1] / len; v[2] = nv[2] / len;
+        // Sort eigenvectors by eigenvalue descending: e1 (longest) → e3 (shortest)
+        int order[3] = {0, 1, 2};
+        double eig[3] = {A[0][0], A[1][1], A[2][2]};
+        if (eig[order[0]] < eig[order[1]]) std::swap(order[0], order[1]);
+        if (eig[order[1]] < eig[order[2]]) std::swap(order[1], order[2]);
+        if (eig[order[0]] < eig[order[1]]) std::swap(order[0], order[1]);
+
+        double e1[3] = {V[0][order[0]], V[1][order[0]], V[2][order[0]]};
+        double e2[3] = {V[0][order[1]], V[1][order[1]], V[2][order[1]]};
+        double e3[3] = {V[0][order[2]], V[1][order[2]], V[2][order[2]]};
+
+        // Force right-handed PCA frame: e3 should equal e1 × e2
+        double cr[3] = {
+            e1[1]*e2[2] - e1[2]*e2[1],
+            e1[2]*e2[0] - e1[0]*e2[2],
+            e1[0]*e2[1] - e1[1]*e2[0]
+        };
+        if (cr[0]*e3[0] + cr[1]*e3[1] + cr[2]*e3[2] < 0) {
+            e3[0] = -e3[0]; e3[1] = -e3[1]; e3[2] = -e3[2];
         }
 
-        // Build rotation matrix: align longest axis to screen X
-        // v = principal axis (longest), compute orthogonal basis
-        double ax = v[0], ay = v[1], az = v[2];
-        // Second axis: cross(principal, Z) or cross(principal, Y) if parallel
-        double bx, by, bz;
-        if (std::abs(az) < 0.9) {
-            bx = ay; by = -ax; bz = 0;
-        } else {
-            bx = 0; by = az; bz = -ay;
-        }
-        double blen = std::sqrt(bx*bx + by*by + bz*bz);
-        bx /= blen; by /= blen; bz /= blen;
-        // Third axis: cross(a, b)
-        double tx = ay*bz - az*by, ty = az*bx - ax*bz, tz = ax*by - ay*bx;
+        // View direction in world space
+        double sz[3] = {
+            vx*e1[0] + vy*e2[0] + vz*e3[0],
+            vx*e1[1] + vy*e2[1] + vz*e3[1],
+            vx*e1[2] + vy*e2[2] + vz*e3[2],
+        };
 
-        // Set rotation: row 0 = principal (X), row 1 = second (Y), row 2 = third (Z)
+        // Up reference in PCA frame: prefer e2; if view is too close to e2, fall back to e1
+        double up_pca[3] = {0, 1, 0};
+        if (std::abs(vy) > 0.9) { up_pca[0] = 1; up_pca[1] = 0; up_pca[2] = 0; }
+        double up[3] = {
+            up_pca[0]*e1[0] + up_pca[1]*e2[0] + up_pca[2]*e3[0],
+            up_pca[0]*e1[1] + up_pca[1]*e2[1] + up_pca[2]*e3[1],
+            up_pca[0]*e1[2] + up_pca[1]*e2[2] + up_pca[2]*e3[2],
+        };
+
+        // Project up onto plane perpendicular to view → screen Y
+        double dot_uv = up[0]*sz[0] + up[1]*sz[1] + up[2]*sz[2];
+        double sy[3] = {up[0] - dot_uv*sz[0], up[1] - dot_uv*sz[1], up[2] - dot_uv*sz[2]};
+        double sylen = std::sqrt(sy[0]*sy[0] + sy[1]*sy[1] + sy[2]*sy[2]);
+        sy[0] /= sylen; sy[1] /= sylen; sy[2] /= sylen;
+
+        // screen X = screen Y × screen Z (right-handed)
+        double sx[3] = {
+            sy[1]*sz[2] - sy[2]*sz[1],
+            sy[2]*sz[0] - sy[0]*sz[2],
+            sy[0]*sz[1] - sy[1]*sz[0],
+        };
+
         std::array<float, 9> rot;
-        rot[0] = static_cast<float>(ax); rot[1] = static_cast<float>(ay); rot[2] = static_cast<float>(az);
-        rot[3] = static_cast<float>(bx); rot[4] = static_cast<float>(by); rot[5] = static_cast<float>(bz);
-        rot[6] = static_cast<float>(tx); rot[7] = static_cast<float>(ty); rot[8] = static_cast<float>(tz);
+        rot[0] = (float)sx[0]; rot[1] = (float)sx[1]; rot[2] = (float)sx[2];
+        rot[3] = (float)sy[0]; rot[4] = (float)sy[1]; rot[5] = (float)sy[2];
+        rot[6] = (float)sz[0]; rot[7] = (float)sz[1]; rot[8] = (float)sz[2];
         cam.setRotation(rot);
 
         return {true, "Oriented " + std::to_string(indices.size()) + " atoms"};
-    }, ":orient [selection]", "Center, zoom, and align principal axes");
+    }, ":orient [view <vx> <vy> <vz>] [selection]", "Center, zoom, and align PCA axes (default views down shortest axis)");
 
     // :set <option> [value]
     cmdRegistry_.registerCmd("set", [](Application& app, const ParsedCommand& cmd) -> ExecResult {

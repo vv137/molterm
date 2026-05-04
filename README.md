@@ -15,6 +15,12 @@
 
 MolTerm renders 3D molecular structures directly in the terminal. It targets structural biologists and computational chemists who live in the terminal and want quick molecule inspection without launching a full GUI.
 
+<p align="center">
+  <img src="assets/orient_spin.gif" alt="1crn rotating, frames produced entirely by :orient view in a script" width="520">
+  <br>
+  <em>Every frame is a separate <code>:orient view</code> call — no rotate command, just a sweep of the view vector through the PCA frame.</em>
+</p>
+
 ## Features
 
 - **Smart defaults** — auto-detects protein/nucleic/ligand content: cartoon for macromolecules, wireframe for ligands, chain coloring (`gd` / `:preset` to re-apply)
@@ -27,7 +33,9 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 - **Multi-level inspect** — click to inspect at atom/residue/chain/object level (`I` cycles), pick registers pk1-pk4 for measurements
 - **Biological assemblies** — generate quaternary structures from PDB/mmCIF symmetry operators (`:assembly`)
 - **Structure alignment** — TM-align and MM-align via USalign integration
+- **PCA-aligned camera** — `:orient` runs full 3×3 eigendecomposition of atom positions; `:orient view <vx> <vy> <vz>` views the molecule along any direction expressed in its own PCA frame (e1=longest, e2=middle, e3=shortest)
 - **Online fetch** — download from RCSB PDB (`fetch 1abc`) and AlphaFold DB (`fetch afdb:P12345`)
+- **Headless batch mode** — `--no-tui` (or auto when stdout isn't a TTY) skips the alt-screen entirely so scripts render without flicker
 - **Session management** — auto-save on quit, `--resume` to restore, `:save` for manual save
 - **PyMOL session export** — `.pml` scripts with `set_view`, repr, coloring
 - **Silhouette outlines** — depth edge detection with configurable threshold/darkness (pixel mode)
@@ -48,12 +56,14 @@ make -j$(nproc)
 
 # Run
 ./molterm protein.pdb
-./molterm structure.cif.gz        # gzipped files supported
-./molterm --resume                # restore last session (auto-saved on quit)
-./molterm -r                      # short form
-./molterm --script setup.mt       # run a command script after load (also -s)
+./molterm structure.cif.gz             # gzipped files supported
+./molterm --resume                     # restore last session (auto-saved on quit)
+./molterm -r                           # short form
+./molterm --script setup.mt            # run a command script after load (also -s)
 ./molterm --script setup.mt --strict   # abort on first script error (exit 1)
-./molterm --version               # prints version + git hash
+./molterm --script render.mt --no-tui  # batch render: no UI, no flicker
+./molterm --help                       # full CLI help (also -h)
+./molterm --version                    # prints version + git hash
 ```
 
 ### Headless screenshot example
@@ -65,21 +75,41 @@ viewport:
 ```text
 # render.mt
 fetch 1crn
-orient
+hide all
 show cartoon
+color secondary
+orient view 1 1 1
 screenshot 1crn.png 1920 1080
 quit
 ```
 
 ```bash
-TERM=xterm-256color ./molterm --script render.mt < /dev/null
+./molterm --script render.mt --no-tui
 # → writes 1crn.png (1920×1080) into the cwd
 ```
 
-`:screenshot file.png [width height]` works from any renderer; the
-optional pixel dimensions default to the live viewport (small under
-no-TTY) and are clamped to 64..8192 px. Drop the size to grab whatever
-the active terminal is rendering.
+`--no-tui` is auto-enabled whenever `--script` is used and stdout is
+not a TTY (so piping or redirecting works the same way), and `--tui`
+forces the UI on if you want to watch it run. `:screenshot file.png
+[width height]` works from any renderer; the optional pixel dimensions
+default to the live viewport (small under no-TTY) and are clamped to
+64..8192 px.
+
+### Camera orientation: `:orient view`
+
+`:orient` aligns the camera to the molecule's principal axes via PCA
+(largest variance → screen X, middle → Y, smallest → Z). `:orient view
+<vx> <vy> <vz>` then chooses *which direction in that PCA frame the
+camera looks from*. Default is `0 0 1`: down the shortest axis, so the
+flattest face of the molecule fills the screen.
+
+<p align="center">
+  <img src="assets/orient_views.png" alt="Four :orient view directions on 1crn" width="640">
+</p>
+
+The vectors are interpreted in the PCA basis, so the same view spec
+gives a comparable framing across structures of different sizes and
+orientations.
 
 ### Dependencies
 

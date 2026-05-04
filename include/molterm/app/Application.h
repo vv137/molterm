@@ -201,6 +201,7 @@ private:
     int pickGridKey(int sx, int sy) const { return (sy / kPickCellSize) * 10000 + (sx / kPickCellSize); }
 
     bool running_ = false;
+    bool quitRequested_ = false;
     bool needsRedraw_ = true;
     int64_t lastFrameMs_ = 0;
     int framesToSkip_ = 0;

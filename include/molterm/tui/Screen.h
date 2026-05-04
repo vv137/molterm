@@ -4,6 +4,11 @@
 
 namespace molterm {
 
+// True when MOLTERM_HEADLESS=1 was set before Screen construction.
+// In headless mode, ncurses is never initialized — used for script runs
+// that should not blink the alternate screen buffer.
+bool isHeadless();
+
 // RAII wrapper for ncurses initialization/teardown
 class Screen {
 public:
