@@ -274,16 +274,38 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
             return ring;
         };
 
-        auto prevRing = makeRing(0);
-        for (int i = 1; i < nPts; ++i) {
-            auto ring = makeRing(i);
-            int color = spine[i].color;
-            int n = static_cast<int>(std::min(prevRing.size(), ring.size()));
+        // Linearly interpolate `src` around its perimeter to produce a ring
+        // with `target` vertices. Used at SS transitions where helix/sheet
+        // (4 verts) meets coil (coilSegments verts) — without this, the
+        // strip would only stitch the first min(N, M) corners and leave a
+        // gash on one side.
+        auto resampleRing = [](const std::vector<Vert>& src, int target)
+            -> std::vector<Vert> {
+            int n = static_cast<int>(src.size());
+            std::vector<Vert> out;
+            if (n == 0 || target <= 0 || n == target) return src;
+            out.reserve(target);
+            for (int i = 0; i < target; ++i) {
+                float frac = static_cast<float>(i) / static_cast<float>(target)
+                             * static_cast<float>(n);
+                int idx = static_cast<int>(frac);
+                float t = frac - static_cast<float>(idx);
+                const Vert& a = src[idx % n];
+                const Vert& b = src[(idx + 1) % n];
+                out.push_back({a.x + t * (b.x - a.x),
+                               a.y + t * (b.y - a.y),
+                               a.z + t * (b.z - a.z)});
+            }
+            return out;
+        };
 
+        auto emitStrip = [&](const std::vector<Vert>& ringA,
+                             const std::vector<Vert>& ringB, int color) {
+            int n = static_cast<int>(std::min(ringA.size(), ringB.size()));
             for (int j = 0; j < n; ++j) {
                 int j1 = (j + 1) % n;
-                auto& a = prevRing[j]; auto& b = prevRing[j1];
-                auto& c = ring[j1];    auto& d = ring[j];
+                const auto& a = ringA[j]; const auto& b = ringA[j1];
+                const auto& c = ringB[j1]; const auto& d = ringB[j];
 
                 float as, ay, ad, bs, by2, bd, cs, cy, cd, ds, dy, dd;
                 cam.projectCached(a.x, a.y, a.z, as, ay, ad);
@@ -294,8 +316,52 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
                 canvas.drawTriangle(as, ay, ad, bs, by2, bd, ds, dy, dd, color);
                 canvas.drawTriangle(bs, by2, bd, cs, cy, cd, ds, dy, dd, color);
             }
+        };
+
+        // Fan from the spline-point center to each edge of the ring; closes
+        // the open end of a chain so the cartoon doesn't show a hollow tube
+        // mouth at the N- and C-termini.
+        auto emitCap = [&](const std::vector<Vert>& ring, float cx, float cy,
+                           float cz, int color) {
+            int n = static_cast<int>(ring.size());
+            if (n < 3) return;
+            float ccsx, ccsy, ccsd;
+            cam.projectCached(cx, cy, cz, ccsx, ccsy, ccsd);
+            for (int j = 0; j < n; ++j) {
+                int j1 = (j + 1) % n;
+                const auto& a = ring[j]; const auto& b = ring[j1];
+                float asx, asy, ad, bsx, bsy, bd;
+                cam.projectCached(a.x, a.y, a.z, asx, asy, ad);
+                cam.projectCached(b.x, b.y, b.z, bsx, bsy, bd);
+                canvas.drawTriangle(ccsx, ccsy, ccsd,
+                                    asx, asy, ad,
+                                    bsx, bsy, bd, color);
+            }
+        };
+
+        auto prevRing = makeRing(0);
+        emitCap(prevRing, spine[0].x, spine[0].y, spine[0].z, spine[0].color);
+
+        for (int i = 1; i < nPts; ++i) {
+            auto ring = makeRing(i);
+            int color = spine[i].color;
+
+            if (prevRing.size() == ring.size()) {
+                emitStrip(prevRing, ring, color);
+            } else {
+                int target = static_cast<int>(
+                    std::max(prevRing.size(), ring.size()));
+                if (static_cast<int>(prevRing.size()) == target) {
+                    emitStrip(prevRing, resampleRing(ring, target), color);
+                } else {
+                    emitStrip(resampleRing(prevRing, target), ring, color);
+                }
+            }
             prevRing = std::move(ring);
         }
+
+        emitCap(prevRing, spine[nPts - 1].x, spine[nPts - 1].y,
+                spine[nPts - 1].z, spine[nPts - 1].color);
     } else {
         // Braille/block/ascii: thick circle-stamped spline lines
         float scaleF = static_cast<float>(canvas.scaleX());
