@@ -387,7 +387,7 @@ Switch at runtime: `:set renderer braille|block|ascii|pixel` or `m` to toggle.
 | Scheme | Key | Description |
 |--------|-----|-------------|
 | Heteroatom | `ce` | N=blue O=red S=yellow P=magenta (carbon unchanged) |
-| Chain | `cc` | Cycled per chain (green, cyan, magenta, yellow, red, blue) |
+| Chain | `cc` | 12-color cycle (green, cyan, magenta, yellow, red, blue, orange, lime, teal, purple, pink, slate) |
 | Secondary structure | `cs` | Helix=red Sheet=yellow Loop=green |
 | B-factor | `cb` | Blue→Green→Red gradient |
 | pLDDT | `cp` | AlphaFold confidence (>90 blue, 70-90 light blue, 50-70 yellow, <50 orange) |
@@ -507,7 +507,8 @@ H  = "white"
 _default = "white"
 
 [schemes.chain]
-_cycle = ["green", "cyan", "magenta", "yellow", "red", "blue"]
+_cycle = ["green", "cyan", "magenta", "yellow", "red", "blue",
+          "orange", "lime", "teal", "purple", "pink", "slate"]
 
 [schemes.ss]
 helix = "red"

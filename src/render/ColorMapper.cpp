@@ -17,13 +17,21 @@ void ColorMapper::initColors() {
     init_pair(kColorIron,       COLOR_CYAN,    -1);
     init_pair(kColorOther,      COLOR_WHITE,   -1);
 
-    // Chain colors
+    // Chain colors — 12-hue cycle. 8-color terminals collapse pairs
+    // (orange→yellow, pink→magenta, etc.); 256-color terminals get
+    // distinct hues, set further down.
     init_pair(kColorChainA, COLOR_GREEN,   -1);
     init_pair(kColorChainB, COLOR_CYAN,    -1);
     init_pair(kColorChainC, COLOR_MAGENTA, -1);
     init_pair(kColorChainD, COLOR_YELLOW,  -1);
     init_pair(kColorChainE, COLOR_RED,     -1);
     init_pair(kColorChainF, COLOR_BLUE,    -1);
+    init_pair(kColorChainG, COLOR_YELLOW,  -1);  // orange (256: distinct)
+    init_pair(kColorChainH, COLOR_GREEN,   -1);  // lime
+    init_pair(kColorChainI, COLOR_CYAN,    -1);  // teal
+    init_pair(kColorChainJ, COLOR_MAGENTA, -1);  // purple
+    init_pair(kColorChainK, COLOR_MAGENTA, -1);  // pink
+    init_pair(kColorChainL, COLOR_BLUE,    -1);  // slate
 
     // SS colors
     init_pair(kColorHelix, COLOR_RED,    -1);
@@ -88,6 +96,13 @@ void ColorMapper::initColors() {
         init_pair(kColorSalmon,  209, -1);  // salmon
         init_pair(kColorSlate,   67,  -1);  // slate
         init_pair(kColorGray,    245, -1);  // gray
+        // Chain G-L with 256-color precision so a 12-mer reads as 12 hues
+        init_pair(kColorChainG, 208, -1);   // orange
+        init_pair(kColorChainH, 118, -1);   // lime
+        init_pair(kColorChainI, 30,  -1);   // teal
+        init_pair(kColorChainJ, 135, -1);   // purple
+        init_pair(kColorChainK, 213, -1);   // pink
+        init_pair(kColorChainL, 67,  -1);   // slate
         // pLDDT with 256-color precision
         init_pair(kColorPLDDTVeryHigh, 21,  -1);  // deep blue
         init_pair(kColorPLDDTHigh,     75,  -1);  // light blue
@@ -173,9 +188,19 @@ int ColorMapper::colorForElement(const std::string& element) {
 
 int ColorMapper::colorForChain(const std::string& chainId) {
     if (chainId.empty()) return kColorChainA;
-    int idx = (chainId[0] - 'A') % 6;
-    if (idx < 0) idx = 0;
-    return kColorChainA + idx;
+    // 12-color cycle. Pair IDs 10-15 (A-F) are contiguous, but G-L live
+    // at 110-115 to avoid collision with SS / B-factor IDs that grew up
+    // around the original chain range, so we look the second half up
+    // through a small table rather than via offset arithmetic.
+    static constexpr int kChainPalette[12] = {
+        kColorChainA, kColorChainB, kColorChainC,
+        kColorChainD, kColorChainE, kColorChainF,
+        kColorChainG, kColorChainH, kColorChainI,
+        kColorChainJ, kColorChainK, kColorChainL,
+    };
+    int idx = (chainId[0] - 'A') % 12;
+    if (idx < 0) idx += 12;
+    return kChainPalette[idx];
 }
 
 int ColorMapper::colorForSS(SSType ss) {
