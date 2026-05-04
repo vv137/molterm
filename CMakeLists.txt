@@ -37,10 +37,7 @@ FetchContent_Declare(
     GIT_TAG        master
     GIT_SHALLOW    TRUE
 )
-FetchContent_GetProperties(usalign)
-if(NOT usalign_POPULATED)
-    FetchContent_Populate(usalign)
-endif()
+FetchContent_MakeAvailable(usalign)
 
 # Build USalign binary from single source
 add_executable(USalign ${usalign_SOURCE_DIR}/USalign.cpp)

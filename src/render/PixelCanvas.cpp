@@ -61,6 +61,27 @@ void PixelCanvas::resize(int termW, int termH) {
     clear();
 }
 
+void PixelCanvas::resizePixels(int pixW, int pixH) {
+    if (pixW < 1) pixW = 1;
+    if (pixH < 1) pixH = 1;
+    if (pixW == pixW_ && pixH == pixH_) return;
+
+    pixW_ = pixW;
+    pixH_ = pixH;
+    // Keep termW_/termH_ as a coarse cell-grid view of the framebuffer
+    // (cellPixW_/cellPixH_ are unchanged so aspectYX() still reports
+    // square pixels for export).
+    termW_ = std::max(1, pixW_ / std::max(1, cellPixW_));
+    termH_ = std::max(1, pixH_ / std::max(1, cellPixH_));
+
+    size_t nPix = static_cast<size_t>(pixW_) * pixH_;
+    rgb_.resize(nPix * 3);
+    colorIds_.resize(nPix);
+    prevRgb_.clear();
+    zbuf_.resize(pixW_, pixH_);
+    clear();
+}
+
 void PixelCanvas::clear() {
     std::memset(rgb_.data(), 0, rgb_.size());
     std::memset(colorIds_.data(), 0xFF, colorIds_.size());

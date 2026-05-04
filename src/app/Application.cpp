@@ -1961,9 +1961,12 @@ void Application::registerCommands() {
         float minY = minX, maxY = maxX, minZ = minX, maxZ = maxX;
         for (int i : indices) {
             cx += atoms[i].x; cy += atoms[i].y; cz += atoms[i].z;
-            if (atoms[i].x < minX) minX = atoms[i].x; if (atoms[i].x > maxX) maxX = atoms[i].x;
-            if (atoms[i].y < minY) minY = atoms[i].y; if (atoms[i].y > maxY) maxY = atoms[i].y;
-            if (atoms[i].z < minZ) minZ = atoms[i].z; if (atoms[i].z > maxZ) maxZ = atoms[i].z;
+            if (atoms[i].x < minX) minX = atoms[i].x;
+            if (atoms[i].x > maxX) maxX = atoms[i].x;
+            if (atoms[i].y < minY) minY = atoms[i].y;
+            if (atoms[i].y > maxY) maxY = atoms[i].y;
+            if (atoms[i].z < minZ) minZ = atoms[i].z;
+            if (atoms[i].z > maxZ) maxZ = atoms[i].z;
         }
         float n = static_cast<float>(indices.size());
         cx /= n; cy /= n; cz /= n;
@@ -2854,19 +2857,15 @@ void Application::registerCommands() {
         if (!encoder) return {false, "Cannot create offscreen renderer"};
 
         PixelCanvas offscreen(std::move(encoder));
-        int w, h;
         if (reqPixW > 0) {
-            // PixelCanvas::resize takes terminal cells; back-compute from
-            // pixels using the canvas's current cell-pixel size.
-            int cellW = std::max(2, offscreen.scaleX());
-            int cellH = std::max(4, offscreen.scaleY());
-            w = std::max(1, reqPixW / cellW);
-            h = std::max(1, reqPixH / cellH);
+            // Honor the exact pixel dimensions the user asked for —
+            // converting through cells and back would silently truncate
+            // when the request isn't a multiple of the terminal's cell size.
+            offscreen.resizePixels(reqPixW, reqPixH);
         } else {
-            w = app.layout().viewportWidth();
-            h = app.layout().viewportHeight();
+            offscreen.resize(app.layout().viewportWidth(),
+                             app.layout().viewportHeight());
         }
-        offscreen.resize(w, h);
         offscreen.clear();
 
         auto& tab = app.tabs().currentTab();

@@ -19,6 +19,13 @@ public:
     ~PixelCanvas() override;
 
     void resize(int termW, int termH) override;
+
+    // Resize the framebuffer to exact pixel dimensions, independent of
+    // terminal cell size. Intended for offscreen export (e.g. screenshot
+    // at user-specified W×H) where rounding pixels to whole cells would
+    // truncate the output.
+    void resizePixels(int pixW, int pixH);
+
     void clear() override;
     void flush(Window& win) override;
     void invalidate() override { prevRgb_.clear(); }
