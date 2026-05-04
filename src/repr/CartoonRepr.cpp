@@ -536,6 +536,93 @@ void CartoonRepr::renderNucleicBases(const MolObject& /* mol */,
 
     static const char* k6ring[] = {"N1","C2","N3","C4","C5","C6"};
     static const char* k5ring[] = {"C4","C5","N7","C8","N9"};
+    // Fused purine ring atoms (used in pixel mode to span both rings
+    // with a single slab).
+    static const char* k9ring[] = {
+        "N1","C2","N3","C4","C5","C6","N7","C8","N9"
+    };
+
+    bool useTriangles = (canvas.scaleX() >= 8);
+    std::vector<TriangleSpan> triBatch;
+
+    // Build a flat 8-vertex slab (1.0 Å half-width × 0.2 Å half-thickness)
+    // running from C1' to the ring centroid. Width lies in the ring
+    // plane perpendicular to the slab axis; thickness lies along the
+    // ring normal. Pushes 12 triangles into `triBatch`.
+    auto pushSlab = [&](int c1idx, const std::vector<int>& ringAtoms,
+                        int color) {
+        if (ringAtoms.size() < 3) return;
+
+        float cx, cy, cz, nnx, nny, nnz;
+        ringGeometry(ringAtoms, cx, cy, cz, nnx, nny, nnz);
+
+        float c1x = atoms[c1idx].x, c1y = atoms[c1idx].y, c1z = atoms[c1idx].z;
+        float lx = cx - c1x, ly = cy - c1y, lz = cz - c1z;
+        if (normalize3(lx, ly, lz) < 1e-6f) return;
+
+        // Width axis: perpendicular to slab axis and ring normal,
+        // i.e. lies in the ring plane.
+        float wxa, wya, wza;
+        cross3(lx, ly, lz, nnx, nny, nnz, wxa, wya, wza);
+        if (normalize3(wxa, wya, wza) < 1e-6f) {
+            // Slab axis is parallel to ring normal — pick any
+            // perpendicular as a fallback.
+            cross3(lx, ly, lz, 0.0f, 1.0f, 0.0f, wxa, wya, wza);
+            if (normalize3(wxa, wya, wza) < 1e-6f) {
+                cross3(lx, ly, lz, 1.0f, 0.0f, 0.0f, wxa, wya, wza);
+                normalize3(wxa, wya, wza);
+            }
+        }
+        // Thickness axis: complete the right-handed frame.
+        float txa, tya, tza;
+        cross3(lx, ly, lz, wxa, wya, wza, txa, tya, tza);
+        normalize3(txa, tya, tza);
+
+        constexpr float HW = 1.0f;   // half-width  (Å)
+        constexpr float HT = 0.2f;   // half-thickness (Å)
+
+        auto corner = [&](float bx, float by, float bz, float ws, float ts,
+                          float& ox, float& oy, float& oz) {
+            ox = bx + ws * HW * wxa + ts * HT * txa;
+            oy = by + ws * HW * wya + ts * HT * tya;
+            oz = bz + ws * HW * wza + ts * HT * tza;
+        };
+
+        // 8 corners: 0..3 at C1' end, 4..7 at centroid end.
+        // Layout: 0=TL(+w+t) 1=TR(-w+t) 2=BR(-w-t) 3=BL(+w-t)
+        float v[8][3];
+        corner(c1x, c1y, c1z, +1, +1, v[0][0], v[0][1], v[0][2]);
+        corner(c1x, c1y, c1z, -1, +1, v[1][0], v[1][1], v[1][2]);
+        corner(c1x, c1y, c1z, -1, -1, v[2][0], v[2][1], v[2][2]);
+        corner(c1x, c1y, c1z, +1, -1, v[3][0], v[3][1], v[3][2]);
+        corner(cx,  cy,  cz,  +1, +1, v[4][0], v[4][1], v[4][2]);
+        corner(cx,  cy,  cz,  -1, +1, v[5][0], v[5][1], v[5][2]);
+        corner(cx,  cy,  cz,  -1, -1, v[6][0], v[6][1], v[6][2]);
+        corner(cx,  cy,  cz,  +1, -1, v[7][0], v[7][1], v[7][2]);
+
+        // Project once per vertex; reuse for all 12 triangles.
+        float p[8][3];
+        for (int k = 0; k < 8; ++k) {
+            cam.projectCached(v[k][0], v[k][1], v[k][2],
+                              p[k][0], p[k][1], p[k][2]);
+        }
+
+        auto pushQuad = [&](int a, int b, int c, int d) {
+            triBatch.push_back({{p[a][0], p[b][0], p[c][0]},
+                                {p[a][1], p[b][1], p[c][1]},
+                                {p[a][2], p[b][2], p[c][2]}, color});
+            triBatch.push_back({{p[a][0], p[c][0], p[d][0]},
+                                {p[a][1], p[c][1], p[d][1]},
+                                {p[a][2], p[c][2], p[d][2]}, color});
+        };
+
+        pushQuad(0, 1, 2, 3);  // front (at C1')
+        pushQuad(5, 4, 7, 6);  // back  (at centroid, reverse winding)
+        pushQuad(0, 4, 5, 1);  // top
+        pushQuad(3, 2, 6, 7);  // bottom
+        pushQuad(0, 3, 7, 4);  // left
+        pushQuad(1, 5, 6, 2);  // right
+    };
 
     int ai = 0;
     while (ai < static_cast<int>(atoms.size())) {
@@ -556,39 +643,62 @@ void CartoonRepr::renderNucleicBases(const MolObject& /* mol */,
         bool purine = isPurine(a0.resName);
         int color = baseColor(a0.resName);
 
-        int hex[6], hexN = 0;
-        for (auto* name : k6ring) {
-            int idx = findAtom(resStart, resEnd, name);
-            if (idx >= 0 && hexN < 6) hex[hexN++] = idx;
-        }
-
-        if (hexN >= 3) {
-            std::vector<int> hv(hex, hex + hexN);
-            float hcx, hcy, hcz, hnx, hny, hnz;
-            ringGeometry(hv, hcx, hcy, hcz, hnx, hny, hnz);
-
-            float sx0, sy0, d0, sx1, sy1, d1;
-            cam.projectCached(atoms[c1idx].x, atoms[c1idx].y, atoms[c1idx].z, sx0, sy0, d0);
-            cam.projectCached(hcx, hcy, hcz, sx1, sy1, d1);
-            canvas.drawLine(static_cast<int>(sx0), static_cast<int>(sy0), d0,
-                            static_cast<int>(sx1), static_cast<int>(sy1), d1, color);
-
-            drawRegularPolygon(hcx, hcy, hcz, hnx, hny, hnz, 1.2f, 6, color);
-        }
-
-        if (purine) {
-            int pent[5], pentN = 0;
-            for (auto* name : k5ring) {
+        if (useTriangles) {
+            // One slab per residue; for purines use all 9 atoms of the
+            // fused bicyclic so the slab spans both rings as a single
+            // tablet.
+            std::vector<int> ringAtoms;
+            const char* const* names = purine ? k9ring : k6ring;
+            int count = purine ? 9 : 6;
+            ringAtoms.reserve(count);
+            for (int n = 0; n < count; ++n) {
+                int idx = findAtom(resStart, resEnd, names[n]);
+                if (idx >= 0) ringAtoms.push_back(idx);
+            }
+            pushSlab(c1idx, ringAtoms, color);
+        } else {
+            // Text-mode fallback: stick + ring outline (purines also
+            // get the 5-ring outline so the bicyclic is visible).
+            int hex[6], hexN = 0;
+            for (auto* name : k6ring) {
                 int idx = findAtom(resStart, resEnd, name);
-                if (idx >= 0 && pentN < 5) pent[pentN++] = idx;
+                if (idx >= 0 && hexN < 6) hex[hexN++] = idx;
             }
-            if (pentN >= 3) {
-                std::vector<int> pv(pent, pent + pentN);
-                float pcx, pcy, pcz, pnx, pny, pnz;
-                ringGeometry(pv, pcx, pcy, pcz, pnx, pny, pnz);
-                drawRegularPolygon(pcx, pcy, pcz, pnx, pny, pnz, 1.0f, 5, color);
+
+            if (hexN >= 3) {
+                std::vector<int> hv(hex, hex + hexN);
+                float hcx, hcy, hcz, hnx, hny, hnz;
+                ringGeometry(hv, hcx, hcy, hcz, hnx, hny, hnz);
+
+                float sx0, sy0, d0, sx1, sy1, d1;
+                cam.projectCached(atoms[c1idx].x, atoms[c1idx].y, atoms[c1idx].z,
+                                  sx0, sy0, d0);
+                cam.projectCached(hcx, hcy, hcz, sx1, sy1, d1);
+                canvas.drawLine(static_cast<int>(sx0), static_cast<int>(sy0), d0,
+                                static_cast<int>(sx1), static_cast<int>(sy1), d1,
+                                color);
+
+                drawRegularPolygon(hcx, hcy, hcz, hnx, hny, hnz, 1.2f, 6, color);
+            }
+
+            if (purine) {
+                int pent[5], pentN = 0;
+                for (auto* name : k5ring) {
+                    int idx = findAtom(resStart, resEnd, name);
+                    if (idx >= 0 && pentN < 5) pent[pentN++] = idx;
+                }
+                if (pentN >= 3) {
+                    std::vector<int> pv(pent, pent + pentN);
+                    float pcx, pcy, pcz, pnx, pny, pnz;
+                    ringGeometry(pv, pcx, pcy, pcz, pnx, pny, pnz);
+                    drawRegularPolygon(pcx, pcy, pcz, pnx, pny, pnz, 1.0f, 5, color);
+                }
             }
         }
+    }
+
+    if (useTriangles && !triBatch.empty()) {
+        canvas.drawTriangleBatch(triBatch.data(), triBatch.size());
     }
 }
 
