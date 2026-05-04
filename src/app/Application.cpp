@@ -517,13 +517,7 @@ void Application::handleMouse(int /*key*/) {
                 // gs/gS/gc convention — ESC to exit).
                 std::vector<int> subject = expandByFocusGranularity(*obj, atomIdx);
                 pickedAtomIdx_ = atomIdx;        // so subsequent F can refocus
-                char d[80];
-                std::snprintf(d, sizeof(d),
-                    "%s %d%s (chain %s)",
-                    a.resName.c_str(), a.resSeq,
-                    (a.insCode == ' ' ? "" : std::string(1, a.insCode).c_str()),
-                    a.chainId.c_str());
-                enterFocus(*obj, subject, d);
+                enterFocus(*obj, subject, residueInfoString(a));
             } else {
                 // Inspect mode — show info at current level
                 pickedAtomIdx_ = atomIdx;
@@ -602,13 +596,7 @@ void Application::handleMouse(int /*key*/) {
             if (focusActive() || pickMode_ == PickMode::Focus) {
                 auto subject = expandByFocusGranularity(*obj, hitAtom);
                 pickedAtomIdx_ = hitAtom;
-                char d[80];
-                std::snprintf(d, sizeof(d),
-                    "%s %d%s (chain %s)",
-                    a.resName.c_str(), a.resSeq,
-                    (a.insCode == ' ' ? "" : std::string(1, a.insCode).c_str()),
-                    a.chainId.c_str());
-                enterFocus(*obj, subject, d);
+                enterFocus(*obj, subject, residueInfoString(a));
             } else {
                 auto& seqCam = tabMgr_.currentTab().camera();
                 seqCam.setCenter(a.x, a.y, a.z);
@@ -997,14 +985,7 @@ void Application::handleAction(Action action) {
                 // Expand by configured granularity (default Residue —
                 // matches prior behavior).
                 subjectIdx = expandByFocusGranularity(*obj, target);
-                const auto& a = atoms[target];
-                char d[80];
-                std::snprintf(d, sizeof(d),
-                    "%s %d%s (chain %s)",
-                    a.resName.c_str(), a.resSeq,
-                    (a.insCode == ' ' ? "" : std::string(1, a.insCode).c_str()),
-                    a.chainId.c_str());
-                desc = d;
+                desc = residueInfoString(atoms[target]);
             } else {
                 // Fall back to the active named selection.
                 auto it = namedSelections_.find("sele");
@@ -1139,9 +1120,10 @@ void Application::handleAction(Action action) {
         }
 
         case Action::ToggleSeqBar: {
-            // Two-state toggle: hidden ↔ visible. When visible we always show
-            // every sequence (wrap mode); the old single-line scroll mode is
-            // no longer reachable from the toggle.
+            // Force wrap=true so visible always means "all sequences shown."
+            // The legacy single-line scroll mode is still reachable via
+            // `:set seqwrap off` but no key cycles through it — three states
+            // confused users with the camera-focus key.
             layout_.setSeqBarWrap(true);
             layout_.toggleSeqBar();
             cmdLine_.setMessage(layout_.seqBarVisible()
@@ -1747,6 +1729,16 @@ int Application::findNearestAtom(int termX, int termY) const {
     float maxRange = static_cast<float>(10 * std::max(scaleX, scaleY));
     if (bestDist2 > maxRange * maxRange) return -1;
     return bestIdx;
+}
+
+std::string Application::residueInfoString(const AtomData& a) const {
+    char buf[80];
+    std::snprintf(buf, sizeof(buf),
+        "%s %d%s (chain %s)",
+        a.resName.c_str(), a.resSeq,
+        (a.insCode == ' ' ? "" : std::string(1, a.insCode).c_str()),
+        a.chainId.c_str());
+    return std::string(buf);
 }
 
 std::string Application::atomInfoString(const MolObject& mol, int atomIdx) const {

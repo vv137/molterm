@@ -63,11 +63,6 @@ void Layout::setSeqBar(bool visible) {
     }
 }
 
-void Layout::toggleSeqBarWrap() {
-    seqBarWrap_ = !seqBarWrap_;
-    updateLayout();
-}
-
 void Layout::setSeqBarWrap(bool wrap) {
     if (seqBarWrap_ != wrap) {
         seqBarWrap_ = wrap;

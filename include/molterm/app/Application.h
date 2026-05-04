@@ -329,6 +329,9 @@ private:
                                               int atomIdx) const;
     int findNearestAtom(int termX, int termY) const;
     std::string atomInfoString(const MolObject& mol, int atomIdx) const;
+    // "{resName} {resSeq}{insCode} (chain {chainId})" — used as enterFocus's
+    // description for residue-anchored focus calls.
+    std::string residueInfoString(const AtomData& a) const;
     void initRepresentations();
     void executeSearch(const std::string& query);
 public:
