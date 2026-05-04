@@ -3444,17 +3444,19 @@ void Application::registerCommands() {
             path = positional[0];
         }
 
+        auto savedMsg = [&](int w, int h) {
+            std::string msg = "Saved " + std::to_string(w) + "x" + std::to_string(h);
+            if (reqDpi > 0) msg += " @ " + std::to_string(reqDpi) + " dpi";
+            msg += " to " + path;
+            return msg;
+        };
+
         // If already in pixel mode and no explicit size was requested,
         // grab the live framebuffer.
         if (app.rendererType() == RendererType::Pixel && reqPixW == 0) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
-            if (pc && pc->savePNG(path, reqDpi)) {
-                std::string msg = "Saved " + std::to_string(pc->pixelWidth()) + "x" +
-                       std::to_string(pc->pixelHeight());
-                if (reqDpi > 0) msg += " @ " + std::to_string(reqDpi) + " dpi";
-                msg += " to " + path;
-                return {true, msg};
-            }
+            if (pc && pc->savePNG(path, reqDpi))
+                return ExecResult{true, savedMsg(pc->pixelWidth(), pc->pixelHeight())};
             return {false, "Failed to save " + path};
         }
 
@@ -3518,13 +3520,8 @@ void Application::registerCommands() {
         if (canvas)
             tab.camera().prepareProjection(canvas->subW(), canvas->subH(), canvas->aspectYX());
 
-        if (offscreen.savePNG(path, reqDpi)) {
-            std::string msg = "Saved " + std::to_string(offscreen.pixelWidth()) + "x" +
-                   std::to_string(offscreen.pixelHeight());
-            if (reqDpi > 0) msg += " @ " + std::to_string(reqDpi) + " dpi";
-            msg += " to " + path;
-            return {true, msg};
-        }
+        if (offscreen.savePNG(path, reqDpi))
+            return ExecResult{true, savedMsg(offscreen.pixelWidth(), offscreen.pixelHeight())};
         return {false, "Failed to save " + path};
     }, ":screenshot [file.png] [W H [DPI]]", "Save PNG; optional pixel size + DPI metadata for figure prep");
 
