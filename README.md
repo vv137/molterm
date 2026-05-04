@@ -51,6 +51,8 @@ make -j$(nproc)
 ./molterm structure.cif.gz        # gzipped files supported
 ./molterm --resume                # restore last session (auto-saved on quit)
 ./molterm -r                      # short form
+./molterm --script setup.mt       # run a command script after load (also -s)
+./molterm --script setup.mt --strict   # abort on first script error (exit 1)
 ./molterm --version               # prints version + git hash
 ```
 
@@ -187,7 +189,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :overlay                        " Toggle overlay visibility (labels, measurements, sele)
 :overlay clear                  " Clear all measurements and labels
 :preset                         " Apply smart defaults (cartoon protein, ballstick ligands)
-:run <script.mt>                " Execute command script (# comments supported)
+:run [--strict] <script.mt>     " Execute command script (# comments supported; --strict aborts on first error)
 :save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png]          " Save viewport as PNG (works in any renderer)
@@ -296,8 +298,23 @@ Configuration files in `~/.molterm/`:
 ├── config.toml          # general settings (default renderer, auto-center, etc.)
 ├── keymap.toml          # custom keybindings (overrides defaults)
 ├── colors.toml          # custom color schemes
+├── init.mt              # auto-run command script (optional)
 └── molterm.log          # session log (auto-created)
 ```
+
+<details>
+<summary><strong>init.mt — startup command script</strong></summary>
+
+If `~/.molterm/init.mt` exists, MolTerm runs it on startup right after commands are registered, before any positional file args, `--script`, or `--resume`. Use it for preferred defaults so they apply to every session. Failures are logged to `molterm.log` but never abort startup (CLI `--strict` only applies to `--script`, not `init.mt`).
+
+```
+# ~/.molterm/init.mt
+:set renderer pixel
+:set fog 0.4
+:set outline
+```
+
+</details>
 
 <details>
 <summary><strong>keymap.toml example</strong></summary>
@@ -558,6 +575,13 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Measurement display** — dashed lines + distance/angle values drawn between measured atoms on viewport
 - [x] **`:run` script** — execute `.mt` command script files for automation (`:run setup.mt`)
 - [x] **BlockCanvas diff flush** — cell-level dirty tracking (same as BrailleCanvas) for SSH
+
+### Phase 6.9: Scripting Polish — DONE
+
+- [x] **Structured `ExecResult`** — commands return `{ok, msg}` instead of bare strings; enables proper error propagation
+- [x] **`-s`/`--script <file>` CLI flag** — run a command script after init, before entering the REPL
+- [x] **`--strict` flag** — script errors abort startup (exit 1) for both `--script` and `:run --strict`
+- [x] **`init.mt` auto-loader** — runs `~/.molterm/init.mt` on startup before files/`--script`/`--resume`; failures logged but never block REPL
 
 ### Phase 6.5: Sequence Bar — DONE
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -61,6 +62,20 @@ public:
 
     // Load a file into the current tab
     std::string loadFile(const std::string& path);
+
+    // Result of running commands from a script stream.
+    struct ScriptRunResult {
+        int count = 0;        // commands attempted (non-blank, non-comment)
+        int failures = 0;     // failed commands
+        std::string firstFail; // first failure message (if any)
+        std::string failLine;  // the offending line for the first failure
+        std::string lastMsg;   // last non-empty result message
+        bool stopped = false;  // true if strict mode aborted early
+    };
+
+    // Run commands from a stream. Skips blank lines and `#` comments.
+    // If strict is true, stops on the first failure.
+    ScriptRunResult runScriptStream(std::istream& in, bool strict = false);
 
     // Renderer switching
     void setRenderer(RendererType type);
