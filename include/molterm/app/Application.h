@@ -143,9 +143,14 @@ private:
     // Contact map + interface overlay state
     ContactMapPanel contactMapPanel_;
     bool interfaceOverlay_ = false;
-    std::vector<std::pair<int,int>> interfacePairs_;  // cached atom index pairs for overlay
+    // Cached classified inter-chain contacts; one entry per residue
+    // pair, color-coded at render time by interaction type.
+    std::vector<InterfaceContact> interfaceContacts_;
+    // Fallback color used when classification is disabled
+    // (`:set interface_classify off`).
     int interfaceColor_ = kColorYellow;
     int interfaceThickness_ = 2; // pixel-mode line thickness (1-4)
+    bool interfaceClassify_ = true;
 
     // Inspect / pick state (mouse-only)
     InspectLevel inspectLevel_ = InspectLevel::Atom;

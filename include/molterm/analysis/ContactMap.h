@@ -1,12 +1,29 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "molterm/core/MolObject.h"
 
 namespace molterm {
+
+// Classification of an inter-chain atomic contact, picked per residue
+// pair by priority (SaltBridge > HBond > Hydrophobic > Other) and
+// rendered with a distinct color in the interface overlay.
+enum class InteractionType : std::uint8_t {
+    HBond = 0,        // N/O ↔ N/O   ≤ 3.5 Å
+    SaltBridge,       // ±charged    ≤ 4.0 Å
+    Hydrophobic,      // C–C between hydrophobic residues ≤ 4.5 Å
+    Other,            // any heavy-atom pair below the search cutoff
+};
+
+struct InterfaceContact {
+    int atom1;
+    int atom2;
+    float distance;
+    InteractionType type;
+};
 
 struct ResidueInfo {
     int resSeq;
@@ -43,8 +60,13 @@ public:
     // Get distance between two residue indices (NaN if not computed)
     float distance(int ri, int rj) const;
 
-    // Interface pairs: inter-chain contacts as atom index pairs for 3D overlay
-    const std::vector<std::pair<int,int>>& interfacePairs() const { return interfacePairs_; }
+    // Interface contacts: classified inter-chain atom pairs for 3D overlay.
+    // computeInterface() populates this with per-pair classification;
+    // filterContacts() (called from compute()) populates Other-typed
+    // pairs only (it has no atom-name context).
+    const std::vector<InterfaceContact>& interfaceContacts() const {
+        return interfaceContacts_;
+    }
 
     bool valid() const { return !residues_.empty(); }
     void clear();
@@ -52,7 +74,7 @@ public:
 private:
     std::vector<ResidueInfo> residues_;
     std::vector<ContactPair> contacts_;
-    std::vector<std::pair<int,int>> interfacePairs_;
+    std::vector<InterfaceContact> interfaceContacts_;
     float cutoff_ = 8.0f;
 
     // Dense distance matrix: distMatrix_[i * N + j] = CA-CA distance

@@ -3,13 +3,75 @@
 
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 
 namespace molterm {
+
+namespace {
+
+// Side-chain atoms we treat as carrying a formal positive charge at
+// physiological pH — guanidinium of Arg and ε-ammonium of Lys.
+bool isPositive(const std::string& name, const std::string& resName) {
+    if (resName == "LYS" && name == "NZ") return true;
+    if (resName == "ARG" &&
+        (name == "NE" || name == "NH1" || name == "NH2")) return true;
+    return false;
+}
+
+// Side-chain carboxylate oxygens — Asp Oδ, Glu Oε. C-terminal OXT
+// would also qualify but the renderer only chases inter-chain pairs.
+bool isNegative(const std::string& name, const std::string& resName) {
+    if (resName == "ASP" && (name == "OD1" || name == "OD2")) return true;
+    if (resName == "GLU" && (name == "OE1" || name == "OE2")) return true;
+    return false;
+}
+
+bool isHydrophobicResidue(const std::string& resName) {
+    return resName == "ALA" || resName == "VAL" || resName == "LEU" ||
+           resName == "ILE" || resName == "MET" || resName == "PHE" ||
+           resName == "PRO" || resName == "TRP" || resName == "CYS";
+}
+
+InteractionType classifyContact(const AtomData& a, const AtomData& b,
+                                float dist) {
+    if (dist <= 4.0f) {
+        bool aPos = isPositive(a.name, a.resName);
+        bool aNeg = isNegative(a.name, a.resName);
+        bool bPos = isPositive(b.name, b.resName);
+        bool bNeg = isNegative(b.name, b.resName);
+        if ((aPos && bNeg) || (aNeg && bPos))
+            return InteractionType::SaltBridge;
+    }
+    if (dist <= 3.5f) {
+        bool aHB = (a.element == "N" || a.element == "O");
+        bool bHB = (b.element == "N" || b.element == "O");
+        if (aHB && bHB) return InteractionType::HBond;
+    }
+    if (dist <= 4.5f &&
+        a.element == "C" && b.element == "C" &&
+        isHydrophobicResidue(a.resName) &&
+        isHydrophobicResidue(b.resName)) {
+        return InteractionType::Hydrophobic;
+    }
+    return InteractionType::Other;
+}
+
+int interactionPriority(InteractionType t) {
+    switch (t) {
+        case InteractionType::SaltBridge:  return 3;
+        case InteractionType::HBond:       return 2;
+        case InteractionType::Hydrophobic: return 1;
+        case InteractionType::Other:       return 0;
+    }
+    return 0;
+}
+
+}  // namespace
 
 void ContactMap::clear() {
     residues_.clear();
     contacts_.clear();
-    interfacePairs_.clear();
+    interfaceContacts_.clear();
     distMatrix_.clear();
     matrixSize_ = 0;
 }
@@ -87,43 +149,45 @@ void ContactMap::compute(const MolObject& mol, float cutoff) {
 }
 
 void ContactMap::computeInterface(const MolObject& mol, float cutoff) {
-    // Compute inter-chain contacts using closest heavy atom distance.
-    // This does NOT destroy the CA-CA contact map / distance matrix.
-    // It only populates interfacePairs_.
-    interfacePairs_.clear();
+    // Compute inter-chain contacts using a spatial-hash neighbor walk.
+    // Each residue pair keeps the highest-priority atomic interaction
+    // we can find within the search cutoff: salt bridge wins over a
+    // hydrogen bond, which wins over a hydrophobic contact, which wins
+    // over a generic "other" contact. Within the same priority class
+    // the closer atom pair wins.
+    //
+    // Does NOT destroy the CA-CA contact map / distance matrix.
+    interfaceContacts_.clear();
 
     const auto& atoms = mol.atoms();
     int nAtoms = static_cast<int>(atoms.size());
     if (nAtoms == 0) return;
 
-    // If residues not yet extracted, do it now
     if (residues_.empty()) extractResidues(mol);
     int nRes = static_cast<int>(residues_.size());
     if (nRes == 0) return;
 
-    // Build atom → residue index map
     std::vector<int> atomToRes(nAtoms, -1);
     for (int ri = 0; ri < nRes; ++ri) {
-        for (int ai = residues_[ri].firstAtomIdx; ai <= residues_[ri].lastAtomIdx; ++ai) {
+        for (int ai = residues_[ri].firstAtomIdx;
+             ai <= residues_[ri].lastAtomIdx; ++ai) {
             atomToRes[ai] = ri;
         }
     }
 
-    // Build spatial hash of all heavy atoms (skip H)
     SpatialHash grid(cutoff, nAtoms);
     for (int i = 0; i < nAtoms; ++i) {
         if (atoms[i].element == "H") continue;
         grid.insert(i, atoms[i].x, atoms[i].y, atoms[i].z);
     }
 
-    // For each inter-chain residue pair, find minimum heavy-atom distance.
-    // Track: minDist per (ri, rj) pair, and the corresponding atom pair.
-    // Use a flat map keyed by (ri * nRes + rj) to avoid O(nRes^2) memory.
-    struct InterfaceContact {
+    struct Best {
         float dist;
         int atom1, atom2;
+        InteractionType type;
+        int priority;
     };
-    std::unordered_map<int64_t, InterfaceContact> bestContact;
+    std::unordered_map<int64_t, Best> bestByPair;
 
     for (int i = 0; i < nAtoms; ++i) {
         if (atoms[i].element == "H") continue;
@@ -132,12 +196,10 @@ void ContactMap::computeInterface(const MolObject& mol, float cutoff) {
 
         const auto& ai = atoms[i];
         grid.forEachNeighbor(ai.x, ai.y, ai.z, cutoff, [&](int j) {
-            if (j <= i) return;  // avoid duplicates
+            if (j <= i) return;
             if (atoms[j].element == "H") return;
             int rj = atomToRes[j];
             if (rj < 0 || rj == ri) return;
-
-            // Inter-chain only
             if (residues_[ri].chainId == residues_[rj].chainId) return;
 
             float dx = ai.x - atoms[j].x;
@@ -145,26 +207,28 @@ void ContactMap::computeInterface(const MolObject& mol, float cutoff) {
             float dz = ai.z - atoms[j].z;
             float d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > cutoff * cutoff) return;
-
             float d = std::sqrt(d2);
 
-            // Canonical order: smaller residue index first
+            InteractionType t = classifyContact(ai, atoms[j], d);
+            int prio = interactionPriority(t);
+
             int rLo = std::min(ri, rj), rHi = std::max(ri, rj);
             int64_t key = static_cast<int64_t>(rLo) * nRes + rHi;
+            int a1 = (ri < rj) ? i : j;
+            int a2 = (ri < rj) ? j : i;
 
-            auto it = bestContact.find(key);
-            if (it == bestContact.end() || d < it->second.dist) {
-                int a1 = (ri < rj) ? i : j;
-                int a2 = (ri < rj) ? j : i;
-                bestContact[key] = {d, a1, a2};
+            auto it = bestByPair.find(key);
+            if (it == bestByPair.end() ||
+                prio > it->second.priority ||
+                (prio == it->second.priority && d < it->second.dist)) {
+                bestByPair[key] = {d, a1, a2, t, prio};
             }
         });
     }
 
-    // Collect interface pairs (closest atom pairs per residue pair)
-    interfacePairs_.reserve(bestContact.size());
-    for (const auto& [key, contact] : bestContact) {
-        interfacePairs_.emplace_back(contact.atom1, contact.atom2);
+    interfaceContacts_.reserve(bestByPair.size());
+    for (const auto& [key, b] : bestByPair) {
+        interfaceContacts_.push_back({b.atom1, b.atom2, b.dist, b.type});
     }
 }
 
@@ -176,7 +240,7 @@ float ContactMap::distance(int ri, int rj) const {
 
 void ContactMap::filterContacts(bool interfaceOnly) {
     contacts_.clear();
-    interfacePairs_.clear();
+    interfaceContacts_.clear();
 
     int n = matrixSize_;
     for (int i = 0; i < n; ++i) {
@@ -191,7 +255,15 @@ void ContactMap::filterContacts(bool interfaceOnly) {
             contacts_.push_back({i, j, d, residues_[i].caAtomIdx, residues_[j].caAtomIdx});
 
             if (interChain) {
-                interfacePairs_.emplace_back(residues_[i].caAtomIdx, residues_[j].caAtomIdx);
+                // CA-CA pairs from the contact map have no atom-name
+                // context to classify with; tag them as Other so the
+                // overlay can still render them if explicitly enabled.
+                interfaceContacts_.push_back({
+                    residues_[i].caAtomIdx,
+                    residues_[j].caAtomIdx,
+                    d,
+                    InteractionType::Other,
+                });
             }
         }
     }

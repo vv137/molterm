@@ -1392,20 +1392,33 @@ void Application::renderViewport() {
         }
     }
 
-    // Draw interface contact dashed lines
-    if (interfaceOverlay_ && !interfacePairs_.empty()) {
+    // Draw interface contact dashed lines (color-coded by interaction
+    // type when classification is enabled).
+    if (interfaceOverlay_ && !interfaceContacts_.empty()) {
         auto obj = tabMgr_.currentTab().currentObject();
         if (obj) {
             const auto& atoms = obj->atoms();
             auto& cam = tabMgr_.currentTab().camera();
-            for (const auto& [a1, a2] : interfacePairs_) {
-                if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
-                if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
+            auto colorFor = [this](InteractionType t) -> int {
+                if (!interfaceClassify_) return interfaceColor_;
+                switch (t) {
+                    case InteractionType::HBond:       return kColorCyan;
+                    case InteractionType::SaltBridge:  return kColorRed;
+                    case InteractionType::Hydrophobic: return kColorYellow;
+                    case InteractionType::Other:       return kColorGray;
+                }
+                return interfaceColor_;
+            };
+            for (const auto& c : interfaceContacts_) {
+                if (c.atom1 < 0 || c.atom1 >= static_cast<int>(atoms.size())) continue;
+                if (c.atom2 < 0 || c.atom2 >= static_cast<int>(atoms.size())) continue;
                 float sx1, sy1, d1, sx2, sy2, d2;
-                cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
-                cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                cam.projectCached(atoms[c.atom1].x, atoms[c.atom1].y,
+                                  atoms[c.atom1].z, sx1, sy1, d1);
+                cam.projectCached(atoms[c.atom2].x, atoms[c.atom2].y,
+                                  atoms[c.atom2].z, sx2, sy2, d2);
                 drawDashedLine(sx1, sy1, d1, sx2, sy2, d2,
-                               interfaceColor_, interfaceThickness_);
+                               colorFor(c.type), interfaceThickness_);
             }
         }
     }
@@ -2130,6 +2143,19 @@ void Application::registerCommands() {
             app.interfaceThickness_ = std::max(1, std::min(4, val));
             return "Interface thickness: " + std::to_string(app.interfaceThickness_);
         }
+        if (opt == "interface_classify" || opt == "iclass") {
+            if (cmd.args.size() < 2)
+                return "Usage: :set interface_classify on|off";
+            const std::string& v = cmd.args[1];
+            bool on = (v == "on" || v == "1" || v == "true" || v == "yes");
+            bool off = (v == "off" || v == "0" || v == "false" || v == "no");
+            if (!on && !off)
+                return "Usage: :set interface_classify on|off";
+            app.interfaceClassify_ = on;
+            return on ? "Interface classification: on (cyan H-bond, "
+                        "red salt, yellow hydrophobic, gray other)"
+                      : "Interface classification: off (single color)";
+        }
         return "Unknown option: " + opt;
     }, ":set <option> [value]", "Set option");
 
@@ -2812,20 +2838,37 @@ void Application::registerCommands() {
             // compute interface using closest heavy atom distance
             app.contactMapPanel_.update(*obj);
             app.contactMapPanel_.contactMap().computeInterface(*obj, cutoff);
-            app.interfacePairs_ = app.contactMapPanel_.contactMap().interfacePairs();
-            if (app.interfacePairs_.empty()) {
+            app.interfaceContacts_ =
+                app.contactMapPanel_.contactMap().interfaceContacts();
+            if (app.interfaceContacts_.empty()) {
                 app.interfaceOverlay_ = false;
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "No inter-chain contacts found (cutoff=%.1fA)", cutoff);
+                char buf[80];
+                std::snprintf(buf, sizeof(buf),
+                              "No inter-chain contacts found (cutoff=%.1fA)",
+                              cutoff);
                 return buf;
             }
-            return "Interface: " + std::to_string(app.interfacePairs_.size()) +
-                   " residue pairs (closest heavy atom <" +
-                   std::to_string(static_cast<int>(cutoff * 10) / 10.0f).substr(0, 3) + "A)";
+
+            int nHB = 0, nSalt = 0, nHyd = 0, nOther = 0;
+            for (const auto& c : app.interfaceContacts_) {
+                switch (c.type) {
+                    case InteractionType::HBond:       ++nHB;    break;
+                    case InteractionType::SaltBridge:  ++nSalt;  break;
+                    case InteractionType::Hydrophobic: ++nHyd;   break;
+                    case InteractionType::Other:       ++nOther; break;
+                }
+            }
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "Interface: %zu residue pairs (cutoff=%.1fA) — "
+                "salt %d, H-bond %d, hydrophobic %d, other %d",
+                app.interfaceContacts_.size(), cutoff,
+                nSalt, nHB, nHyd, nOther);
+            return buf;
         }
-        app.interfacePairs_.clear();
+        app.interfaceContacts_.clear();
         return "Interface overlay hidden";
-    }, ":interface [cutoff]", "Toggle inter-chain contact overlay (closest heavy atom)");
+    }, ":interface [cutoff]", "Toggle classified inter-chain contact overlay");
 }
 
 } // namespace molterm
