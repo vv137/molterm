@@ -22,10 +22,15 @@ public:
     void render(Window& win, int focusResi, const std::string& focusChain,
                 const Selection* sele, ColorScheme scheme, bool wrap);
 
-    // Mouse click → returns resSeq at terminal column, or -1. Sets chainId if found.
-    int resSeqAtColumn(int col, bool wrap, int winWidth, std::string* outChain = nullptr) const;
+    // Mouse click → returns resSeq at terminal (row, col) within the seqbar
+    // window, or -1 if the cell isn't a residue (separator, chain label, or
+    // empty). Sets chainId / reprAtomIdx (CA or C1', cached during update())
+    // if found. `row` is ignored in non-wrap mode.
+    int resSeqAtColumn(int row, int col, bool wrap, int winWidth,
+                       std::string* outChain = nullptr,
+                       int* outReprAtomIdx = nullptr) const;
 
-    // How many rows needed for wrap mode
+    // How many rows needed for wrap mode (cached per (residueCount, winWidth)).
     int wrapRows(int winWidth) const;
 
     // Chain list
@@ -62,6 +67,11 @@ private:
     int lastFocusResi_ = -1;   // track focus changes to avoid overriding manual scroll
     std::string lastObjName_;
     int cachedResCount_ = 0;
+    // wrapRows() memo. residues_ is stable between update() calls (which
+    // resets these); only winWidth changes per render, so we cache the
+    // last-seen (winWidth → rows) pair.
+    mutable int cachedWrapWinWidth_ = -1;
+    mutable int cachedWrapRows_ = 0;
 };
 
 } // namespace molterm

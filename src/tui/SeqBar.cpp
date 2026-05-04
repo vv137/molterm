@@ -29,6 +29,7 @@ void SeqBar::update(const MolObject& mol, const std::string& /*activeChainId*/) 
     residues_.clear();
     chainIds_.clear();
     cachedResCount_ = 0;
+    cachedWrapWinWidth_ = -1;  // residues changed; invalidate wrapRows memo
 
     const auto& atoms = mol.atoms();
     std::set<std::string> seenChains;
@@ -195,22 +196,47 @@ void SeqBar::render(Window& win, int focusResi, const std::string& focusChain,
     }
 }
 
-int SeqBar::resSeqAtColumn(int col, bool wrap, int winWidth, std::string* outChain) const {
-    int idx = -1;
+int SeqBar::resSeqAtColumn(int row, int col, bool wrap, int winWidth,
+                           std::string* outChain, int* outReprAtomIdx) const {
+    auto emit = [&](const Residue& r) -> int {
+        if (outChain) *outChain = r.chainId;
+        if (outReprAtomIdx) *outReprAtomIdx = r.reprAtomIdx;
+        return r.resSeq;
+    };
     if (!wrap) {
-        idx = scrollOffset_ + col;
+        int idx = scrollOffset_ + col;
+        (void)winWidth;
+        if (idx >= 0 && idx < static_cast<int>(residues_.size()) &&
+            residues_[idx].resSeq != kSeparator &&
+            residues_[idx].resSeq != kChainLabel) {
+            return emit(residues_[idx]);
+        }
+        return -1;
     }
-    (void)winWidth;
-    if (idx >= 0 && idx < static_cast<int>(residues_.size()) &&
-        residues_[idx].resSeq != kSeparator && residues_[idx].resSeq != kChainLabel) {
-        if (outChain) *outChain = residues_[idx].chainId;
-        return residues_[idx].resSeq;
+    // Wrap mode: walk the same path as render() and pick the residue under
+    // (row, col). Chain labels and separators return -1.
+    if (winWidth < 1) return -1;
+    int curRow = 0, curCol = 0;
+    for (const auto& r : residues_) {
+        if (r.resSeq == kSeparator) {
+            if (curCol > 0) { ++curRow; curCol = 0; }
+            continue;
+        }
+        if (r.resSeq == kChainLabel) {
+            curCol = static_cast<int>(r.chainId.size()) + 1;
+            continue;
+        }
+        if (curCol >= winWidth) { ++curRow; curCol = 0; }
+        if (curRow == row && curCol == col) return emit(r);
+        if (curRow > row) return -1;  // past the click row, give up
+        ++curCol;
     }
     return -1;
 }
 
 int SeqBar::wrapRows(int winWidth) const {
     if (winWidth < 5) return 1;
+    if (winWidth == cachedWrapWinWidth_) return cachedWrapRows_;
     int rows = 1, col = 0;
     for (const auto& r : residues_) {
         if (r.resSeq == kSeparator) { if (col > 0) { ++rows; col = 0; } continue; }
@@ -218,6 +244,8 @@ int SeqBar::wrapRows(int winWidth) const {
         if (col >= winWidth) { ++rows; col = 0; }
         ++col;
     }
+    cachedWrapWinWidth_ = winWidth;
+    cachedWrapRows_ = rows;
     return rows;
 }
 

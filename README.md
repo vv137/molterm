@@ -291,6 +291,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `F` | Focus on picked residue (subject-size aware zoom); press again to exit |
 | `q` + `a-z` | Record macro |
 | `@` + `a-z` | Play macro |
+| `b` | Toggle sequence bar (visible / hidden) |
 | `{` / `}` | Sequence bar prev/next chain |
 | `?` | Help overlay |
 
@@ -745,14 +746,13 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 
 ### Phase 6.5: Sequence Bar — DONE
 
-- [x] **Sequence bar** — all chains shown (`A:MKTAY...|B:GATT...`), visible by default
-- [x] **F key cycling** — hidden → scroll → wrap → hidden
-- [x] **Auto-scroll** — centers on inspected/clicked residue
-- [x] **Chain switcher** — `{`/`}` to cycle active chain in scroll mode
-- [x] **Wrap mode** — `:set seqwrap on` for multi-row display (height capped at screen/4)
+- [x] **Sequence bar** — all chains shown across multiple wrapped rows; visible by default
+- [x] **`b` to toggle** — two-state: visible (full sequences) ↔ hidden
+- [x] **Auto-scroll** — centers on inspected/clicked residue (legacy single-line mode)
+- [x] **Chain switcher** — `{`/`}` to cycle active chain (legacy single-line mode)
 - [x] **Selection highlight** — `$sele` atoms shown in reverse video
 - [x] **Color by scheme** — SS, chain coloring on sequence text
-- [x] **Click to navigate** — click residue in seqbar to center camera on it
+- [x] **Click to navigate** — click residue to center camera; in focus mode (or `gf` pick mode), click refocuses on that residue
 
 ### Phase 6.8: Selection + Rendering — DONE
 

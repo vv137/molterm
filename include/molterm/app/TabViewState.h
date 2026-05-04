@@ -18,9 +18,10 @@ struct TabViewState {
     bool panelVisible = false;
     bool analysisPanelVisible = false;
 
-    // SeqBar display
+    // SeqBar display — always wrap (show all sequences); the visible/hidden
+    // toggle is the only user-facing knob.
     bool seqBarVisible = true;
-    bool seqBarWrap = false;
+    bool seqBarWrap = true;
     int seqBarHeight = 1;
 };
 

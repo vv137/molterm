@@ -576,33 +576,45 @@ void Application::handleMouse(int /*key*/) {
                 }
             }
         }
-        // Click in seqbar → center on residue
+        // Click in seqbar → center on residue (or refocus, if focus is active
+        // or the focus pick mode is engaged — then the seqbar acts as a
+        // residue navigator).
         else if (layout_.seqBarVisible()) {
-            int seqBarY = 1 + layout_.viewportHeight();
+            int seqBarY = layout_.seqBar().posY();
+            int seqBarX = layout_.seqBar().posX();
             int seqBarH = layout_.seqBar().height();
-            if (event.y >= seqBarY && event.y < seqBarY + seqBarH) {
-                std::string clickChain;
-                int resi = activeSeqBar().resSeqAtColumn(event.x, layout_.seqBarWrap(),
-                                                   layout_.seqBar().width(), &clickChain);
-                if (resi >= 0) {
-                    activeViewState().focusResi = resi;
-                    activeViewState().focusChain = clickChain;
-                    auto obj = tabMgr_.currentTab().currentObject();
-                    if (obj) {
-                        const auto& atoms = obj->atoms();
-                        for (const auto& a : atoms) {
-                            if (a.resSeq == resi && a.chainId == clickChain &&
-                                (a.name == "CA" || a.name == "C1'")) {
-                                auto& seqCam = tabMgr_.currentTab().camera();
-                                seqCam.setCenter(a.x, a.y, a.z);
-                                if (seqCam.zoom() < 5.0f) seqCam.setZoom(8.0f);
-                                cmdLine_.setMessage(a.chainId + "/" +
-                                    a.resName + " " + std::to_string(resi));
-                                break;
-                            }
-                        }
-                    }
-                }
+            int seqBarW = layout_.seqBar().width();
+            if (event.y < seqBarY || event.y >= seqBarY + seqBarH ||
+                event.x < seqBarX || event.x >= seqBarX + seqBarW) return;
+            std::string clickChain;
+            int hitAtom = -1;
+            int resi = activeSeqBar().resSeqAtColumn(
+                event.y - seqBarY, event.x - seqBarX,
+                layout_.seqBarWrap(), seqBarW, &clickChain, &hitAtom);
+            if (resi < 0) return;
+            activeViewState().focusResi = resi;
+            activeViewState().focusChain = clickChain;
+            auto obj = tabMgr_.currentTab().currentObject();
+            if (!obj) return;
+            const auto& atoms = obj->atoms();
+            if (hitAtom < 0 || hitAtom >= (int)atoms.size()) return;
+            const auto& a = atoms[hitAtom];
+            if (focusActive() || pickMode_ == PickMode::Focus) {
+                auto subject = expandByFocusGranularity(*obj, hitAtom);
+                pickedAtomIdx_ = hitAtom;
+                char d[80];
+                std::snprintf(d, sizeof(d),
+                    "%s %d%s (chain %s)",
+                    a.resName.c_str(), a.resSeq,
+                    (a.insCode == ' ' ? "" : std::string(1, a.insCode).c_str()),
+                    a.chainId.c_str());
+                enterFocus(*obj, subject, d);
+            } else {
+                auto& seqCam = tabMgr_.currentTab().camera();
+                seqCam.setCenter(a.x, a.y, a.z);
+                if (seqCam.zoom() < 5.0f) seqCam.setZoom(8.0f);
+                cmdLine_.setMessage(a.chainId + "/" +
+                    a.resName + " " + std::to_string(resi));
             }
         }
     }
@@ -1127,19 +1139,14 @@ void Application::handleAction(Action action) {
         }
 
         case Action::ToggleSeqBar: {
-            if (!layout_.seqBarVisible()) {
-                layout_.toggleSeqBar();
-                if (layout_.seqBarWrap()) layout_.toggleSeqBarWrap();
-                cmdLine_.setMessage("Sequence bar: scroll");
-            } else if (!layout_.seqBarWrap()) {
-                layout_.toggleSeqBarWrap();
-                cmdLine_.setMessage("Sequence bar: wrap");
-            } else {
-                layout_.toggleSeqBarWrap();
-                layout_.toggleSeqBar();
-                cmdLine_.setMessage("Sequence bar: hidden");
-            }
-            // Sync to per-tab view state
+            // Two-state toggle: hidden ↔ visible. When visible we always show
+            // every sequence (wrap mode); the old single-line scroll mode is
+            // no longer reachable from the toggle.
+            layout_.setSeqBarWrap(true);
+            layout_.toggleSeqBar();
+            cmdLine_.setMessage(layout_.seqBarVisible()
+                                    ? "Sequence bar: visible"
+                                    : "Sequence bar: hidden");
             activeViewState().seqBarVisible = layout_.seqBarVisible();
             activeViewState().seqBarWrap = layout_.seqBarWrap();
             if (canvas_) canvas_->invalidate();

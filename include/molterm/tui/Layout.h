@@ -98,7 +98,7 @@ private:
     bool analysisPanelVisible_ = false;
     int panelWidth_ = 22;
     bool seqBarVisible_ = true;
-    bool seqBarWrap_ = false;
+    bool seqBarWrap_ = true;
     int seqBarHeight_ = 1;
 
     uint8_t dirtyFlags_ = 0xFF; // all dirty initially
