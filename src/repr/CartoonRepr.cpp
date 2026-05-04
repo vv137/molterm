@@ -21,7 +21,7 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     const auto& atoms = ctx.atoms;
 
     int subdiv = adjustLOD(subdivisions_, atoms.size());
-    int coilSegments = (atoms.size() > 5000) ? 4 : 8;
+    int coilSegments = (atoms.size() > 5000) ? 6 : 12;
 
     // Collect Cα/P atoms with residue-scoped C→O frame hints (proteins).
     // Walk each residue once; pick the first visible CA (or P), then look
@@ -265,9 +265,11 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
         }
     };
     auto ssHalfH = [&](SSType ss) -> float {
+        // Slab thickness for ribbon cross-sections (rectangle "depth").
+        // Loop falls through to the circular tube radius.
         switch (ss) {
-            case SSType::Helix: return 0.3f;
-            case SSType::Sheet: return 0.15f;
+            case SSType::Helix: return 0.40f;
+            case SSType::Sheet: return 0.20f;
             default:            return loopRadius_;
         }
     };
@@ -280,9 +282,14 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
             bool isCoil = (spine[i].ss == SSType::Loop);
 
             if (spine[i].arrowFrac >= 0.0f) {
+                // ProteinView-style "fish-tail" arrowhead: linearly widen
+                // the strand toward its tip (no taper-to-point). The
+                // following non-sheet residue starts as a coil, and the
+                // SS-transition resample + end caps close the open face
+                // so the broad end reads as a flared arrowhead.
+                constexpr float kArrowTipScale = 2.20f / 1.50f;
                 float af = spine[i].arrowFrac;
-                if (af < 0.5f) hw *= (1.0f + af * 1.2f);
-                else { hw *= (2.0f * (1.0f - af) * 1.6f); if (hw < 0.05f) hw = 0.05f; }
+                hw *= 1.0f + (kArrowTipScale - 1.0f) * af;
             }
 
             std::vector<Vert> ring;

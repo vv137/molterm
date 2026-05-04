@@ -58,10 +58,13 @@ private:
     void renderNucleicBases(const MolObject& mol, const RenderContext& ctx,
                             const Camera& cam, Canvas& canvas) const;
 
-    float helixRadius_ = 0.8f;
-    float sheetRadius_ = 0.7f;
-    float loopRadius_ = 0.25f;
-    int subdivisions_ = 8;
+    // Cartoon defaults follow ProteinView's chunkier sizing so helices
+    // and sheets read as solid 3-D ribbons rather than thin strips.
+    // All four are overridable via `:set cartoon_helix/sheet/loop/subdiv`.
+    float helixRadius_ = 1.30f;   // half-width  of helix ribbon, Å
+    float sheetRadius_ = 1.50f;   // half-width  of sheet ribbon, Å
+    float loopRadius_  = 0.40f;   // tube radius of coil section, Å
+    int subdivisions_  = 14;
     NucleicBackbone nucleicBackbone_ = NucleicBackbone::C4;
 };
 

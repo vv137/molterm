@@ -16,7 +16,10 @@ public:
     void setThickness(float t) { thickness_ = (t < 0.1f) ? 0.1f : t; }
 
 private:
-    float thickness_ = 1.0f;  // in sub-pixels
+    // 0.5 = ~5 px on a 1920-wide pixel canvas, ~1 px on braille.
+    // Slightly thicker than wireframe so the CA trace reads clearly
+    // against an empty background.
+    float thickness_ = 0.5f;  // sub-pixels per cell
 };
 
 } // namespace molterm
