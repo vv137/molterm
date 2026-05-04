@@ -165,12 +165,20 @@ void PixelCanvas::drawTriangle(float x0, float y0, float z0,
     int minY = std::max(0, static_cast<int>(std::min({y0, y1, y2})));
     int maxY = std::min(pixH_ - 1, static_cast<int>(std::max({y0, y1, y2})) + 1);
 
-    // Edge vectors
-    float ex0 = x1 - x0, ey0 = y1 - y0;
-    float ex1 = x2 - x1, ey1 = y2 - y1;
-    float ex2 = x0 - x2, ey2 = y0 - y2;
+    // Barycentric denominator (= twice the signed area). If the triangle is
+    // CW we swap two vertices so the inside-test below can use a single
+    // sign convention (u, v, w >= 0). Shading is two-sided so flipping the
+    // implied normal direction is harmless.
+    float denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+    if (std::abs(denom) < 1e-6f) return;  // degenerate
+    if (denom < 0.0f) {
+        std::swap(x1, x2); std::swap(y1, y2); std::swap(z1, z2);
+        denom = -denom;
+    }
+    float invDenom = 1.0f / denom;
 
-    // Triangle normal for shading (flat per-triangle)
+    // Triangle normal for shading (flat per-triangle, computed after the
+    // optional swap above so the magnitude is unaffected).
     float ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
     float bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
     float nx = ay * bz - az * by;
@@ -189,38 +197,45 @@ void PixelCanvas::drawTriangle(float x0, float y0, float z0,
     uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
     uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
 
-    // Barycentric denominator
-    float denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
-    if (std::abs(denom) < 1e-6f) return;  // degenerate
-    float invDenom = 1.0f / denom;
+    // Hoisted barycentric.  For every pixel inside the bounding box we
+    // need
+    //   u = ((y1 - y2)*(px - x2) + (x2 - x1)*(py - y2)) / denom
+    //   v = ((y2 - y0)*(px - x2) + (x0 - x2)*(py - y2)) / denom
+    //   w = 1 - u - v
+    // Splitting each into x- and y-dependent halves lets the per-pixel
+    // inner loop do 2 muls + 4 adds for u and v (vs. 8 muls + 4 adds
+    // for the naive recomputation) on top of the depth interpolation.
+    float u_x_step  = (y1 - y2) * invDenom;
+    float v_x_step  = (y2 - y0) * invDenom;
+    float u_y_coeff = (x2 - x1) * invDenom;
+    float v_y_coeff = (x0 - x2) * invDenom;
+
+    constexpr float kEdgeEps = -1e-4f;
 
     for (int py = minY; py <= maxY; ++py) {
+        float fpy = static_cast<float>(py) + 0.5f;
+        float dy  = fpy - y2;
+        float u_y = u_y_coeff * dy;
+        float v_y = v_y_coeff * dy;
+
         for (int px = minX; px <= maxX; ++px) {
             float fpx = static_cast<float>(px) + 0.5f;
-            float fpy = static_cast<float>(py) + 0.5f;
+            float dx  = fpx - x2;
 
-            // Edge tests (half-plane)
-            float e0 = ex0 * (fpy - y0) - ey0 * (fpx - x0);
-            float e1 = ex1 * (fpy - y1) - ey1 * (fpx - x1);
-            float e2 = ex2 * (fpy - y2) - ey2 * (fpx - x2);
+            float u = u_x_step * dx + u_y;
+            float v = v_x_step * dx + v_y;
+            float w = 1.0f - u - v;
 
-            // All same sign → inside (with small epsilon for edge)
-            if ((e0 >= -0.5f && e1 >= -0.5f && e2 >= -0.5f) ||
-                (e0 <= 0.5f && e1 <= 0.5f && e2 <= 0.5f)) {
+            if (u < kEdgeEps || v < kEdgeEps || w < kEdgeEps) continue;
 
-                // Barycentric interpolation for depth
-                float w0 = ((y1 - y2) * (fpx - x2) + (x2 - x1) * (fpy - y2)) * invDenom;
-                float w1 = ((y2 - y0) * (fpx - x2) + (x0 - x2) * (fpy - y2)) * invDenom;
-                float w2 = 1.0f - w0 - w1;
-                float depth = w0 * z0 + w1 * z1 + w2 * z2;
+            float depth = u * z0 + v * z1 + w * z2;
 
-                if (!zbuf_.testAndSet(px, py, depth)) continue;
-                if (depth < zMin_) zMin_ = depth;
-                if (depth > zMax_) zMax_ = depth;
+            if (!zbuf_.testAndSet(px, py, depth)) continue;
+            if (depth < zMin_) zMin_ = depth;
+            if (depth > zMax_) zMax_ = depth;
 
-                setPixel(px, py, cr, cg, cb);
-                colorIds_[static_cast<size_t>(py) * pixW_ + px] = static_cast<int8_t>(colorPair);
-            }
+            setPixel(px, py, cr, cg, cb);
+            colorIds_[static_cast<size_t>(py) * pixW_ + px] = static_cast<int8_t>(colorPair);
         }
     }
 }
