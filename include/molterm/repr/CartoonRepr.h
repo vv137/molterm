@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "molterm/repr/Representation.h"
 #include <string>
 #include <vector>
@@ -10,6 +12,14 @@ namespace molterm {
 // Helices and sheets are fat; coils are thin. Uses filled circles for 3D effect.
 class CartoonRepr : public Representation {
 public:
+    // Which nucleic-acid backbone atom drives the cartoon spline.
+    // C4' tracks the sugar ring centre and gives smoother curves;
+    // P matches the standard PDB phosphate-trace convention.
+    enum class NucleicBackbone : std::uint8_t {
+        C4 = 0,
+        P,
+    };
+
     ReprType type() const override { return ReprType::Cartoon; }
 
     void render(const MolObject& mol, const Camera& cam,
@@ -23,6 +33,8 @@ public:
     void setLoopRadius(float r) { loopRadius_ = r; }
     int subdivisions() const { return subdivisions_; }
     void setSubdivisions(int n) { subdivisions_ = n; }
+    NucleicBackbone nucleicBackbone() const { return nucleicBackbone_; }
+    void setNucleicBackbone(NucleicBackbone b) { nucleicBackbone_ = b; }
 
 private:
     struct CaAtom {
@@ -50,6 +62,7 @@ private:
     float sheetRadius_ = 0.7f;
     float loopRadius_ = 0.25f;
     int subdivisions_ = 8;
+    NucleicBackbone nucleicBackbone_ = NucleicBackbone::C4;
 };
 
 } // namespace molterm

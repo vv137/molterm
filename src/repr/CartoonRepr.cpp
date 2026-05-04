@@ -41,15 +41,40 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
             }
             int re = i;
 
-            int caIdx = -1, cIdx = -1, oIdx = -1;
+            // Pick the backbone tracer atom for this residue:
+            //   protein  → CA
+            //   nucleic  → C4' (default) or P, per `nucleicBackbone_`
+            // The non-chosen alternative is kept as a fallback so a
+            // missing primary atom doesn't drop the whole residue.
+            const std::string& resName = atoms[rs].resName;
+            bool nucleic = isNucleotide(resName);
+            bool wantC4 = (nucleicBackbone_ == NucleicBackbone::C4);
+
+            auto isPrimaryBackbone = [&](const std::string& name) {
+                if (!nucleic) return name == "CA";
+                return wantC4 ? (name == "C4'" || name == "C4*")
+                              : (name == "P");
+            };
+            auto isFallbackBackbone = [&](const std::string& name) {
+                if (!nucleic) return false;
+                return wantC4 ? (name == "P")
+                              : (name == "C4'" || name == "C4*");
+            };
+
+            int caIdx = -1, fbIdx = -1, cIdx = -1, oIdx = -1;
             for (int j = rs; j < re; ++j) {
-                if ((atoms[j].name == "CA" || atoms[j].name == "P") &&
-                    caIdx < 0 && ctx.visible(j)) {
+                if (caIdx < 0 && isPrimaryBackbone(atoms[j].name) &&
+                    ctx.visible(j)) {
                     caIdx = j;
+                }
+                if (caIdx < 0 && fbIdx < 0 &&
+                    isFallbackBackbone(atoms[j].name) && ctx.visible(j)) {
+                    fbIdx = j;
                 }
                 if (atoms[j].name == "C" && cIdx < 0) cIdx = j;
                 if (atoms[j].name == "O" && oIdx < 0) oIdx = j;
             }
+            if (caIdx < 0) caIdx = fbIdx;
             if (caIdx < 0) continue;
 
             float hx = 0.0f, hy = 0.0f, hz = 0.0f;

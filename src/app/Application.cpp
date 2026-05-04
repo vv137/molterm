@@ -756,9 +756,13 @@ void Application::handleAction(Action action) {
                                            "pan_speed", "ps", "fog", "outline", "outline_threshold", "ot",
                                            "outline_darken", "od", "cartoon_helix", "ch",
                                            "cartoon_sheet", "csh", "cartoon_loop", "cl",
-                                           "cartoon_subdiv", "csd", "lod_medium", "lod_low",
+                                           "cartoon_subdiv", "csd", "nucleic_backbone", "nb",
+                                           "lod_medium", "lod_low",
                                            "backbone_cutoff", "auto_center", "panel",
-                                           "seqbar", "seqwrap"}) {
+                                           "seqbar", "seqwrap",
+                                           "interface_color", "ic",
+                                           "interface_thickness", "it",
+                                           "interface_classify", "iclass"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
                     }
@@ -2094,6 +2098,23 @@ void Application::registerCommands() {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
             if (ct) { ct->setSubdivisions(std::stoi(cmd.args[1])); return "Cartoon subdivisions: " + cmd.args[1]; }
             return "Cartoon repr not found";
+        }
+        if (opt == "nucleic_backbone" || opt == "nb") {
+            if (cmd.args.size() < 2)
+                return "Usage: :set nucleic_backbone p|c4";
+            auto* ct = dynamic_cast<CartoonRepr*>(
+                app.getRepr(ReprType::Cartoon));
+            if (!ct) return "Cartoon repr not found";
+            const std::string& v = cmd.args[1];
+            if (v == "p" || v == "P") {
+                ct->setNucleicBackbone(CartoonRepr::NucleicBackbone::P);
+                return "Nucleic backbone trace: P (phosphate)";
+            }
+            if (v == "c4" || v == "C4" || v == "c4'" || v == "C4'") {
+                ct->setNucleicBackbone(CartoonRepr::NucleicBackbone::C4);
+                return "Nucleic backbone trace: C4'";
+            }
+            return "Unknown nucleic backbone: " + v + " (use p or c4)";
         }
         if (opt == "lod_medium") {
             if (cmd.args.size() < 2) return "Usage: :set lod_medium <atom_count>";
