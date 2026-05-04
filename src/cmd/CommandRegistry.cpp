@@ -11,13 +11,13 @@ void CommandRegistry::registerCmd(const std::string& name, CommandHandler handle
     commands_[name] = {name, std::move(handler), usage, description};
 }
 
-std::string CommandRegistry::execute(Application& app, const std::string& input) {
+ExecResult CommandRegistry::execute(Application& app, const std::string& input) {
     auto cmd = CommandParser::parse(input);
-    if (cmd.name.empty()) return "";
+    if (cmd.name.empty()) return {true, ""};
 
     auto it = commands_.find(cmd.name);
     if (it == commands_.end()) {
-        return "Unknown command: " + cmd.name;
+        return {false, "Unknown command: " + cmd.name};
     }
 
     return it->second.handler(app, cmd);

@@ -118,6 +118,26 @@ void Application::init(int argc, char* argv[]) {
     initRepresentations();
     registerCommands();
 
+    // Auto-load ~/.molterm/init.mt if present (after commands are registered, before file args).
+    // Failures here are logged but never abort startup — even under --strict from the CLI,
+    // which only applies to the user-supplied script.
+    if (const char* home = std::getenv("HOME")) {
+        std::string initPath = std::string(home) + "/.molterm/init.mt";
+        std::ifstream initFile(initPath);
+        if (initFile) {
+            MLOG_INFO("Loading init script: %s", initPath.c_str());
+            ScriptRunResult r = runScriptStream(initFile, /*strict=*/false);
+            if (r.failures > 0) {
+                MLOG_WARN("init.mt: %d of %d command(s) failed (first: %s)",
+                          r.failures, r.count, r.firstFail.c_str());
+                cmdLine_.setMessage("init.mt: " + std::to_string(r.failures) +
+                                    " command(s) failed - see ~/.molterm/molterm.log");
+            } else {
+                MLOG_INFO("init.mt: ran %d command(s)", r.count);
+            }
+        }
+    }
+
     // Set up SIGWINCH handler for terminal resize
     struct sigaction sa;
     sa.sa_handler = resizeHandler;
@@ -139,6 +159,32 @@ void Application::init(int argc, char* argv[]) {
             cmdLine_.setMessage(msg);
         }
     }
+}
+
+Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool strict) {
+    ScriptRunResult result;
+    std::string line;
+    while (std::getline(in, line)) {
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos || line[start] == '#') continue;
+        line = line.substr(start);
+        if (line.empty()) continue;
+        ExecResult r = cmdRegistry_.execute(*this, line);
+        ++result.count;
+        if (!r.msg.empty()) result.lastMsg = r.msg;
+        if (!r.ok) {
+            ++result.failures;
+            if (result.firstFail.empty()) {
+                result.firstFail = r.msg;
+                result.failLine = line;
+            }
+            if (strict) {
+                result.stopped = true;
+                return result;
+            }
+        }
+    }
+    return result;
 }
 
 void Application::initRepresentations() {
@@ -675,8 +721,8 @@ void Application::handleAction(Action action) {
             cmdLine_.pushHistory(input);
             cmdLine_.deactivate();
             inputHandler_->setMode(Mode::Normal);
-            std::string result = cmdRegistry_.execute(*this, input);
-            if (!result.empty()) cmdLine_.setMessage(result);
+            ExecResult result = cmdRegistry_.execute(*this, input);
+            if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
             layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
@@ -850,24 +896,24 @@ void Application::handleAction(Action action) {
 
         // Screenshot — command line message only
         case Action::Screenshot: {
-            std::string result = cmdRegistry_.execute(*this, "screenshot");
-            if (!result.empty()) cmdLine_.setMessage(result);
+            ExecResult result = cmdRegistry_.execute(*this, "screenshot");
+            if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
             dirty({C::CommandLine});
             break;
         }
 
         // Contact map toggle — affects panels + viewport
         case Action::ToggleContactMap: {
-            std::string result = cmdRegistry_.execute(*this, "contactmap");
-            if (!result.empty()) cmdLine_.setMessage(result);
+            ExecResult result = cmdRegistry_.execute(*this, "contactmap");
+            if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
             layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
 
         // Interface overlay toggle — viewport + panels
         case Action::ToggleInterface: {
-            std::string result = cmdRegistry_.execute(*this, "interface");
-            if (!result.empty()) cmdLine_.setMessage(result);
+            ExecResult result = cmdRegistry_.execute(*this, "interface");
+            if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
             layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
@@ -1660,51 +1706,55 @@ void Application::playMacro(char reg) {
 
 void Application::registerCommands() {
     // :q / :quit
-    cmdRegistry_.registerCmd("q", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("q", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         app.quit(cmd.forced);
-        return "";
+        return {true, ""};
     }, ":q[!]", "Quit MolTerm");
-    cmdRegistry_.registerCmd("quit", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("quit", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         app.quit(cmd.forced);
-        return "";
+        return {true, ""};
     }, ":quit[!]", "Quit MolTerm");
-    cmdRegistry_.registerCmd("qa", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("qa", [](Application& app, const ParsedCommand&) -> ExecResult {
         app.quit(true);
-        return "";
+        return {true, ""};
     }, ":qa", "Quit all");
 
     // :load <file>
-    cmdRegistry_.registerCmd("load", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :load <file>";
-        return app.loadFile(cmd.args[0]);
+    cmdRegistry_.registerCmd("load", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :load <file>"};
+        std::string msg = app.loadFile(cmd.args[0]);
+        bool ok = msg.rfind("Loaded ", 0) == 0;
+        return {ok, msg};
     }, ":load <file>", "Load a structure file");
-    cmdRegistry_.registerCmd("e", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :e <file>";
-        return app.loadFile(cmd.args[0]);
+    cmdRegistry_.registerCmd("e", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :e <file>"};
+        std::string msg = app.loadFile(cmd.args[0]);
+        bool ok = msg.rfind("Loaded ", 0) == 0;
+        return {ok, msg};
     }, ":e <file>", "Load a structure file (alias for :load)");
 
     // :tabnew
-    cmdRegistry_.registerCmd("tabnew", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("tabnew", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         std::string name = cmd.args.empty() ? "" : cmd.args[0];
         app.tabs().addTab(name);
         app.tabs().goToTab(static_cast<int>(app.tabs().count()) - 1);
-        return "New tab created";
+        return {true, "New tab created"};
     }, ":tabnew [name]", "Create new tab");
 
     // :tabclose
-    cmdRegistry_.registerCmd("tabclose", [](Application& app, const ParsedCommand&) -> std::string {
-        if (app.tabs().count() <= 1) return "Cannot close last tab";
+    cmdRegistry_.registerCmd("tabclose", [](Application& app, const ParsedCommand&) -> ExecResult {
+        if (app.tabs().count() <= 1) return {false, "Cannot close last tab"};
         app.tabs().closeCurrentTab();
-        return "";
+        return {true, ""};
     }, ":tabclose", "Close current tab");
 
     // :objects
-    cmdRegistry_.registerCmd("objects", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("objects", [](Application& app, const ParsedCommand&) -> ExecResult {
         auto names = app.store().names();
-        if (names.empty()) return "No objects loaded";
+        if (names.empty()) return {true, "No objects loaded"};
         std::string result = "Objects:";
         for (const auto& n : names) result += " " + n;
-        return result;
+        return {true, result};
     }, ":objects", "List loaded objects");
 
     // Helper: resolve repr name to ReprType. Returns false if unknown.
@@ -1719,12 +1769,12 @@ void Application::registerCommands() {
     };
 
     // :show <repr> [selection]
-    cmdRegistry_.registerCmd("show", [resolveRepr](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :show <repr> [selection]";
+    cmdRegistry_.registerCmd("show", [resolveRepr](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :show <repr> [selection]"};
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
         ReprType rt;
-        if (!resolveRepr(cmd.args[0], rt)) return "Unknown representation: " + cmd.args[0];
+        if (!resolveRepr(cmd.args[0], rt)) return {false, "Unknown representation: " + cmd.args[0]};
 
         if (cmd.args.size() > 1) {
             // Per-atom show: :show cartoon chain A
@@ -1734,21 +1784,21 @@ void Application::registerCommands() {
                 expr += cmd.args[i];
             }
             auto sel = app.parseSelection(expr, *obj);
-            if (sel.empty()) return "No atoms match: " + expr;
+            if (sel.empty()) return {false, "No atoms match: " + expr};
             obj->showReprForAtoms(rt, std::vector<int>(sel.indices().begin(), sel.indices().end()));
-            return "Showing " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms";
+            return {true, "Showing " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms"};
         }
         obj->showRepr(rt);
-        return "Showing " + cmd.args[0];
+        return {true, "Showing " + cmd.args[0]};
     }, ":show <repr> [selection]", "Show representation (optionally for selection)");
 
     // :hide [repr|all] [selection]
-    cmdRegistry_.registerCmd("hide", [resolveRepr](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("hide", [resolveRepr](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
         if (cmd.args.empty() || cmd.args[0] == "all") {
             obj->hideAllRepr();
-            return "Hidden all representations";
+            return {true, "Hidden all representations"};
         }
         ReprType rt;
         bool hasRepr = resolveRepr(cmd.args[0], rt);
@@ -1761,9 +1811,9 @@ void Application::registerCommands() {
                 expr += cmd.args[i];
             }
             auto sel = app.parseSelection(expr, *obj);
-            if (sel.empty()) return "No atoms match: " + expr;
+            if (sel.empty()) return {false, "No atoms match: " + expr};
             obj->hideAllReprForAtoms(std::vector<int>(sel.indices().begin(), sel.indices().end()));
-            return "Hidden all representations for " + std::to_string(sel.size()) + " atoms";
+            return {true, "Hidden all representations for " + std::to_string(sel.size()) + " atoms"};
         }
 
         if (cmd.args.size() > 1) {
@@ -1773,27 +1823,27 @@ void Application::registerCommands() {
                 expr += cmd.args[i];
             }
             auto sel = app.parseSelection(expr, *obj);
-            if (sel.empty()) return "No atoms match: " + expr;
+            if (sel.empty()) return {false, "No atoms match: " + expr};
             obj->hideReprForAtoms(rt, std::vector<int>(sel.indices().begin(), sel.indices().end()));
-            return "Hidden " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms";
+            return {true, "Hidden " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms"};
         }
         obj->hideRepr(rt);
-        return "Hidden " + cmd.args[0];
+        return {true, "Hidden " + cmd.args[0]};
     }, ":hide [repr|all] [selection]", "Hide representation (optionally for selection)");
 
     // :color <scheme>
-    cmdRegistry_.registerCmd("color", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("color", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty())
-            return "Usage: :color <scheme> or :color <name> <selection> | Colors: " + ColorMapper::availableColors();
+            return {false, "Usage: :color <scheme> or :color <name> <selection> | Colors: " + ColorMapper::availableColors()};
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
 
         const auto& first = cmd.args[0];
 
         // Check if first arg is a color scheme name
         if (first == "element" || first == "cpk") {
             int count = applyHeteroatomColors(*obj);
-            return "Colored " + std::to_string(count) + " heteroatoms by element";
+            return {true, "Colored " + std::to_string(count) + " heteroatoms by element"};
         }
         if (first == "chain") {
             // "color chain" with no more args → scheme
@@ -1801,42 +1851,42 @@ void Application::registerCommands() {
             if (cmd.args.size() == 1) {
                 obj->setColorScheme(ColorScheme::Chain);
                 obj->clearAtomColors();
-                return "Coloring by chain";
+                return {true, "Coloring by chain"};
             }
             // Fall through to try as named color
         }
         if (first == "ss" || first == "secondary") {
             obj->setColorScheme(ColorScheme::SecondaryStructure);
             obj->clearAtomColors();
-            return "Coloring by SS";
+            return {true, "Coloring by SS"};
         }
         if (first == "bfactor" || first == "b") {
             obj->setColorScheme(ColorScheme::BFactor);
             obj->clearAtomColors();
-            return "Coloring by B-factor";
+            return {true, "Coloring by B-factor"};
         }
         if (first == "plddt") {
             obj->setColorScheme(ColorScheme::PLDDT);
             obj->clearAtomColors();
-            return "Coloring by pLDDT (AlphaFold confidence)";
+            return {true, "Coloring by pLDDT (AlphaFold confidence)"};
         }
         if (first == "rainbow") {
             obj->setColorScheme(ColorScheme::Rainbow);
             obj->clearAtomColors();
-            return "Coloring rainbow (N→C terminus)";
+            return {true, "Coloring rainbow (N→C terminus)"};
         }
         if (first == "restype" || first == "type") {
             obj->setColorScheme(ColorScheme::ResType);
             obj->clearAtomColors();
-            return "Coloring by residue type (nonpolar/polar/acidic/basic)";
+            return {true, "Coloring by residue type (nonpolar/polar/acidic/basic)"};
         }
         if (first == "heteroatom" || first == "hetero" || first == "het_color") {
             int count = applyHeteroatomColors(*obj);
-            return "Colored " + std::to_string(count) + " heteroatoms by element";
+            return {true, "Colored " + std::to_string(count) + " heteroatoms by element"};
         }
         if (first == "clear" || first == "reset") {
             obj->clearAtomColors();
-            return "Cleared per-atom colors";
+            return {true, "Cleared per-atom colors"};
         }
 
         // Try as named color + optional selection:
@@ -1844,13 +1894,13 @@ void Application::registerCommands() {
         // :color red chain A      → color chain A red
         int colorPair = ColorMapper::colorByName(first);
         if (colorPair < 0)
-            return "Unknown color/scheme: " + first + " | Available: " + ColorMapper::availableColors();
+            return {false, "Unknown color/scheme: " + first + " | Available: " + ColorMapper::availableColors()};
 
         if (cmd.args.size() == 1) {
             // Color all atoms
             auto sel = Selection::all(static_cast<int>(obj->atoms().size()));
             obj->setAtomColors(std::vector<int>(sel.indices().begin(), sel.indices().end()), colorPair);
-            return "Colored all atoms " + first;
+            return {true, "Colored all atoms " + first};
         }
 
         // Remaining args form a selection expression
@@ -1861,9 +1911,9 @@ void Application::registerCommands() {
         }
 
         auto sel = app.parseSelection(expr, *obj);
-        if (sel.empty()) return "No atoms match: " + expr;
+        if (sel.empty()) return {false, "No atoms match: " + expr};
         obj->setAtomColors(std::vector<int>(sel.indices().begin(), sel.indices().end()), colorPair);
-        return "Colored " + std::to_string(sel.size()) + " atoms " + first;
+        return {true, "Colored " + std::to_string(sel.size()) + " atoms " + first};
     }, ":color <scheme|name> [selection]", "Set coloring scheme or per-atom color");
 
     // :zoom
@@ -1908,30 +1958,30 @@ void Application::registerCommands() {
     };
 
     // :center [selection]
-    cmdRegistry_.registerCmd("center", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("center", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto [indices, err] = resolveAtoms(app, cmd);
-        if (!err.empty()) return err;
+        if (!err.empty()) return {false, err};
         auto obj = app.tabs().currentTab().currentObject();
         auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
-        return "Centered on " + std::to_string(indices.size()) + " atoms";
+        return {true, "Centered on " + std::to_string(indices.size()) + " atoms"};
     }, ":center [selection]", "Center view on selection");
 
     // :zoom [selection]
-    cmdRegistry_.registerCmd("zoom", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("zoom", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto [indices, err] = resolveAtoms(app, cmd);
-        if (!err.empty()) return err;
+        if (!err.empty()) return {false, err};
         auto obj = app.tabs().currentTab().currentObject();
         auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
         if (span > 0.0f) app.tabs().currentTab().camera().setZoom(40.0f / span);
-        return "Zoomed to " + std::to_string(indices.size()) + " atoms";
+        return {true, "Zoomed to " + std::to_string(indices.size()) + " atoms"};
     }, ":zoom [selection]", "Center and zoom to fit selection");
 
     // :orient [selection] — align principal axes
-    cmdRegistry_.registerCmd("orient", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("orient", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto [indices, err] = resolveAtoms(app, cmd);
-        if (!err.empty()) return err;
+        if (!err.empty()) return {false, err};
         auto obj = app.tabs().currentTab().currentObject();
         auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
         auto& cam = app.tabs().currentTab().camera();
@@ -1984,20 +2034,20 @@ void Application::registerCommands() {
         rot[6] = static_cast<float>(tx); rot[7] = static_cast<float>(ty); rot[8] = static_cast<float>(tz);
         cam.setRotation(rot);
 
-        return "Oriented " + std::to_string(indices.size()) + " atoms";
+        return {true, "Oriented " + std::to_string(indices.size()) + " atoms"};
     }, ":orient [selection]", "Center, zoom, and align principal axes");
 
     // :set <option> [value]
-    cmdRegistry_.registerCmd("set", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :set <option> [value]";
+    cmdRegistry_.registerCmd("set", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :set <option> [value]"};
         const auto& opt = cmd.args[0];
         if (opt == "panel") {
             app.layout().togglePanel();
             app.tabs().currentTab().viewState().panelVisible = app.layout().panelVisible();
-            return app.layout().panelVisible() ? "Panel visible" : "Panel hidden";
+            return {true, app.layout().panelVisible() ? "Panel visible" : "Panel hidden"};
         }
         if (opt == "renderer" || opt == "render") {
-            if (cmd.args.size() < 2) return "Usage: :set renderer <ascii|braille|block|sixel|pixel|auto|kitty|iterm2>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set renderer <ascii|braille|block|sixel|pixel|auto|kitty|iterm2>"};
             const auto& val = cmd.args[1];
             if (val == "ascii")        app.setRenderer(RendererType::Ascii);
             else if (val == "braille") app.setRenderer(RendererType::Braille);
@@ -2015,125 +2065,125 @@ void Application::registerCommands() {
                 app.setForcedProtocol(GraphicsProtocol::ITerm2);
                 app.setRenderer(RendererType::Pixel);
             }
-            else return "Unknown renderer: " + val;
+            else return {false, "Unknown renderer: " + val};
             clearScreenAndRepaint();
-            return "Renderer set to " + val;
+            return {true, "Renderer set to " + val};
         }
         if (opt == "backbone_thickness" || opt == "bt") {
-            if (cmd.args.size() < 2) return "Usage: :set backbone_thickness <0.5-10>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set backbone_thickness <0.5-10>"};
             float val = std::stof(cmd.args[1]);
             auto* bb = dynamic_cast<BackboneRepr*>(app.getRepr(ReprType::Backbone));
             if (bb) {
                 bb->setThickness(val);
-                return "Backbone thickness set to " + std::to_string(bb->thickness());
+                return {true, "Backbone thickness set to " + std::to_string(bb->thickness())};
             }
-            return "Backbone repr not found";
+            return {false, "Backbone repr not found"};
         }
         if (opt == "wireframe_thickness" || opt == "wt") {
-            if (cmd.args.size() < 2) return "Usage: :set wireframe_thickness <0.5-10>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set wireframe_thickness <0.5-10>"};
             float val = std::stof(cmd.args[1]);
             auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe));
             if (wf) {
                 wf->setThickness(val);
-                return "Wireframe thickness set to " + std::to_string(wf->thickness());
+                return {true, "Wireframe thickness set to " + std::to_string(wf->thickness())};
             }
-            return "Wireframe repr not found";
+            return {false, "Wireframe repr not found"};
         }
         if (opt == "ball_radius" || opt == "br") {
-            if (cmd.args.size() < 2) return "Usage: :set ball_radius <1-10>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set ball_radius <1-10>"};
             int val = std::stoi(cmd.args[1]);
             auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
             if (bs) {
                 bs->setBallRadius(val);
-                return "Ball radius set to " + std::to_string(val);
+                return {true, "Ball radius set to " + std::to_string(val)};
             }
-            return "BallStick repr not found";
+            return {false, "BallStick repr not found"};
         }
         if (opt == "pan_speed" || opt == "ps") {
-            if (cmd.args.size() < 2) return "Usage: :set pan_speed <1-20>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set pan_speed <1-20>"};
             float val = std::stof(cmd.args[1]);
             app.tabs().currentTab().camera().setPanSpeed(val);
-            return "Pan speed set to " + std::to_string(val);
+            return {true, "Pan speed set to " + std::to_string(val)};
         }
         if (opt == "fog") {
-            if (cmd.args.size() < 2) return "Usage: :set fog <0.0-1.0> (0=off)";
+            if (cmd.args.size() < 2) return {false, "Usage: :set fog <0.0-1.0> (0=off)"};
             float val = std::stof(cmd.args[1]);
             app.setFogStrength(val);
-            return "Fog strength set to " + std::to_string(val);
+            return {true, "Fog strength set to " + std::to_string(val)};
         }
         if (opt == "outline") {
             app.setOutlineEnabled(!app.outlineEnabled());
-            return std::string("Outline: ") + (app.outlineEnabled() ? "on" : "off");
+            return {true, std::string("Outline: ") + (app.outlineEnabled() ? "on" : "off")};
         }
         if (opt == "outline_threshold" || opt == "ot") {
-            if (cmd.args.size() < 2) return "Usage: :set outline_threshold <0.0-1.0>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set outline_threshold <0.0-1.0>"};
             app.setOutlineThreshold(std::stof(cmd.args[1]));
-            return "Outline threshold set to " + cmd.args[1];
+            return {true, "Outline threshold set to " + cmd.args[1]};
         }
         if (opt == "outline_darken" || opt == "od") {
-            if (cmd.args.size() < 2) return "Usage: :set outline_darken <0.0-1.0>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set outline_darken <0.0-1.0>"};
             app.setOutlineDarken(std::stof(cmd.args[1]));
-            return "Outline darken set to " + cmd.args[1];
+            return {true, "Outline darken set to " + cmd.args[1]};
         }
         if (opt == "cartoon_helix" || opt == "ch") {
-            if (cmd.args.size() < 2) return "Usage: :set cartoon_helix <0.1-3.0>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_helix <0.1-3.0>"};
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setHelixRadius(std::stof(cmd.args[1])); return "Cartoon helix radius: " + cmd.args[1]; }
-            return "Cartoon repr not found";
+            if (ct) { ct->setHelixRadius(std::stof(cmd.args[1])); return {true, "Cartoon helix radius: " + cmd.args[1]}; }
+            return {false, "Cartoon repr not found"};
         }
         if (opt == "cartoon_sheet" || opt == "csh") {
-            if (cmd.args.size() < 2) return "Usage: :set cartoon_sheet <0.1-3.0>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet <0.1-3.0>"};
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setSheetRadius(std::stof(cmd.args[1])); return "Cartoon sheet radius: " + cmd.args[1]; }
-            return "Cartoon repr not found";
+            if (ct) { ct->setSheetRadius(std::stof(cmd.args[1])); return {true, "Cartoon sheet radius: " + cmd.args[1]}; }
+            return {false, "Cartoon repr not found"};
         }
         if (opt == "cartoon_loop" || opt == "cl") {
-            if (cmd.args.size() < 2) return "Usage: :set cartoon_loop <0.05-1.0>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_loop <0.05-1.0>"};
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setLoopRadius(std::stof(cmd.args[1])); return "Cartoon loop radius: " + cmd.args[1]; }
-            return "Cartoon repr not found";
+            if (ct) { ct->setLoopRadius(std::stof(cmd.args[1])); return {true, "Cartoon loop radius: " + cmd.args[1]}; }
+            return {false, "Cartoon repr not found"};
         }
         if (opt == "cartoon_subdiv" || opt == "csd") {
-            if (cmd.args.size() < 2) return "Usage: :set cartoon_subdiv <2-16>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_subdiv <2-16>"};
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setSubdivisions(std::stoi(cmd.args[1])); return "Cartoon subdivisions: " + cmd.args[1]; }
-            return "Cartoon repr not found";
+            if (ct) { ct->setSubdivisions(std::stoi(cmd.args[1])); return {true, "Cartoon subdivisions: " + cmd.args[1]}; }
+            return {false, "Cartoon repr not found"};
         }
         if (opt == "nucleic_backbone" || opt == "nb") {
             if (cmd.args.size() < 2)
-                return "Usage: :set nucleic_backbone p|c4";
+                return {false, "Usage: :set nucleic_backbone p|c4"};
             auto* ct = dynamic_cast<CartoonRepr*>(
                 app.getRepr(ReprType::Cartoon));
-            if (!ct) return "Cartoon repr not found";
+            if (!ct) return {false, "Cartoon repr not found"};
             const std::string& v = cmd.args[1];
             if (v == "p" || v == "P") {
                 ct->setNucleicBackbone(CartoonRepr::NucleicBackbone::P);
-                return "Nucleic backbone trace: P (phosphate)";
+                return {true, "Nucleic backbone trace: P (phosphate)"};
             }
             if (v == "c4" || v == "C4" || v == "c4'" || v == "C4'") {
                 ct->setNucleicBackbone(CartoonRepr::NucleicBackbone::C4);
-                return "Nucleic backbone trace: C4'";
+                return {true, "Nucleic backbone trace: C4'"};
             }
-            return "Unknown nucleic backbone: " + v + " (use p or c4)";
+            return {false, "Unknown nucleic backbone: " + v + " (use p or c4)"};
         }
         if (opt == "lod_medium") {
-            if (cmd.args.size() < 2) return "Usage: :set lod_medium <atom_count>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set lod_medium <atom_count>"};
             Representation::lodMediumThreshold = std::stoul(cmd.args[1]);
-            return "LOD medium threshold: " + cmd.args[1];
+            return {true, "LOD medium threshold: " + cmd.args[1]};
         }
         if (opt == "lod_low") {
-            if (cmd.args.size() < 2) return "Usage: :set lod_low <atom_count>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set lod_low <atom_count>"};
             Representation::lodLowThreshold = std::stoul(cmd.args[1]);
-            return "LOD low threshold: " + cmd.args[1];
+            return {true, "LOD low threshold: " + cmd.args[1]};
         }
         if (opt == "backbone_cutoff") {
-            if (cmd.args.size() < 2) return "Usage: :set backbone_cutoff <atom_count>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set backbone_cutoff <atom_count>"};
             Representation::backboneCutoff = std::stoul(cmd.args[1]);
-            return "Backbone fallback cutoff: " + cmd.args[1];
+            return {true, "Backbone fallback cutoff: " + cmd.args[1]};
         }
         if (opt == "auto_center") {
             app.setAutoCenter(!app.autoCenter());
-            return std::string("Auto-center on load: ") + (app.autoCenter() ? "on" : "off");
+            return {true, std::string("Auto-center on load: ") + (app.autoCenter() ? "on" : "off")};
         }
         if (opt == "seqbar") {
             app.layout().toggleSeqBar();
@@ -2141,7 +2191,7 @@ void Application::registerCommands() {
             vs.seqBarVisible = app.layout().seqBarVisible();
             if (app.canvas()) app.canvas()->invalidate();
             app.onResize();
-            return app.layout().seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden";
+            return {true, app.layout().seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden"};
         }
         if (opt == "seqwrap") {
             app.layout().toggleSeqBarWrap();
@@ -2149,97 +2199,97 @@ void Application::registerCommands() {
             vs.seqBarWrap = app.layout().seqBarWrap();
             if (app.canvas()) app.canvas()->invalidate();
             app.onResize();
-            return app.layout().seqBarWrap() ? "Sequence bar: wrap" : "Sequence bar: scroll";
+            return {true, app.layout().seqBarWrap() ? "Sequence bar: wrap" : "Sequence bar: scroll"};
         }
         if (opt == "interface_color" || opt == "ic") {
-            if (cmd.args.size() < 2) return "Usage: :set interface_color <color_name>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set interface_color <color_name>"};
             int c = ColorMapper::colorByName(cmd.args[1]);
-            if (c < 0) return "Unknown color: " + cmd.args[1] + " (" + ColorMapper::availableColors() + ")";
+            if (c < 0) return {false, "Unknown color: " + cmd.args[1] + " (" + ColorMapper::availableColors() + ")"};
             app.interfaceColor_ = c;
-            return "Interface color: " + cmd.args[1];
+            return {true, "Interface color: " + cmd.args[1]};
         }
         if (opt == "interface_thickness" || opt == "it") {
-            if (cmd.args.size() < 2) return "Usage: :set interface_thickness <1-4>";
+            if (cmd.args.size() < 2) return {false, "Usage: :set interface_thickness <1-4>"};
             int val = std::stoi(cmd.args[1]);
             app.interfaceThickness_ = std::max(1, std::min(4, val));
-            return "Interface thickness: " + std::to_string(app.interfaceThickness_);
+            return {true, "Interface thickness: " + std::to_string(app.interfaceThickness_)};
         }
         if (opt == "interface_classify" || opt == "iclass") {
             if (cmd.args.size() < 2)
-                return "Usage: :set interface_classify on|off";
+                return {false, "Usage: :set interface_classify on|off"};
             const std::string& v = cmd.args[1];
             bool on = (v == "on" || v == "1" || v == "true" || v == "yes");
             bool off = (v == "off" || v == "0" || v == "false" || v == "no");
             if (!on && !off)
-                return "Usage: :set interface_classify on|off";
+                return {false, "Usage: :set interface_classify on|off"};
             app.interfaceClassify_ = on;
-            return on ? "Interface classification: on (cyan H-bond, "
-                        "red salt, yellow hydrophobic, gray other)"
-                      : "Interface classification: off (single color)";
+            return {true, on ? "Interface classification: on (cyan H-bond, "
+                               "red salt, yellow hydrophobic, gray other)"
+                             : "Interface classification: off (single color)"};
         }
-        return "Unknown option: " + opt;
+        return {false, "Unknown option: " + opt};
     }, ":set <option> [value]", "Set option");
 
     // :help
-    cmdRegistry_.registerCmd("help", [](Application&, const ParsedCommand&) -> std::string {
-        return "Commands: :load :fetch :show :hide :color :zoom :center :orient :select :count "
-               ":align :measure :angle :dihedral :export :set :objects :delete :rename :info | ? for keybindings";
+    cmdRegistry_.registerCmd("help", [](Application&, const ParsedCommand&) -> ExecResult {
+        return {true, "Commands: :load :fetch :show :hide :color :zoom :center :orient :select :count "
+               ":align :measure :angle :dihedral :export :set :objects :delete :rename :info | ? for keybindings"};
     }, ":help", "Show help");
 
     // :delete
-    cmdRegistry_.registerCmd("delete", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("delete", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto& tab = app.tabs().currentTab();
         if (cmd.args.empty()) {
             auto obj = tab.currentObject();
-            if (!obj) return "No object selected";
+            if (!obj) return {false, "No object selected"};
             std::string name = obj->name();
             app.store().remove(name);
             tab.removeObject(tab.selectedObjectIdx());
-            return "Deleted " + name;
+            return {true, "Deleted " + name};
         }
         auto obj = app.store().get(cmd.args[0]);
-        if (!obj) return "Object not found: " + cmd.args[0];
+        if (!obj) return {false, "Object not found: " + cmd.args[0]};
         std::string name = obj->name();
         app.store().remove(name);
-        return "Deleted " + name;
+        return {true, "Deleted " + name};
     }, ":delete [name]", "Delete object");
 
     // :rename
-    cmdRegistry_.registerCmd("rename", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :rename <new_name> or :rename <old> <new>";
+    cmdRegistry_.registerCmd("rename", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :rename <new_name> or :rename <old> <new>"};
         if (cmd.args.size() < 2) {
             auto obj = app.tabs().currentTab().currentObject();
-            if (!obj) return "No object selected";
+            if (!obj) return {false, "No object selected"};
             std::string oldName = obj->name();
             if (app.store().rename(oldName, cmd.args[0]))
-                return "Renamed " + oldName + " -> " + cmd.args[0];
-            return "Failed to rename";
+                return {true, "Renamed " + oldName + " -> " + cmd.args[0]};
+            return {false, "Failed to rename"};
         }
         if (app.store().rename(cmd.args[0], cmd.args[1]))
-            return "Renamed " + cmd.args[0] + " -> " + cmd.args[1];
-        return "Failed to rename";
+            return {true, "Renamed " + cmd.args[0] + " -> " + cmd.args[1]};
+        return {false, "Failed to rename"};
     }, ":rename [old] <new>", "Rename object");
 
     // :info
-    cmdRegistry_.registerCmd("info", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("info", [](Application& app, const ParsedCommand&) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
-        return obj->name() + ": " +
+        if (!obj) return {false, "No object selected"};
+        return {true, obj->name() + ": " +
                std::to_string(obj->atoms().size()) + " atoms, " +
-               std::to_string(obj->bonds().size()) + " bonds";
+               std::to_string(obj->bonds().size()) + " bonds"};
     }, ":info", "Show object info");
 
     // :select <expression>
-    cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :select <expr> | :select <name> = <expr> | :select clear";
+    cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :select <expr> | :select <name> = <expr> | :select clear"};
         // :select clear — clear $sele
         if (cmd.args[0] == "clear") {
             auto it = app.namedSelections().find("sele");
             if (it != app.namedSelections().end()) it->second.clear();
-            return "Selection cleared";
+            return {true, "Selection cleared"};
         }
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
 
         // Check for named selection: "name = expr"
         // Find "=" in args
@@ -2266,26 +2316,26 @@ void Application::registerCommands() {
             }
         }
 
-        if (expr.empty()) return "Empty expression";
+        if (expr.empty()) return {false, "Empty expression"};
 
         auto sel = app.parseSelection(expr, *obj);
 
         if (!name.empty()) {
             // Store as named selection
             app.namedSelections()[name] = sel;
-            if (sel.empty()) return "Selection '" + name + "' is empty: " + expr;
-            return "Selection '" + name + "' = " + std::to_string(sel.size()) + " atoms";
+            if (sel.empty()) return {false, "Selection '" + name + "' is empty: " + expr};
+            return {true, "Selection '" + name + "' = " + std::to_string(sel.size()) + " atoms"};
         }
 
-        if (sel.empty()) return "Selection empty: " + expr;
-        return "Selected " + std::to_string(sel.size()) + " atoms: " + expr;
+        if (sel.empty()) return {false, "Selection empty: " + expr};
+        return {true, "Selected " + std::to_string(sel.size()) + " atoms: " + expr};
     }, ":select <expr>", "Select atoms by expression");
 
     // :count <expression> — count atoms matching selection
-    cmdRegistry_.registerCmd("count", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :count <expression>";
+    cmdRegistry_.registerCmd("count", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :count <expression>"};
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
 
         std::string expr;
         for (size_t i = 0; i < cmd.args.size(); ++i) {
@@ -2294,18 +2344,18 @@ void Application::registerCommands() {
         }
 
         auto sel = app.parseSelection(expr, *obj);
-        return std::to_string(sel.size()) + " atoms match: " + expr;
+        return {true, std::to_string(sel.size()) + " atoms match: " + expr};
     }, ":count <expr>", "Count atoms matching expression");
 
     // :sele — list named selections
-    cmdRegistry_.registerCmd("sele", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("sele", [](Application& app, const ParsedCommand&) -> ExecResult {
         auto& sels = app.namedSelections();
-        if (sels.empty()) return "No named selections";
+        if (sels.empty()) return {true, "No named selections"};
         std::string result = "Selections:";
         for (const auto& [name, sel] : sels) {
             result += " " + name + "(" + std::to_string(sel.size()) + ")";
         }
-        return result;
+        return {true, result};
     }, ":sele", "List named selections");
 
     // :align <mobile> <target> — single-chain TM-align
@@ -2316,10 +2366,10 @@ void Application::registerCommands() {
     //   :align 1abc backbone to 2def backbone     — backbone only
     //   :align 1abc to 2def                       — simple
     // Legacy: :align 1abc 2def [shared_sel]       — if no "to" found
-    auto doAlign = [](Application& app, const ParsedCommand& cmd, bool complex) -> std::string {
+    auto doAlign = [](Application& app, const ParsedCommand& cmd, bool complex) -> ExecResult {
         if (cmd.args.size() < 2) {
             std::string name = complex ? "mmalign" : "align";
-            return "Usage: :" + name + " <obj> [sel] to <obj> [sel]";
+            return {false, "Usage: :" + name + " <obj> [sel] to <obj> [sel]"};
         }
 
         // Find "to" separator
@@ -2345,7 +2395,7 @@ void Application::registerCommands() {
                     targetExpr += cmd.args[i];
                 }
             } else {
-                return "Missing target after 'to'";
+                return {false, "Missing target after 'to'"};
             }
         } else {
             // Legacy: first two args are obj names, rest is shared selection
@@ -2360,8 +2410,8 @@ void Application::registerCommands() {
 
         auto mobile = app.store().get(mobileName);
         auto target = app.store().get(targetName);
-        if (!mobile) return "Object not found: " + mobileName;
-        if (!target) return "Object not found: " + targetName;
+        if (!mobile) return {false, "Object not found: " + mobileName};
+        if (!target) return {false, "Object not found: " + targetName};
 
         std::vector<int> mobileAtoms, targetAtoms;
 
@@ -2369,45 +2419,45 @@ void Application::registerCommands() {
             auto mSel = app.parseSelection(mobileExpr, *mobile);
             mobileAtoms = std::vector<int>(mSel.indices().begin(), mSel.indices().end());
             if (mobileAtoms.empty())
-                return "Mobile selection empty: " + mobileExpr;
+                return {false, "Mobile selection empty: " + mobileExpr};
         }
         if (!targetExpr.empty()) {
             auto tSel = app.parseSelection(targetExpr, *target);
             targetAtoms = std::vector<int>(tSel.indices().begin(), tSel.indices().end());
             if (targetAtoms.empty())
-                return "Target selection empty: " + targetExpr;
+                return {false, "Target selection empty: " + targetExpr};
         }
 
         auto result = complex
             ? Aligner::alignComplex(*mobile, *target, mobileAtoms, targetAtoms)
             : Aligner::align(*mobile, *target, mobileAtoms, targetAtoms);
-        if (!result.success) return "Align failed: " + result.message;
+        if (!result.success) return {false, "Align failed: " + result.message};
 
         // Transform ALL atoms of mobile
         Aligner::applyTransform(*mobile, result);
 
         std::string mode = complex ? "MM-" : "TM-";
-        return mode + "aligned " + mobileName + " → " + targetName + " | " + result.message;
+        return {true, mode + "aligned " + mobileName + " → " + targetName + " | " + result.message};
     };
 
     // :align <obj> [sel] to <obj> [sel] — TM-align
-    cmdRegistry_.registerCmd("align", [doAlign](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("align", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return doAlign(app, cmd, false);
     }, ":align <obj> [sel] to <obj> [sel]", "Align structures (TM-align via USalign)");
 
     // :mmalign <obj> [sel] to <obj> [sel] — MM-align (complex/multi-chain)
-    cmdRegistry_.registerCmd("mmalign", [doAlign](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("mmalign", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return doAlign(app, cmd, true);
     }, ":mmalign <obj> [sel] to <obj> [sel]", "Align complexes (MM-align via USalign)");
 
     // :super — alias for :align
-    cmdRegistry_.registerCmd("super", [doAlign](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("super", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return doAlign(app, cmd, false);
     }, ":super <obj> [sel] to <obj> [sel]", "Superpose structures (alias for align)");
 
     // :fetch <pdb_id> — download from RCSB PDB or AlphaFold DB
-    cmdRegistry_.registerCmd("fetch", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :fetch <pdb_id> or :fetch afdb:<uniprot_id>";
+    cmdRegistry_.registerCmd("fetch", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :fetch <pdb_id> or :fetch afdb:<uniprot_id>"};
 
         std::string id = cmd.args[0];
         std::string url;
@@ -2439,12 +2489,13 @@ void Application::registerCommands() {
 
         if (std::filesystem::exists(outPath)) {
             std::string result = app.loadFile(outPath.string());
-            return "Loaded existing " + outPath.string() + " (skipped fetch from " + src + ") | " + result;
+            bool ok = result.rfind("Loaded ", 0) == 0;
+            return {ok, "Loaded existing " + outPath.string() + " (skipped fetch from " + src + ") | " + result};
         }
 
         std::string curlCmd = "curl -sL -o '" + outPath.string() + "' -w '%{http_code}' '" + url + "'";
         FILE* pipe = popen(curlCmd.c_str(), "r");
-        if (!pipe) return "Failed to run curl";
+        if (!pipe) return {false, "Failed to run curl"};
 
         char buf[64];
         std::string httpCode;
@@ -2454,27 +2505,28 @@ void Application::registerCommands() {
         if (ret != 0 || httpCode.find("200") == std::string::npos) {
             std::error_code ec;
             std::filesystem::remove(outPath, ec);
-            return "Failed to fetch " + id + " from " + src + " (HTTP " + httpCode + ")";
+            return {false, "Failed to fetch " + id + " from " + src + " (HTTP " + httpCode + ")"};
         }
 
         std::string result = app.loadFile(outPath.string());
-        return "Fetched " + id + " from " + src + " -> " + outPath.string() + " | " + result;
+        bool ok = result.rfind("Loaded ", 0) == 0;
+        return {ok, "Fetched " + id + " from " + src + " -> " + outPath.string() + " | " + result};
     }, ":fetch <pdb_id|afdb:uniprot_id>", "Download structure from RCSB PDB or AlphaFold DB");
 
     // :assembly [id|list] — generate biological assembly
-    cmdRegistry_.registerCmd("assembly", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("assembly", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
         std::string path = obj->sourcePath();
-        if (path.empty()) return "No source file for " + obj->name();
+        if (path.empty()) return {false, "No source file for " + obj->name()};
 
         if (!cmd.args.empty() && cmd.args[0] == "list") {
             auto assemblies = CifLoader::listAssemblies(path);
-            if (assemblies.empty()) return "No assemblies found in " + obj->name();
+            if (assemblies.empty()) return {true, "No assemblies found in " + obj->name()};
             std::string result = "Assemblies:";
             for (const auto& a : assemblies)
                 result += " " + a.name + "(" + std::to_string(a.oligomericCount) + "-mer)";
-            return result;
+            return {true, result};
         }
 
         std::string asmId = cmd.args.empty() ? "1" : cmd.args[0];
@@ -2487,33 +2539,35 @@ void Application::registerCommands() {
             app.tabs().currentTab().addObject(ptr);
             if (app.autoCenter()) app.tabs().currentTab().centerView();
             MLOG_INFO("Generated assembly %s: %d atoms, %d bonds", asmId.c_str(), atomCount, bondCount);
-            return "Assembly " + asmId + " → " + name + ": " +
-                   std::to_string(atomCount) + " atoms, " + std::to_string(bondCount) + " bonds";
+            return {true, "Assembly " + asmId + " → " + name + ": " +
+                   std::to_string(atomCount) + " atoms, " + std::to_string(bondCount) + " bonds"};
         } catch (const std::exception& e) {
-            return std::string("Assembly error: ") + e.what();
+            return {false, std::string("Assembly error: ") + e.what()};
         }
     }, ":assembly [id|list]", "Generate biological assembly (default: assembly 1)");
 
     // :export <file.pml> — export PyMOL script
-    cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :export <file.pml>";
+    cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :export <file.pml>"};
         const std::string& path = cmd.args[0];
 
         // Validate extension
         if (path.size() < 5 || path.substr(path.size() - 4) != ".pml")
-            return "Export file must have .pml extension";
+            return {false, "Export file must have .pml extension"};
 
         auto& tab = app.tabs().currentTab();
-        if (tab.objects().empty()) return "No objects to export";
+        if (tab.objects().empty()) return {false, "No objects to export"};
 
         int vpW = app.layout().viewportWidth();
         int vpH = app.layout().viewportHeight();
         std::string result = SessionExporter::exportPML(path, tab, vpW, vpH);
-        return result;
+        bool ok = result.find("Failed") == std::string::npos &&
+                  result.find("Error") == std::string::npos;
+        return {ok, result};
     }, ":export <file.pml>", "Export session as PyMOL script");
 
     // :screenshot <file.png>
-    cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         std::string path;
         if (cmd.args.empty()) {
             auto now = std::chrono::system_clock::now();
@@ -2529,9 +2583,9 @@ void Application::registerCommands() {
         if (app.rendererType() == RendererType::Pixel) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
             if (pc && pc->savePNG(path))
-                return "Saved " + std::to_string(pc->pixelWidth()) + "x" +
-                       std::to_string(pc->pixelHeight()) + " to " + path;
-            return "Failed to save " + path;
+                return {true, "Saved " + std::to_string(pc->pixelWidth()) + "x" +
+                       std::to_string(pc->pixelHeight()) + " to " + path};
+            return {false, "Failed to save " + path};
         }
 
         // Offscreen render: create a temporary PixelCanvas, render into it, save PNG
@@ -2541,7 +2595,7 @@ void Application::registerCommands() {
             // Create a dummy SixelEncoder just for offscreen rendering
             encoder = ProtocolPicker::createEncoder(GraphicsProtocol::Sixel);
         }
-        if (!encoder) return "Cannot create offscreen renderer";
+        if (!encoder) return {false, "Cannot create offscreen renderer"};
 
         PixelCanvas offscreen(std::move(encoder));
         int w = app.layout().viewportWidth();
@@ -2572,27 +2626,27 @@ void Application::registerCommands() {
             tab.camera().prepareProjection(canvas->subW(), canvas->subH(), canvas->aspectYX());
 
         if (offscreen.savePNG(path))
-            return "Saved " + std::to_string(offscreen.pixelWidth()) + "x" +
-                   std::to_string(offscreen.pixelHeight()) + " to " + path;
-        return "Failed to save " + path;
+            return {true, "Saved " + std::to_string(offscreen.pixelWidth()) + "x" +
+                   std::to_string(offscreen.pixelHeight()) + " to " + path};
+        return {false, "Failed to save " + path};
     }, ":screenshot [file.png]", "Save viewport as PNG (works in any renderer)");
 
     // :preset — apply smart default representation
-    cmdRegistry_.registerCmd("preset", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("preset", [](Application& app, const ParsedCommand&) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
         obj->applySmartDefaults();
-        return "Applied default preset (cartoon + ballstick ligands)";
+        return {true, "Applied default preset (cartoon + ballstick ligands)"};
     }, ":preset", "Apply smart default representations");
 
     // :label [selection] — add labels for atoms matching selection
-    cmdRegistry_.registerCmd("label", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("label", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
-        if (cmd.args.empty()) return "Usage: :label <selection> or :label clear";
+        if (!obj) return {false, "No object selected"};
+        if (cmd.args.empty()) return {false, "Usage: :label <selection> or :label clear"};
         if (cmd.args[0] == "clear") {
             app.labelAtoms().clear();
-            return "Labels cleared";
+            return {true, "Labels cleared"};
         }
         std::string expr;
         for (size_t i = 0; i < cmd.args.size(); ++i) {
@@ -2600,7 +2654,7 @@ void Application::registerCommands() {
             expr += cmd.args[i];
         }
         auto sel = app.parseSelection(expr, *obj);
-        if (sel.empty()) return "No atoms match: " + expr;
+        if (sel.empty()) return {false, "No atoms match: " + expr};
         // Add to label set (deduplicate)
         auto& labels = app.labelAtoms();
         for (int idx : sel.indices()) {
@@ -2608,57 +2662,66 @@ void Application::registerCommands() {
             for (int li : labels) { if (li == idx) { found = true; break; } }
             if (!found) labels.push_back(idx);
         }
-        return "Labeled " + std::to_string(sel.size()) + " atoms";
+        return {true, "Labeled " + std::to_string(sel.size()) + " atoms"};
     }, ":label <selection|clear>", "Show labels on viewport");
 
     // :unlabel — remove all labels
-    cmdRegistry_.registerCmd("unlabel", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("unlabel", [](Application& app, const ParsedCommand&) -> ExecResult {
         app.labelAtoms().clear();
-        return "Labels cleared";
+        return {true, "Labels cleared"};
     }, ":unlabel", "Remove all labels");
 
     // :overlay [clear] — toggle or clear overlays (labels, measurements, selection)
-    cmdRegistry_.registerCmd("overlay", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("overlay", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (!cmd.args.empty() && cmd.args[0] == "clear") {
             int mc = static_cast<int>(app.measurements().size());
             int lc = static_cast<int>(app.labelAtoms().size());
             app.measurements().clear();
             app.labelAtoms().clear();
-            return "Cleared " + std::to_string(mc) + " measurements, " +
-                   std::to_string(lc) + " labels";
+            return {true, "Cleared " + std::to_string(mc) + " measurements, " +
+                   std::to_string(lc) + " labels"};
         }
         app.overlayVisible_ = !app.overlayVisible_;
-        return app.overlayVisible_ ? "Overlays visible" : "Overlays hidden";
+        return {true, app.overlayVisible_ ? "Overlays visible" : "Overlays hidden"};
     }, ":overlay [clear]", "Toggle or clear overlays");
 
-    // :run <script.mt> — execute a command script
-    cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "Usage: :run <script.mt>";
-        std::ifstream file(cmd.args[0]);
-        if (!file) return "Cannot open: " + cmd.args[0];
-        int count = 0;
-        std::string line;
-        while (std::getline(file, line)) {
-            size_t start = line.find_first_not_of(" \t");
-            if (start == std::string::npos || line[start] == '#') continue;
-            line = line.substr(start);
-            if (line.empty()) continue;
-            app.cmdRegistry().execute(app, line);
-            ++count;
+    // :run [--strict] <script.mt> — execute a command script
+    cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :run [--strict] <script.mt>"};
+        bool strict = false;
+        std::string path;
+        for (const auto& a : cmd.args) {
+            if (a == "--strict") strict = true;
+            else if (path.empty()) path = a;
         }
-        MLOG_INFO("Ran %d commands from %s", count, cmd.args[0].c_str());
-        return "Ran " + std::to_string(count) + " commands from " + cmd.args[0];
-    }, ":run <file>", "Execute command script");
+        if (path.empty()) return {false, "Usage: :run [--strict] <script.mt>"};
+        std::ifstream file(path);
+        if (!file) return {false, "Cannot open: " + path};
+        ScriptRunResult r = app.runScriptStream(file, strict);
+        if (strict && r.stopped) {
+            MLOG_INFO("Ran %d commands from %s (stopped on error)", r.count, path.c_str());
+            return {false, "Stopped at line: " + r.failLine + " — " + r.firstFail};
+        }
+        MLOG_INFO("Ran %d commands from %s (%d failed)", r.count, path.c_str(), r.failures);
+        if (r.failures > 0) {
+            return {false, "Ran " + std::to_string(r.count) + " commands from " + path +
+                    " (" + std::to_string(r.failures) + " failed; first: " + r.firstFail + ")"};
+        }
+        return {true, "Ran " + std::to_string(r.count) + " commands from " + path};
+    }, ":run [--strict] <file>", "Execute command script");
 
-    cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> ExecResult {
         if (SessionSaver::saveSession(app))
-            return "Session saved to " + SessionSaver::sessionPath();
-        return "Failed to save session";
+            return {true, "Session saved to " + SessionSaver::sessionPath()};
+        return {false, "Failed to save session"};
     }, ":save", "Save session to ~/.molterm/autosave.toml");
 
-    cmdRegistry_.registerCmd("resume", [](Application& app, const ParsedCommand&) -> std::string {
+    cmdRegistry_.registerCmd("resume", [](Application& app, const ParsedCommand&) -> ExecResult {
         std::string msg = SessionSaver::restoreSession(app);
-        return msg;
+        bool ok = msg.find("Failed") == std::string::npos &&
+                  msg.find("Cannot") == std::string::npos &&
+                  msg.find("not found") == std::string::npos;
+        return {ok, msg};
     }, ":resume", "Restore session from ~/.molterm/autosave.toml");
 
     // Helper: resolve atom index from serial number string or pick register
@@ -2693,9 +2756,9 @@ void Application::registerCommands() {
     };
 
     // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
-    cmdRegistry_.registerCmd("measure", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("measure", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
         int n = static_cast<int>(atoms.size());
 
@@ -2703,16 +2766,16 @@ void Application::registerCommands() {
         if (cmd.args.empty()) {
             // Use pick registers pk1, pk2
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
-            if (i1 < 0 || i2 < 0) return "Click two atoms first (pk1, pk2), then :measure";
+            if (i1 < 0 || i2 < 0) return {false, "Click two atoms first (pk1, pk2), then :measure"};
         } else if (cmd.args.size() >= 2) {
             i1 = resolveAtomIdx(app, cmd.args[0]);
             i2 = resolveAtomIdx(app, cmd.args[1]);
-            if (i1 < 0) return "Atom not found: serial " + cmd.args[0];
-            if (i2 < 0) return "Atom not found: serial " + cmd.args[1];
+            if (i1 < 0) return {false, "Atom not found: serial " + cmd.args[0]};
+            if (i2 < 0) return {false, "Atom not found: serial " + cmd.args[1]};
         } else {
-            return "Usage: :measure [serial1 serial2] (or click 2 atoms first)";
+            return {false, "Usage: :measure [serial1 serial2] (or click 2 atoms first)"};
         }
-        if (i1 >= n || i2 >= n) return "Invalid atom index";
+        if (i1 >= n || i2 >= n) return {false, "Invalid atom index"};
 
         float dx = atoms[i1].x - atoms[i2].x;
         float dy = atoms[i1].y - atoms[i2].y;
@@ -2725,31 +2788,31 @@ void Application::registerCommands() {
             atomLabel(atoms[i2]) + " = " + shortLabel;
         app.measurements().push_back({{i1, i2}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
-        return msg;
+        return {true, msg};
     }, ":measure [s1 s2]", "Distance (no args = pk1↔pk2)");
 
     // :angle [s1 s2 s3] — angle at vertex s2 (no args = pk1-pk2-pk3)
-    cmdRegistry_.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
         int n = static_cast<int>(atoms.size());
 
         int i1, i2, i3;
         if (cmd.args.empty()) {
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1]; i3 = app.pickRegs_[2];
-            if (i1 < 0 || i2 < 0 || i3 < 0) return "Click three atoms first (pk1-pk3), then :angle";
+            if (i1 < 0 || i2 < 0 || i3 < 0) return {false, "Click three atoms first (pk1-pk3), then :angle"};
         } else if (cmd.args.size() >= 3) {
             i1 = resolveAtomIdx(app, cmd.args[0]);
             i2 = resolveAtomIdx(app, cmd.args[1]);
             i3 = resolveAtomIdx(app, cmd.args[2]);
-            if (i1 < 0) return "Atom not found: serial " + cmd.args[0];
-            if (i2 < 0) return "Atom not found: serial " + cmd.args[1];
-            if (i3 < 0) return "Atom not found: serial " + cmd.args[2];
+            if (i1 < 0) return {false, "Atom not found: serial " + cmd.args[0]};
+            if (i2 < 0) return {false, "Atom not found: serial " + cmd.args[1]};
+            if (i3 < 0) return {false, "Atom not found: serial " + cmd.args[2]};
         } else {
-            return "Usage: :angle [s1 s2 s3] (or click 3 atoms first)";
+            return {false, "Usage: :angle [s1 s2 s3] (or click 3 atoms first)"};
         }
-        if (i1 >= n || i2 >= n || i3 >= n) return "Invalid atom index";
+        if (i1 >= n || i2 >= n || i3 >= n) return {false, "Invalid atom index"};
 
         float v1x = atoms[i1].x - atoms[i2].x, v1y = atoms[i1].y - atoms[i2].y, v1z = atoms[i1].z - atoms[i2].z;
         float v2x = atoms[i3].x - atoms[i2].x, v2y = atoms[i3].y - atoms[i2].y, v2z = atoms[i3].z - atoms[i2].z;
@@ -2767,13 +2830,13 @@ void Application::registerCommands() {
             atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " = " + buf + " deg";
         app.measurements().push_back({{i1, i2, i3}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
-        return msg;
+        return {true, msg};
     }, ":angle [s1 s2 s3]", "Angle at s2 (no args = pk1-pk2-pk3)");
 
     // :dihedral [s1 s2 s3 s4] — dihedral (no args = pk1-pk4)
-    cmdRegistry_.registerCmd("dihedral", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("dihedral", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return "No object selected";
+        if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
         int n = static_cast<int>(atoms.size());
 
@@ -2782,20 +2845,20 @@ void Application::registerCommands() {
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
             i3 = app.pickRegs_[2]; i4 = app.pickRegs_[3];
             if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0)
-                return "Click four atoms first (pk1-pk4), then :dihedral";
+                return {false, "Click four atoms first (pk1-pk4), then :dihedral"};
         } else if (cmd.args.size() >= 4) {
             i1 = resolveAtomIdx(app, cmd.args[0]);
             i2 = resolveAtomIdx(app, cmd.args[1]);
             i3 = resolveAtomIdx(app, cmd.args[2]);
             i4 = resolveAtomIdx(app, cmd.args[3]);
-            if (i1 < 0) return "Atom not found: serial " + cmd.args[0];
-            if (i2 < 0) return "Atom not found: serial " + cmd.args[1];
-            if (i3 < 0) return "Atom not found: serial " + cmd.args[2];
-            if (i4 < 0) return "Atom not found: serial " + cmd.args[3];
+            if (i1 < 0) return {false, "Atom not found: serial " + cmd.args[0]};
+            if (i2 < 0) return {false, "Atom not found: serial " + cmd.args[1]};
+            if (i3 < 0) return {false, "Atom not found: serial " + cmd.args[2]};
+            if (i4 < 0) return {false, "Atom not found: serial " + cmd.args[3]};
         } else {
-            return "Usage: :dihedral [s1 s2 s3 s4] (or click 4 atoms first)";
+            return {false, "Usage: :dihedral [s1 s2 s3 s4] (or click 4 atoms first)"};
         }
-        if (i1 >= n || i2 >= n || i3 >= n || i4 >= n) return "Invalid atom index";
+        if (i1 >= n || i2 >= n || i3 >= n || i4 >= n) return {false, "Invalid atom index"};
 
         float b1x = atoms[i2].x-atoms[i1].x, b1y = atoms[i2].y-atoms[i1].y, b1z = atoms[i2].z-atoms[i1].z;
         float b2x = atoms[i3].x-atoms[i2].x, b2y = atoms[i3].y-atoms[i2].y, b2z = atoms[i3].z-atoms[i2].z;
@@ -2803,7 +2866,7 @@ void Application::registerCommands() {
         float n1x = b1y*b2z-b1z*b2y, n1y = b1z*b2x-b1x*b2z, n1z = b1x*b2y-b1y*b2x;
         float n2x = b2y*b3z-b2z*b3y, n2y = b2z*b3x-b2x*b3z, n2z = b2x*b3y-b2y*b3x;
         float b2len = std::sqrt(b2x*b2x + b2y*b2y + b2z*b2z);
-        if (b2len < 1e-8f) return "Degenerate dihedral";
+        if (b2len < 1e-8f) return {false, "Degenerate dihedral"};
         float ub2x = b2x/b2len, ub2y = b2y/b2len, ub2z = b2z/b2len;
         float mx = n1y*ub2z-n1z*ub2y, my = n1z*ub2x-n1x*ub2z, mz = n1x*ub2y-n1y*ub2x;
         float xv = n1x*n2x+n1y*n2y+n1z*n2z;
@@ -2818,11 +2881,11 @@ void Application::registerCommands() {
             atomLabel(atoms[i4]) + " = " + buf + " deg";
         app.measurements().push_back({{i1, i2, i3, i4}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
-        return msg;
+        return {true, msg};
     }, ":dihedral [s1 s2 s3 s4]", "Dihedral (no args = pk1-pk4)");
 
     // :contactmap [cutoff] — toggle contact map panel
-    cmdRegistry_.registerCmd("contactmap", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("contactmap", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         float cutoff = 8.0f;
         if (!cmd.args.empty()) {
             try { cutoff = std::stof(cmd.args[0]); } catch (...) {}
@@ -2837,19 +2900,19 @@ void Application::registerCommands() {
             if (app.canvas()) app.canvas()->invalidate();
             char buf[64];
             std::snprintf(buf, sizeof(buf), "Contact map visible (cutoff=%.1fA)", cutoff);
-            return buf;
+            return {true, buf};
         }
         if (app.canvas()) app.canvas()->invalidate();
-        return "Contact map hidden";
+        return {true, "Contact map hidden"};
     }, ":contactmap [cutoff]", "Toggle residue contact map panel");
 
     // :cmap — alias for :contactmap
-    cmdRegistry_.registerCmd("cmap", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("cmap", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return app.cmdRegistry().execute(app, cmd.args.empty() ? "contactmap" :
             "contactmap " + cmd.args[0]);
     }, ":cmap [cutoff]", "Alias for :contactmap");
 
-    cmdRegistry_.registerCmd("interface", [](Application& app, const ParsedCommand& cmd) -> std::string {
+    cmdRegistry_.registerCmd("interface", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         float cutoff = 4.5f;
         if (!cmd.args.empty()) {
             try { cutoff = std::stof(cmd.args[0]); } catch (...) {}
@@ -2859,7 +2922,7 @@ void Application::registerCommands() {
             auto obj = app.tabs().currentTab().currentObject();
             if (!obj) {
                 app.interfaceOverlay_ = false;
-                return "No object loaded";
+                return {false, "No object loaded"};
             }
             // Ensure residues are extracted (via contact map update), then
             // compute interface using closest heavy atom distance
@@ -2873,7 +2936,7 @@ void Application::registerCommands() {
                 std::snprintf(buf, sizeof(buf),
                               "No inter-chain contacts found (cutoff=%.1fA)",
                               cutoff);
-                return buf;
+                return {false, buf};
             }
 
             int nHB = 0, nSalt = 0, nHyd = 0, nOther = 0;
@@ -2891,10 +2954,10 @@ void Application::registerCommands() {
                 "salt %d, H-bond %d, hydrophobic %d, other %d",
                 app.interfaceContacts_.size(), cutoff,
                 nSalt, nHB, nHyd, nOther);
-            return buf;
+            return {true, buf};
         }
         app.interfaceContacts_.clear();
-        return "Interface overlay hidden";
+        return {true, "Interface overlay hidden"};
     }, ":interface [cutoff]", "Toggle classified inter-chain contact overlay");
 }
 

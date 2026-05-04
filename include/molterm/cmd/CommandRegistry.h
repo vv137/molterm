@@ -10,7 +10,12 @@ namespace molterm {
 class Application;
 struct ParsedCommand;
 
-using CommandHandler = std::function<std::string(Application&, const ParsedCommand&)>;
+struct ExecResult {
+    bool ok;
+    std::string msg;
+};
+
+using CommandHandler = std::function<ExecResult(Application&, const ParsedCommand&)>;
 
 struct CommandInfo {
     std::string name;
@@ -25,8 +30,8 @@ public:
                      const std::string& usage = "",
                      const std::string& description = "");
 
-    // Execute a command string, returns message to display
-    std::string execute(Application& app, const std::string& input);
+    // Execute a command string, returns structured result
+    ExecResult execute(Application& app, const std::string& input);
 
     // Tab completion
     std::vector<std::string> complete(const std::string& prefix) const;
