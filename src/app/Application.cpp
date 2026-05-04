@@ -17,6 +17,7 @@
 #include "molterm/repr/RibbonRepr.h"
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
+#include "molterm/core/Geometry.h"
 #include "molterm/core/Logger.h"
 #include "molterm/io/SessionSaver.h"
 
@@ -3761,18 +3762,11 @@ void Application::registerCommands() {
         }
         if (i1 >= n || i2 >= n || i3 >= n || i4 >= n) return {false, "Invalid atom index"};
 
-        float b1x = atoms[i2].x-atoms[i1].x, b1y = atoms[i2].y-atoms[i1].y, b1z = atoms[i2].z-atoms[i1].z;
-        float b2x = atoms[i3].x-atoms[i2].x, b2y = atoms[i3].y-atoms[i2].y, b2z = atoms[i3].z-atoms[i2].z;
-        float b3x = atoms[i4].x-atoms[i3].x, b3y = atoms[i4].y-atoms[i3].y, b3z = atoms[i4].z-atoms[i3].z;
-        float n1x = b1y*b2z-b1z*b2y, n1y = b1z*b2x-b1x*b2z, n1z = b1x*b2y-b1y*b2x;
-        float n2x = b2y*b3z-b2z*b3y, n2y = b2z*b3x-b2x*b3z, n2z = b2x*b3y-b2y*b3x;
-        float b2len = std::sqrt(b2x*b2x + b2y*b2y + b2z*b2z);
-        if (b2len < 1e-8f) return {false, "Degenerate dihedral"};
-        float ub2x = b2x/b2len, ub2y = b2y/b2len, ub2z = b2z/b2len;
-        float mx = n1y*ub2z-n1z*ub2y, my = n1z*ub2x-n1x*ub2z, mz = n1x*ub2y-n1y*ub2x;
-        float xv = n1x*n2x+n1y*n2y+n1z*n2z;
-        float yv = mx*n2x+my*n2y+mz*n2z;
-        float deg = std::atan2(yv, xv) * 180.0f / static_cast<float>(M_PI);
+        float deg = geom::dihedralDeg(
+            atoms[i1].x, atoms[i1].y, atoms[i1].z,
+            atoms[i2].x, atoms[i2].y, atoms[i2].z,
+            atoms[i3].x, atoms[i3].y, atoms[i3].z,
+            atoms[i4].x, atoms[i4].y, atoms[i4].z);
 
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%.1f", deg);

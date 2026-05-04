@@ -1,6 +1,7 @@
 #include "molterm/io/CifLoader.h"
 #include "molterm/core/BondTable.h"
 #include "molterm/core/DSSP.h"
+#include "molterm/core/Geometry.h"
 #include "molterm/core/SpatialHash.h"
 
 #include <gemmi/mmread.hpp>
@@ -73,32 +74,14 @@ static std::vector<AtomData> convertModel(const gemmi::Model& model) {
     return result;
 }
 
-// Dihedral angle (deg) of four 3D points, signed in [-180, +180].
-static float dihedralDeg(float ax, float ay, float az,
-                         float bx, float by, float bz,
-                         float cx, float cy, float cz,
-                         float dx, float dy, float dz) {
-    float b1x = bx - ax, b1y = by - ay, b1z = bz - az;
-    float b2x = cx - bx, b2y = cy - by, b2z = cz - bz;
-    float b3x = dx - cx, b3y = dy - cy, b3z = dz - cz;
-    float b2len = std::sqrt(b2x*b2x + b2y*b2y + b2z*b2z);
-    if (b2len < 1e-6f) return 0.0f;
-    float n1x = b1y*b2z - b1z*b2y;
-    float n1y = b1z*b2x - b1x*b2z;
-    float n1z = b1x*b2y - b1y*b2x;
-    float n2x = b2y*b3z - b2z*b3y;
-    float n2y = b2z*b3x - b2x*b3z;
-    float n2z = b2x*b3y - b2y*b3x;
-    float bnx = b2x / b2len, bny = b2y / b2len, bnz = b2z / b2len;
-    float m1x = n1y*bnz - n1z*bny;
-    float m1y = n1z*bnx - n1x*bnz;
-    float m1z = n1x*bny - n1y*bnx;
-    float x = n1x*n2x + n1y*n2y + n1z*n2z;
-    float y = m1x*n2x + m1y*n2y + m1z*n2z;
-    // IUPAC convention: φ/ψ for right-handed α-helix should be ≈ (-57°, -47°),
-    // so flip the sign of the standard atan2(y, x) result. (Equivalent to
-    // using b1 = a - b instead of b - a in the Praxeolitic formula.)
-    return -std::atan2(y, x) * 180.0f / 3.14159265f;
+// φ/ψ in IUPAC convention (right-handed α-helix at ≈ -57°, -47°) is the
+// negation of the standard signed-dihedral atan2 result.
+static float phiPsiDeg(float ax, float ay, float az,
+                       float bx, float by, float bz,
+                       float cx, float cy, float cz,
+                       float dx, float dy, float dz) {
+    return -geom::dihedralDeg(ax, ay, az, bx, by, bz,
+                              cx, cy, cz, dx, dy, dz);
 }
 
 // Geometric fallback for files without HELIX/SHEET records (CASP/AlphaFold
@@ -149,12 +132,12 @@ static void assignSSGeometric(std::vector<AtomData>& atoms) {
         if (prev.c < 0 || next.n < 0) continue;
         if (prev.chain != r.chain || next.chain != r.chain) continue;
 
-        float phi = dihedralDeg(
+        float phi = phiPsiDeg(
             atoms[prev.c].x, atoms[prev.c].y, atoms[prev.c].z,
             atoms[r.n].x,    atoms[r.n].y,    atoms[r.n].z,
             atoms[r.ca].x,   atoms[r.ca].y,   atoms[r.ca].z,
             atoms[r.c].x,    atoms[r.c].y,    atoms[r.c].z);
-        float psi = dihedralDeg(
+        float psi = phiPsiDeg(
             atoms[r.n].x,    atoms[r.n].y,    atoms[r.n].z,
             atoms[r.ca].x,   atoms[r.ca].y,   atoms[r.ca].z,
             atoms[r.c].x,    atoms[r.c].y,    atoms[r.c].z,
