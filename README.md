@@ -111,6 +111,49 @@ The vectors are interpreted in the PCA basis, so the same view spec
 gives a comparable framing across structures of different sizes and
 orientations.
 
+### Spinning animations: `:turn`
+
+`:orient view` recomputes PCA on every call. For sweeping the camera
+through many frames, do PCA once and then use `:turn x|y|z <deg>` to
+apply incremental rotations around the screen axes:
+
+```text
+# spin.mt — 60 frames, ~6° per frame
+load ./protein.pdb
+show cartoon
+orient view 0 0 1
+# repeat 60×:
+turn y 6
+screenshot frames/f001.png 800 800
+turn y 6
+screenshot frames/f002.png 800 800
+...
+```
+
+`:turn` skips the eigendecomposition entirely; only the camera rotation
+matrix is updated. Combine with `ffmpeg -i frames/f%03d.png out.mp4`.
+
+### High-quality rendering
+
+PNGs from `:screenshot` are produced by `PixelCanvas` regardless of the
+live renderer, so quality is controlled by these knobs (all settable
+from a script):
+
+```text
+:screenshot out.png 2048 2048   # up to 8192×8192
+:set csd 24                     # cartoon spline subdivisions  (def 14)
+:set ch  1.6                    # helix half-width  Å           (def 1.30)
+:set csh 1.8                    # sheet half-width  Å           (def 1.50)
+:set cl  0.55                   # loop  tube radius Å           (def 0.40)
+:set outline                    # silhouette outlines (pixel)
+:set ot 0.2                     # outline depth threshold       (def 0.3)
+:set od 0.2                     # outline darken (0=black)      (def 0.3)
+:set fog 0.4                    # atmospheric depth fog 0-1     (def 0.35)
+```
+
+For a hero figure: 2048², `csd 24`, outline on, `fog 0.4`. For an
+animation, drop to 800-1024² and lower `csd` if frame time matters.
+
 ### Dependencies
 
 | Dependency | Version | Source |
@@ -232,6 +275,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :center [selection]             " Center view
 :zoom [selection]               " Center + zoom to fit
 :orient [selection]             " Align principal axes + center + zoom
+:orient view <vx> <vy> <vz>     " View along direction in PCA frame (also reruns PCA)
+:turn x|y|z <deg>               " Rotate camera around screen axis (no PCA, cheap)
 :align <obj> [sel] to <obj>     " TM-align via USalign
 :mmalign <obj> [sel] to <obj>   " MM-align for complexes
 :assembly [id|list]             " Generate biological assembly (default: 1)

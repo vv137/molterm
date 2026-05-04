@@ -2124,6 +2124,28 @@ void Application::registerCommands() {
         return {true, "Oriented " + std::to_string(indices.size()) + " atoms"};
     }, ":orient [view <vx> <vy> <vz>] [selection]", "Center, zoom, and align PCA axes (default views down shortest axis)");
 
+    // :turn x|y|z <deg>  — incremental camera rotation around screen axes,
+    // no PCA, no recompute. Mirrors PyMOL's `turn` and is the cheap path
+    // for spinning animations: orient once, then turn N° per frame.
+    cmdRegistry_.registerCmd("turn", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.size() < 2) {
+            return {false, "Usage: :turn x|y|z <degrees>"};
+        }
+        const auto& axis = cmd.args[0];
+        float deg;
+        try {
+            deg = std::stof(cmd.args[1]);
+        } catch (...) {
+            return {false, "Invalid angle: " + cmd.args[1]};
+        }
+        auto& cam = app.tabs().currentTab().camera();
+        if      (axis == "x" || axis == "X") cam.rotateX(deg);
+        else if (axis == "y" || axis == "Y") cam.rotateY(deg);
+        else if (axis == "z" || axis == "Z") cam.rotateZ(deg);
+        else return {false, "Axis must be x, y, or z (got '" + axis + "')"};
+        return {true, "Turned " + axis + " by " + std::to_string(deg) + " deg"};
+    }, ":turn x|y|z <deg>", "Rotate camera around screen axis (no PCA recompute)");
+
     // :set <option> [value]
     cmdRegistry_.registerCmd("set", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) return {false, "Usage: :set <option> [value]"};
