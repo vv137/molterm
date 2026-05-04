@@ -23,13 +23,48 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     int subdiv = adjustLOD(subdivisions_, atoms.size());
     int coilSegments = (atoms.size() > 5000) ? 4 : 8;
 
-    // Collect Cα/P atoms
+    // Collect Cα/P atoms with residue-scoped C→O frame hints (proteins).
+    // Walk each residue once; pick the first visible CA (or P), then look
+    // up backbone C and O within the same residue to compute the carbonyl
+    // direction. Hint is used later to orient β-sheet ribbons.
     std::vector<CaAtom> cas;
-    for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
-        if (atoms[i].name != "CA" && atoms[i].name != "P") continue;
-        if (!ctx.visible(i)) continue;
-        cas.push_back({i, atoms[i].x, atoms[i].y, atoms[i].z,
-                       atoms[i].ssType, atoms[i].chainId});
+    {
+        int n = static_cast<int>(atoms.size());
+        int i = 0;
+        while (i < n) {
+            int rs = i;
+            while (i < n &&
+                   atoms[i].chainId == atoms[rs].chainId &&
+                   atoms[i].resSeq == atoms[rs].resSeq &&
+                   atoms[i].insCode == atoms[rs].insCode) {
+                ++i;
+            }
+            int re = i;
+
+            int caIdx = -1, cIdx = -1, oIdx = -1;
+            for (int j = rs; j < re; ++j) {
+                if ((atoms[j].name == "CA" || atoms[j].name == "P") &&
+                    caIdx < 0 && ctx.visible(j)) {
+                    caIdx = j;
+                }
+                if (atoms[j].name == "C" && cIdx < 0) cIdx = j;
+                if (atoms[j].name == "O" && oIdx < 0) oIdx = j;
+            }
+            if (caIdx < 0) continue;
+
+            float hx = 0.0f, hy = 0.0f, hz = 0.0f;
+            bool hasHint = false;
+            if (cIdx >= 0 && oIdx >= 0) {
+                hx = atoms[oIdx].x - atoms[cIdx].x;
+                hy = atoms[oIdx].y - atoms[cIdx].y;
+                hz = atoms[oIdx].z - atoms[cIdx].z;
+                if (normalize3(hx, hy, hz) > 1e-6f) hasHint = true;
+            }
+
+            cas.push_back({caIdx, atoms[caIdx].x, atoms[caIdx].y, atoms[caIdx].z,
+                           atoms[caIdx].ssType, atoms[caIdx].chainId,
+                           hx, hy, hz, hasHint});
+        }
     }
 
     // Process each chain
@@ -73,20 +108,23 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
         for (int s = 0; s < subdiv; ++s) {
             float t = static_cast<float>(s) / static_cast<float>(subdiv);
             float af = isSheetEnd ? t : -1.0f;
+            const auto& near = (t < 0.5f) ? cas[i1] : cas[i2];
             spine.push_back({
                 catmullRom(cas[i0].x, cas[i1].x, cas[i2].x, cas[i3].x, t),
                 catmullRom(cas[i0].y, cas[i1].y, cas[i2].y, cas[i3].y, t),
                 catmullRom(cas[i0].z, cas[i1].z, cas[i2].z, cas[i3].z, t),
-                (t < 0.5f) ? cas[i1].ss : cas[i2].ss,
+                near.ss,
                 (t < 0.5f) ? col1 : col2,
-                af
+                af,
+                near.hintX, near.hintY, near.hintZ, near.hasHint
             });
         }
     }
     // Last point
     auto& last = cas[end - 1];
     spine.push_back({last.x, last.y, last.z, last.ss,
-        ctx.colorFor(last.idx), -1.0f});
+        ctx.colorFor(last.idx), -1.0f,
+        last.hintX, last.hintY, last.hintZ, last.hasHint});
 
     int nPts = static_cast<int>(spine.size());
     if (nPts < 2) return;
@@ -126,6 +164,55 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
         else { nx[i] /= l; ny[i] /= l; nz[i] /= l; }
         cross3(tx[i], ty[i], tz[i], nx[i], ny[i], nz[i], bx[i], by[i], bz[i]);
         normalize3(bx[i], by[i], bz[i]);
+    }
+
+    // Step 3b: Sheet frame guide.
+    // Within each contiguous β-sheet run, blend the carbonyl C→O hint
+    // (projected perpendicular to the tangent, sign-aligned along the run)
+    // into the binormal at 65 % weight. This makes parallel strands lie
+    // on a consistent plane instead of twisting under parallel-transport.
+    {
+        int k = 0;
+        while (k < nPts) {
+            if (spine[k].ss != SSType::Sheet) { ++k; continue; }
+            int rs = k;
+            while (k < nPts && spine[k].ss == SSType::Sheet) ++k;
+            int re = k;
+
+            float prevPx = 0.0f, prevPy = 0.0f, prevPz = 0.0f;
+            bool hasPrev = false;
+            for (int j = rs; j < re; ++j) {
+                if (!spine[j].hasHint) continue;
+                float hx = spine[j].hintX, hy = spine[j].hintY, hz = spine[j].hintZ;
+
+                // Project hint perpendicular to tangent.
+                float d = hx * tx[j] + hy * ty[j] + hz * tz[j];
+                float px = hx - d * tx[j];
+                float py = hy - d * ty[j];
+                float pz = hz - d * tz[j];
+                if (normalize3(px, py, pz) < 1e-6f) continue;
+
+                // Align sign with previous projected hint.
+                if (hasPrev && (px * prevPx + py * prevPy + pz * prevPz) < 0.0f) {
+                    px = -px; py = -py; pz = -pz;
+                }
+                prevPx = px; prevPy = py; prevPz = pz;
+                hasPrev = true;
+
+                // Blend 65 % hint + 35 % existing binormal, recompute normal.
+                float bbx = 0.65f * px + 0.35f * bx[j];
+                float bby = 0.65f * py + 0.35f * by[j];
+                float bbz = 0.65f * pz + 0.35f * bz[j];
+                if (normalize3(bbx, bby, bbz) < 1e-6f) continue;
+
+                float newNx, newNy, newNz;
+                cross3(bbx, bby, bbz, tx[j], ty[j], tz[j], newNx, newNy, newNz);
+                if (normalize3(newNx, newNy, newNz) < 1e-6f) continue;
+
+                bx[j] = bbx; by[j] = bby; bz[j] = bbz;
+                nx[j] = newNx; ny[j] = newNy; nz[j] = newNz;
+            }
+        }
     }
 
     // Step 4: Generate cross-section rings and emit triangles

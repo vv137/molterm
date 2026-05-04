@@ -25,8 +25,19 @@ public:
     void setSubdivisions(int n) { subdivisions_ = n; }
 
 private:
-    struct CaAtom { int idx; float x, y, z; SSType ss; std::string chain; };
-    struct SplinePoint { float x, y, z; SSType ss; int color; float arrowFrac; };
+    struct CaAtom {
+        int idx; float x, y, z; SSType ss; std::string chain;
+        // Carbonyl C→O direction hint (proteins only); used to orient
+        // β-sheet ribbons consistently. hasHint=false for nucleic acids
+        // or residues missing C/O atoms.
+        float hintX, hintY, hintZ;
+        bool hasHint;
+    };
+    struct SplinePoint {
+        float x, y, z; SSType ss; int color; float arrowFrac;
+        float hintX, hintY, hintZ;
+        bool hasHint;
+    };
 
     void renderChain(const std::vector<CaAtom>& cas, size_t start, size_t end,
                      int subdiv, int coilSegs, const RenderContext& ctx,
