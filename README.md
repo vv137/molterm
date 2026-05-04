@@ -725,6 +725,8 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Pixel-mode overlays** — measurement/interface/selection overlays draw into PixelCanvas directly
 - [x] **PyMOL viewport size** — `:export` now includes `viewport 1280, 960` for standard figure dimensions
 - [x] **Contact map** (hidden) — `:contactmap [cutoff]` Cα-Cα distance heatmap panel (available via command)
+- [x] **Geometric SS fallback** — φ/ψ Ramachandran classifier with 3+/4+ run smoothing, runs when a file has no HELIX/SHEET records (CASP TS, AlphaFold, raw coords)
+- [ ] **DSSP-quality SS** — replace the φ/ψ heuristic with full Kabsch & Sander hydrogen-bond classification (3₁₀ / π helices, β-bridges)
 - [ ] **Pixel-mode label rendering** — built-in bitmap font for labels rendered directly into RGB framebuffer
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)

@@ -72,7 +72,140 @@ static std::vector<AtomData> convertModel(const gemmi::Model& model) {
     return result;
 }
 
+// Dihedral angle (deg) of four 3D points, signed in [-180, +180].
+static float dihedralDeg(float ax, float ay, float az,
+                         float bx, float by, float bz,
+                         float cx, float cy, float cz,
+                         float dx, float dy, float dz) {
+    float b1x = bx - ax, b1y = by - ay, b1z = bz - az;
+    float b2x = cx - bx, b2y = cy - by, b2z = cz - bz;
+    float b3x = dx - cx, b3y = dy - cy, b3z = dz - cz;
+    float b2len = std::sqrt(b2x*b2x + b2y*b2y + b2z*b2z);
+    if (b2len < 1e-6f) return 0.0f;
+    float n1x = b1y*b2z - b1z*b2y;
+    float n1y = b1z*b2x - b1x*b2z;
+    float n1z = b1x*b2y - b1y*b2x;
+    float n2x = b2y*b3z - b2z*b3y;
+    float n2y = b2z*b3x - b2x*b3z;
+    float n2z = b2x*b3y - b2y*b3x;
+    float bnx = b2x / b2len, bny = b2y / b2len, bnz = b2z / b2len;
+    float m1x = n1y*bnz - n1z*bny;
+    float m1y = n1z*bnx - n1x*bnz;
+    float m1z = n1x*bny - n1y*bnx;
+    float x = n1x*n2x + n1y*n2y + n1z*n2z;
+    float y = m1x*n2x + m1y*n2y + m1z*n2z;
+    // IUPAC convention: φ/ψ for right-handed α-helix should be ≈ (-57°, -47°),
+    // so flip the sign of the standard atan2(y, x) result. (Equivalent to
+    // using b1 = a - b instead of b - a in the Praxeolitic formula.)
+    return -std::atan2(y, x) * 180.0f / 3.14159265f;
+}
+
+// Geometric fallback for files without HELIX/SHEET records (CASP/AlphaFold
+// predictions, raw coordinate dumps). Classifies each residue by its φ/ψ
+// dihedrals — Ramachandran α-region → Helix, β-region → Sheet, else Loop —
+// then smooths out single-residue noise. Cheaper and simpler than full DSSP
+// (no H-bond energy pass), accurate enough for cartoon visualization.
+static void assignSSGeometric(std::vector<AtomData>& atoms) {
+    struct Res {
+        std::string chain;
+        int n = -1, ca = -1, c = -1;
+        SSType ss = SSType::Loop;
+        int firstAtom = -1, lastAtom = -1;
+    };
+
+    auto sameRes = [&](int a, int b) {
+        return atoms[a].chainId == atoms[b].chainId &&
+               atoms[a].resSeq == atoms[b].resSeq &&
+               atoms[a].insCode == atoms[b].insCode;
+    };
+
+    std::vector<Res> residues;
+    int n = static_cast<int>(atoms.size());
+    int i = 0;
+    while (i < n) {
+        int rs = i;
+        while (i < n && sameRes(rs, i)) ++i;
+        Res r;
+        r.chain = atoms[rs].chainId;
+        r.firstAtom = rs;
+        r.lastAtom = i - 1;
+        for (int j = rs; j < i; ++j) {
+            const auto& a = atoms[j];
+            if (a.name == "N")  r.n  = j;
+            if (a.name == "CA") r.ca = j;
+            if (a.name == "C")  r.c  = j;
+        }
+        residues.push_back(r);
+    }
+
+    // φ/ψ classification per residue (skips chain ends and incomplete backbones).
+    for (std::size_t k = 0; k < residues.size(); ++k) {
+        auto& r = residues[k];
+        if (r.n < 0 || r.ca < 0 || r.c < 0) continue;
+        if (k == 0 || k + 1 >= residues.size()) continue;
+        const auto& prev = residues[k - 1];
+        const auto& next = residues[k + 1];
+        if (prev.c < 0 || next.n < 0) continue;
+        if (prev.chain != r.chain || next.chain != r.chain) continue;
+
+        float phi = dihedralDeg(
+            atoms[prev.c].x, atoms[prev.c].y, atoms[prev.c].z,
+            atoms[r.n].x,    atoms[r.n].y,    atoms[r.n].z,
+            atoms[r.ca].x,   atoms[r.ca].y,   atoms[r.ca].z,
+            atoms[r.c].x,    atoms[r.c].y,    atoms[r.c].z);
+        float psi = dihedralDeg(
+            atoms[r.n].x,    atoms[r.n].y,    atoms[r.n].z,
+            atoms[r.ca].x,   atoms[r.ca].y,   atoms[r.ca].z,
+            atoms[r.c].x,    atoms[r.c].y,    atoms[r.c].z,
+            atoms[next.n].x, atoms[next.n].y, atoms[next.n].z);
+
+        // Right-handed α-helix region centered on (-57°, -47°), allow ±~30°.
+        bool helix = (phi >= -100.0f && phi <= -30.0f &&
+                      psi >= -80.0f  && psi <=  10.0f);
+        // β-strand region: φ very negative, ψ near +130° (with wrap-around tail).
+        bool sheet = (phi >= -180.0f && phi <= -90.0f &&
+                      ((psi >= 80.0f  && psi <= 180.0f) ||
+                       (psi >= -180.0f && psi <= -160.0f)));
+
+        if (helix)      r.ss = SSType::Helix;
+        else if (sheet) r.ss = SSType::Sheet;
+        else            r.ss = SSType::Loop;
+    }
+
+    // Smoothing: require ≥4 consecutive helix residues (one full α-turn) and
+    // ≥3 consecutive sheet residues to keep the assignment; isolated hits get
+    // dropped back to Loop. Run boundaries also stop at chain breaks.
+    if (!residues.empty()) {
+        std::vector<SSType> raw(residues.size());
+        for (std::size_t k = 0; k < residues.size(); ++k) raw[k] = residues[k].ss;
+        auto out = raw;
+        std::size_t a = 0;
+        while (a < raw.size()) {
+            std::size_t b = a + 1;
+            while (b < raw.size() && raw[b] == raw[a] &&
+                   residues[b].chain == residues[a].chain) ++b;
+            int runLen = static_cast<int>(b - a);
+            if ((raw[a] == SSType::Helix && runLen < 4) ||
+                (raw[a] == SSType::Sheet && runLen < 3)) {
+                for (std::size_t k = a; k < b; ++k) out[k] = SSType::Loop;
+            }
+            a = b;
+        }
+        for (std::size_t k = 0; k < residues.size(); ++k) residues[k].ss = out[k];
+    }
+
+    for (const auto& r : residues) {
+        for (int j = r.firstAtom; j <= r.lastAtom; ++j) atoms[j].ssType = r.ss;
+    }
+}
+
 static void assignSS(std::vector<AtomData>& atoms, const gemmi::Structure& st) {
+    if (st.helices.empty() && st.sheets.empty()) {
+        // No HELIX/SHEET records (CASP TS, AlphaFold output, bare coords) —
+        // fall back to a φ/ψ geometric classifier.
+        assignSSGeometric(atoms);
+        return;
+    }
     for (auto& ad : atoms) {
         for (const auto& helix : st.helices) {
             if (ad.chainId == helix.start.chain_name) {
