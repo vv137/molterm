@@ -43,8 +43,25 @@ public:
     // Parse a PyMOL-like selection expression against a MolObject
     // Supported: chain X, resn XXX, resi N, resi N-M, name XX, element X,
     //            helix, sheet, loop, backbone, sidechain, hydro,
+    //            vis | visible,            (atoms shown by any active repr)
     //            @name (named selection reference),
-    //            and, or, not, ( )
+    //            and, or, not, ( ),
+    //   VMD-style spatial / propagation operators:
+    //            within N of <selection>     — atoms within N Å of <selection>
+    //            exwithin N of <selection>   — within minus the sub-selection
+    //            same KW as <selection>      — atoms sharing KW with <selection>
+    //                                          (KW ∈ residue, chain, resname/resn)
+    //
+    // PyMOL equivalents (consult before serializing named selections to .pml):
+    //   within N of S       →  "(all within N of (S))"
+    //   exwithin N of S     →  "((all within N of (S)) and not (S))"
+    //   same residue as S   →  "byres (S)"
+    //   same chain as S     →  "bychain (S)"
+    //   same resname as S   →  has no string-level PyMOL equivalent; must
+    //                          enumerate the matching resnames at eval time.
+    // SessionExporter currently emits hand-built PyMOL commands and does not
+    // round-trip Selection::expression(). When that changes, add a translator
+    // here rather than letting the molterm-internal form leak into PML.
     static Selection parse(const std::string& expr, const MolObject& mol,
                            NameResolver resolver = nullptr);
 

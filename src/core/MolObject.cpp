@@ -1,5 +1,6 @@
 #include "molterm/core/MolObject.h"
 #include "molterm/core/BondTable.h"
+#include "molterm/core/DSSP.h"
 #include "molterm/repr/Representation.h"
 #include <algorithm>
 #include <limits>
@@ -139,6 +140,13 @@ bool MolObject::setActiveState(int idx) {
     activeState_ = idx;
     atoms_ = states_[idx];
     rainbowCache_.clear();
+    // Sync atoms_[i].ssType from the per-state DSSP cache (computed on
+    // demand). Trajectory frames may have different SS, so the cartoon
+    // mesh cache (keyed on activeState) will pick up the change.
+    const auto& ss = ssAtState(idx);
+    if (ss.size() == atoms_.size()) {
+        for (size_t i = 0; i < atoms_.size(); ++i) atoms_[i].ssType = ss[i];
+    }
     return true;
 }
 
@@ -152,6 +160,43 @@ bool MolObject::prevState() {
     int next = activeState_ - 1;
     if (next < 0) next = static_cast<int>(states_.size()) - 1;
     return setActiveState(next);
+}
+
+const std::vector<SSType>& MolObject::ssAtState(int stateIdx) const {
+    // Empty fallback for invalid state indices.
+    static const std::vector<SSType> kEmpty;
+
+    // Single-state structures: stateIdx 0 maps to atoms_, no states_
+    // entry exists. Cache slot 0 is still used.
+    int nStates = std::max<int>(1, static_cast<int>(states_.size()));
+    if (stateIdx < 0 || stateIdx >= nStates) return kEmpty;
+
+    if ((int)ssPerState_.size() < nStates) ssPerState_.resize(nStates);
+
+    auto& cell = ssPerState_[stateIdx];
+    if (!cell.empty()) return cell;
+
+    // Compute. For multi-state files we run DSSP against the stored
+    // state's atoms; for single-state we use atoms_ directly.
+    const std::vector<AtomData>* src = &atoms_;
+    if (!states_.empty() && stateIdx < (int)states_.size()) {
+        src = &states_[stateIdx];
+    }
+    cell = molterm::dssp::compute(*src);
+    return cell;
+}
+
+void MolObject::invalidateSSCache() {
+    ssPerState_.clear();
+}
+
+void MolObject::seedSSCacheFromAtoms(int stateIdx) const {
+    int nStates = std::max<int>(1, static_cast<int>(states_.size()));
+    if (stateIdx < 0 || stateIdx >= nStates) return;
+    if ((int)ssPerState_.size() < nStates) ssPerState_.resize(nStates);
+    auto& cell = ssPerState_[stateIdx];
+    cell.resize(atoms_.size());
+    for (size_t i = 0; i < atoms_.size(); ++i) cell[i] = atoms_[i].ssType;
 }
 
 std::vector<bool> MolObject::atomVisMask(ReprType r) const {

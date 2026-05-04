@@ -117,6 +117,8 @@ enum class Action {
     ColorByPLDDT,
     ToggleContactMap,
     ToggleInterface,
+    FocusPick,
+    EnterFocusPickMode,
 };
 
 inline std::string actionName(Action a) {
@@ -207,6 +209,8 @@ inline std::string actionName(Action a) {
         case Action::NextState:      return "next_state";
         case Action::ToggleContactMap: return "toggle_contactmap";
         case Action::ToggleInterface:  return "toggle_interface";
+        case Action::FocusPick:        return "focus_pick";
+        case Action::EnterFocusPickMode: return "enter_focus_pick_mode";
         default:                     return "unknown";
     }
 }
@@ -296,6 +300,8 @@ inline Action actionFromName(const std::string& name) {
     if (name == "play_macro")       return Action::PlayMacro;
     if (name == "toggle_contactmap") return Action::ToggleContactMap;
     if (name == "toggle_interface")  return Action::ToggleInterface;
+    if (name == "focus_pick")        return Action::FocusPick;
+    if (name == "enter_focus_pick_mode") return Action::EnterFocusPickMode;
     return Action::None;
 }
 

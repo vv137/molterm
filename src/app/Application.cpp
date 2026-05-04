@@ -61,6 +61,7 @@ static const char* pickModeName(PickMode pm) {
         case PickMode::SelectAtom:    return "SEL:ATOM";
         case PickMode::SelectResidue: return "SEL:RES";
         case PickMode::SelectChain:   return "SEL:CHAIN";
+        case PickMode::Focus:         return "FOCUS";
     }
     return "?";
 }
@@ -509,6 +510,20 @@ void Application::handleMouse(int /*key*/) {
                     cmdLine_.setMessage("sele(+" + std::to_string(chainAtoms.size()) + ") = " +
                         std::to_string(sele.size()) + " atoms [chain " + a.chainId + "]");
                 }
+            } else if (pickMode_ == PickMode::Focus) {
+                // Mol*-style click-to-focus. enterFocus picks up the new
+                // bounding-sphere zoom automatically. Mode stays active so
+                // a second click refocuses on a different residue (matches
+                // gs/gS/gc convention — ESC to exit).
+                std::vector<int> subject = expandByFocusGranularity(*obj, atomIdx);
+                pickedAtomIdx_ = atomIdx;        // so subsequent F can refocus
+                char d[80];
+                std::snprintf(d, sizeof(d),
+                    "%s %d%s (chain %s)",
+                    a.resName.c_str(), a.resSeq,
+                    (a.insCode == ' ' ? "" : std::string(1, a.insCode).c_str()),
+                    a.chainId.c_str());
+                enterFocus(*obj, subject, d);
             } else {
                 // Inspect mode — show info at current level
                 pickedAtomIdx_ = atomIdx;
@@ -718,6 +733,13 @@ void Application::handleAction(Action action) {
             dirty({C::StatusBar});
             break;
         case Action::ExitToNormal:
+            // First, if we're in focus mode, exiting back to "normal" view
+            // means leaving focus — restore camera + visibility.
+            if (focusSnapshot_.active) {
+                exitFocus();
+                dirty({C::CommandLine, C::StatusBar, C::Viewport});
+                break;
+            }
             inputHandler_->setMode(Mode::Normal);
             cmdLine_.deactivate();
             pickedAtomIdx_ = -1;
@@ -816,7 +838,13 @@ void Application::handleAction(Action action) {
                                            "pan_speed", "ps", "fog", "outline", "outline_threshold", "ot",
                                            "outline_darken", "od", "cartoon_helix", "ch",
                                            "cartoon_sheet", "csh", "cartoon_loop", "cl",
-                                           "cartoon_subdiv", "csd", "nucleic_backbone", "nb",
+                                           "cartoon_subdiv", "csd", "cartoon_aspect", "csa",
+                                           "cartoon_helix_radial", "chr",
+                                           "cartoon_tubular_helix", "cth",
+                                           "cartoon_tubular_radius", "ctr",
+                                           "nucleic_backbone", "nb",
+                                           "bs_units", "bs_factor", "bsf",
+                                           "spacefill_scale", "sfs",
                                            "lod_medium", "lod_low",
                                            "backbone_cutoff", "auto_center", "panel",
                                            "seqbar", "seqwrap",
@@ -925,10 +953,58 @@ void Application::handleAction(Action action) {
         }
 
         // Interface overlay toggle — viewport + panels
+        // Sends explicit on/off rather than implicit toggle so the
+        // command itself stays declarative (matches :set on|off style).
         case Action::ToggleInterface: {
-            ExecResult result = cmdRegistry_.execute(*this, "interface");
+            const char* arg = interfaceOverlay_ ? "interface off" : "interface on";
+            ExecResult result = cmdRegistry_.execute(*this, arg);
             if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
             layout_.markAllDirty(); needsRedraw_ = true;
+            break;
+        }
+
+        // Focus mode (Mol*-style): F enters/exits.
+        //   • Already focused → exit.
+        //   • Fresh pick → focus on that residue.
+        //   • No pick + named selection $sele exists → focus on it.
+        case Action::FocusPick: {
+            if (focusSnapshot_.active) {
+                exitFocus();
+                break;
+            }
+            auto obj = tabMgr_.currentTab().currentObject();
+            if (!obj) { cmdLine_.setMessage("Focus: no object"); break; }
+            const auto& atoms = obj->atoms();
+
+            std::vector<int> subjectIdx;
+            std::string desc;
+
+            int target = pickedAtomIdx_;
+            if (target < 0) target = pickRegs_[(pickNext_ + 3) % 4];   // most recent
+            if (target >= 0 && target < (int)atoms.size()) {
+                // Expand by configured granularity (default Residue —
+                // matches prior behavior).
+                subjectIdx = expandByFocusGranularity(*obj, target);
+                const auto& a = atoms[target];
+                char d[80];
+                std::snprintf(d, sizeof(d),
+                    "%s %d%s (chain %s)",
+                    a.resName.c_str(), a.resSeq,
+                    (a.insCode == ' ' ? "" : std::string(1, a.insCode).c_str()),
+                    a.chainId.c_str());
+                desc = d;
+            } else {
+                // Fall back to the active named selection.
+                auto it = namedSelections_.find("sele");
+                if (it == namedSelections_.end() || it->second.empty()) {
+                    cmdLine_.setMessage(
+                        "Focus: click an atom or run :select first");
+                    break;
+                }
+                subjectIdx = it->second.indices();
+                desc = "$sele";
+            }
+            enterFocus(*obj, subjectIdx, desc);
             break;
         }
 
@@ -1027,6 +1103,25 @@ void Application::handleAction(Action action) {
                     std::to_string(namedSelections_["sele"].size()));
             else
                 cmdLine_.setMessage("Inspect mode");
+            dirty({C::CommandLine, C::StatusBar});
+            break;
+        }
+
+        case Action::EnterFocusPickMode: {
+            // Toggle: a second `gf` while already in Focus mode returns to
+            // Inspect (matches the gs/gS/gc convention).
+            pickMode_ = (pickMode_ == PickMode::Focus) ? PickMode::Inspect
+                                                       : PickMode::Focus;
+            const char* gran =
+                focusGranularity_ == FocusGranularity::Chain    ? "chain" :
+                focusGranularity_ == FocusGranularity::Sidechain ? "sidechain" :
+                                                                  "residue";
+            if (pickMode_ == PickMode::Focus) {
+                cmdLine_.setMessage(std::string("FOCUS pick mode — click an atom (granularity=") +
+                                    gran + ", ESC to exit)");
+            } else {
+                cmdLine_.setMessage("Inspect mode");
+            }
             dirty({C::CommandLine, C::StatusBar});
             break;
         }
@@ -1234,12 +1329,60 @@ void Application::renderViewport() {
         }
     }
 
-    // Apply post-processing on pixel canvas
+    // ── ZoomGate auto-engage / disengage ────────────────────────────────
+    // When the user has set :set interface_zoom <T>, crossing the
+    // threshold simulates a :interface toggle. Manual `:interface on`
+    // is preserved (gate falling does not disable a manually-engaged
+    // overlay; only auto-engaged ones are auto-disengaged).
+    if (interfaceZoomGate_.enabled()) {
+        const bool wasActive = interfaceZoomGate_.active();
+        const bool flipped   = interfaceZoomGate_.update(tab.camera().zoom());
+        const bool isActive  = interfaceZoomGate_.active();
+        if (flipped) {
+            if (isActive && !interfaceOverlay_) {
+                interfaceFromZoom_ = true;
+                cmdRegistry_.execute(*this, "interface on");
+            } else if (!isActive && interfaceFromZoom_ && interfaceOverlay_) {
+                interfaceFromZoom_ = false;
+                cmdRegistry_.execute(*this, "interface off");
+            }
+        }
+        (void)wasActive;
+    }
+
+    // Apply post-processing on pixel canvas. InterfaceRepr is drawn
+    // AFTER outline + fog + focus-dim so the colored overlay (sidechain
+    // bonds, dashed interaction lines) stays vivid — fog would otherwise
+    // wash it out, defeating the "highlight" intent.
     if (rendererType_ == RendererType::Pixel) {
         auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
         if (pc) {
             if (outlineEnabled_) pc->applyOutline(outlineThreshold_, outlineDarken_);
             if (fogStrength_ > 0.0f) pc->applyDepthFog(fogStrength_);
+
+            // Focus-dim: prefer the interface mask when active, fall back
+            // to the explicit :focus selection mask. Either is depth-
+            // independent, so a non-focus atom in the foreground still
+            // dims while the focus subject stays vivid.
+            const std::vector<bool>* dimMask = nullptr;
+            if (interfaceOverlay_ && !interfaceAtomMask_.empty()) {
+                dimMask = &interfaceAtomMask_;
+            } else if (!focusAtomMask_.empty()) {
+                dimMask = &focusAtomMask_;
+            }
+            if (dimMask) pc->applyFocusDim(*dimMask, focusDimStrength_);
+        }
+    }
+
+    // ── Interface overlay (sidechains + interaction lines) ─────────────
+    // Drawn last so it sits on top of fog + focus-dim — vivid colors,
+    // unattenuated. Fires under either:
+    //   • global :interface overlay (full structure)
+    //   • focus mode (filtered to the focus neighborhood)
+    if ((interfaceOverlay_ || focusSnapshot_.active) &&
+        interfaceRepr_.hasData()) {
+        if (auto obj = tab.currentObject()) {
+            interfaceRepr_.render(*obj, tab.camera(), *canvas_);
         }
     }
 
@@ -1456,36 +1599,10 @@ void Application::renderViewport() {
         }
     }
 
-    // Draw interface contact dashed lines (color-coded by interaction
-    // type when classification is enabled).
-    if (interfaceOverlay_ && !interfaceContacts_.empty()) {
-        auto obj = tabMgr_.currentTab().currentObject();
-        if (obj) {
-            const auto& atoms = obj->atoms();
-            auto& cam = tabMgr_.currentTab().camera();
-            auto colorFor = [this](InteractionType t) -> int {
-                if (!interfaceClassify_) return interfaceColor_;
-                switch (t) {
-                    case InteractionType::HBond:       return kColorCyan;
-                    case InteractionType::SaltBridge:  return kColorRed;
-                    case InteractionType::Hydrophobic: return kColorYellow;
-                    case InteractionType::Other:       return kColorGray;
-                }
-                return interfaceColor_;
-            };
-            for (const auto& c : interfaceContacts_) {
-                if (c.atom1 < 0 || c.atom1 >= static_cast<int>(atoms.size())) continue;
-                if (c.atom2 < 0 || c.atom2 >= static_cast<int>(atoms.size())) continue;
-                float sx1, sy1, d1, sx2, sy2, d2;
-                cam.projectCached(atoms[c.atom1].x, atoms[c.atom1].y,
-                                  atoms[c.atom1].z, sx1, sy1, d1);
-                cam.projectCached(atoms[c.atom2].x, atoms[c.atom2].y,
-                                  atoms[c.atom2].z, sx2, sy2, d2);
-                drawDashedLine(sx1, sy1, d1, sx2, sy2, d2,
-                               colorFor(c.type), interfaceThickness_);
-            }
-        }
-    }
+    // Interface overlay (sidechain bonds + dashed interaction lines) is
+    // rendered by InterfaceRepr earlier in the frame so depth-fog and
+    // focus-dim post-passes see it. The legacy inline drawer was removed
+    // when InterfaceRepr was introduced.
   } // overlayVisible_
 
     win.refresh();
@@ -1650,6 +1767,288 @@ Selection Application::parseSelection(const std::string& expr, const MolObject& 
     // Auto-save latest result as "sele"
     namedSelections_["sele"] = sel;
     return sel;
+}
+
+// ── Focus Selection mode ────────────────────────────────────────────────────
+//
+// Mol*-style click-to-focus. enterFocus snapshots camera + per-repr
+// visibility, snaps the camera to the subject centroid, hides
+// non-neighborhood atoms for atom-direct reprs (Wireframe/BallStick/
+// Spacefill), and forces ball-stick visible on the neighborhood so
+// sidechains pop. exitFocus restores everything.
+
+std::vector<int> Application::expandByFocusGranularity(const MolObject& mol,
+                                                       int atomIdx) const {
+    std::vector<int> out;
+    const auto& atoms = mol.atoms();
+    if (atomIdx < 0 || atomIdx >= (int)atoms.size()) return out;
+    const auto& a = atoms[atomIdx];
+
+    if (focusGranularity_ == FocusGranularity::Chain) {
+        for (int i = 0; i < (int)atoms.size(); ++i) {
+            if (atoms[i].chainId == a.chainId) out.push_back(i);
+        }
+        return out;
+    }
+
+    if (focusGranularity_ == FocusGranularity::Sidechain) {
+        for (int i = 0; i < (int)atoms.size(); ++i) {
+            const auto& b = atoms[i];
+            if (b.chainId != a.chainId || b.resSeq != a.resSeq ||
+                b.insCode != a.insCode) continue;
+            const std::string& nm = b.name;
+            if (nm == "N" || nm == "CA" || nm == "C" || nm == "O") continue;
+            out.push_back(i);
+        }
+        if (!out.empty()) return out;
+        // Empty sidechain (e.g. Gly) → fall through to Residue.
+    }
+
+    // Residue (default + Sidechain fallback)
+    for (int i = 0; i < (int)atoms.size(); ++i) {
+        const auto& b = atoms[i];
+        if (b.chainId == a.chainId && b.resSeq == a.resSeq &&
+            b.insCode == a.insCode) {
+            out.push_back(i);
+        }
+    }
+    return out;
+}
+
+void Application::enterFocus(MolObject& mol,
+                             const std::vector<int>& subjectIndices,
+                             const std::string& exprDesc) {
+    if (subjectIndices.empty()) return;
+    if (focusSnapshot_.active) exitFocus();   // refocus → exit then re-enter
+
+    const auto& atoms = mol.atoms();
+
+    // Snapshot camera state.
+    auto& cam = tabMgr_.currentTab().camera();
+    focusSnapshot_.active = true;
+    focusSnapshot_.rot    = cam.rotation();
+    focusSnapshot_.cx     = cam.centerX();
+    focusSnapshot_.cy     = cam.centerY();
+    focusSnapshot_.cz     = cam.centerZ();
+    focusSnapshot_.panX   = cam.panXOffset();
+    focusSnapshot_.panY   = cam.panYOffset();
+    focusSnapshot_.zoom   = cam.zoom();
+
+    // Snapshot per-repr visibility for the atom-direct reprs we touch.
+    static const ReprType kTouchedReprs[] = {
+        ReprType::Wireframe, ReprType::BallStick, ReprType::Spacefill,
+    };
+    focusSnapshot_.reprs.clear();
+    for (ReprType r : kTouchedReprs) {
+        FocusSavedRepr s;
+        s.type        = r;
+        s.objectLevel = mol.reprVisible(r);
+        s.atomMask    = mol.atomVisMask(r);    // empty if all-visible
+        focusSnapshot_.reprs.push_back(std::move(s));
+    }
+    // Spline reprs are hidden during focus (they obscure the close-up
+    // sidechain/wireframe view); save their object-level state so we can
+    // put them back on exit.
+    focusSnapshot_.cartoonVisible  = mol.reprVisible(ReprType::Cartoon);
+    focusSnapshot_.ribbonVisible   = mol.reprVisible(ReprType::Ribbon);
+    focusSnapshot_.backboneVisible = mol.reprVisible(ReprType::Backbone);
+    // Snapshot wireframe thickness so we can bump it during focus.
+    if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
+        focusSnapshot_.wireframeThickness = wf->thickness();
+    }
+
+    // Compute subject centroid (for camera snap) + enclosing radius
+    // (for subject-size aware zoom — Mol*-style).
+    float sx = 0, sy = 0, sz = 0;
+    int n = 0;
+    for (int idx : subjectIndices) {
+        if (idx < 0 || idx >= (int)atoms.size()) continue;
+        sx += atoms[idx].x; sy += atoms[idx].y; sz += atoms[idx].z;
+        ++n;
+    }
+    if (n == 0) { focusSnapshot_.active = false; return; }
+    sx /= n; sy /= n; sz /= n;
+
+    float r2max = 0.0f;
+    for (int idx : subjectIndices) {
+        if (idx < 0 || idx >= (int)atoms.size()) continue;
+        float dx = atoms[idx].x - sx;
+        float dy = atoms[idx].y - sy;
+        float dz = atoms[idx].z - sz;
+        float r2 = dx*dx + dy*dy + dz*dz;
+        if (r2 > r2max) r2max = r2;
+    }
+    const float rEnc = std::sqrt(r2max);
+    const float rPad = std::max(rEnc + focusExtraRadius_, focusMinRadius_);
+    // K=20 calibrates fillFraction=1.0 to the existing `:zoom` formula
+    // (40 / span ≈ 20 / R) so :zoom and a "full-fill" focus agree.
+    const float targetZoom = (rPad > 0.0f)
+        ? focusFillFraction_ * 20.0f / rPad
+        : focusZoom_;
+
+    cam.focusOn(sx, sy, sz, targetZoom);
+
+    // Build neighborhood: atoms within focus_radius of any subject atom.
+    // Reuse the new Selection grammar via a temporary index-based set.
+    const float r2 = focusRadius_ * focusRadius_;
+    focusAtomMask_.assign(atoms.size(), false);
+    for (int idx : subjectIndices) {
+        if (idx >= 0 && idx < (int)atoms.size()) focusAtomMask_[idx] = true;
+    }
+    focusNbhdMask_.assign(atoms.size(), false);
+    std::vector<int> nbhdIndices;
+    nbhdIndices.reserve(atoms.size());
+    for (size_t i = 0; i < atoms.size(); ++i) {
+        const auto& ai = atoms[i];
+        bool near = false;
+        for (int j : subjectIndices) {
+            if (j < 0 || j >= (int)atoms.size()) continue;
+            const auto& aj = atoms[j];
+            float dx = ai.x - aj.x, dy = ai.y - aj.y, dz = ai.z - aj.z;
+            if (dx*dx + dy*dy + dz*dz <= r2) { near = true; break; }
+        }
+        if (near) {
+            focusNbhdMask_[i] = true;
+            nbhdIndices.push_back((int)i);
+        }
+    }
+
+    // Show full neighborhood including backbone — keeps the chain
+    // continuity readable. (Earlier sidechain-only variant left
+    // hairs floating in space.)
+
+    // Hide spline reprs — they're context that obscures the close-up
+    // pocket. The neighborhood wireframe + ball-stick replace them.
+    mol.hideRepr(ReprType::Cartoon);
+    mol.hideRepr(ReprType::Ribbon);
+    mol.hideRepr(ReprType::Backbone);
+
+    // Bump wireframe thickness modestly during focus — chunkier than
+    // default so the local scaffold reads, but the zoom-scaling in
+    // WireframeRepr::render does the rest.
+    if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
+        wf->setThickness(std::max(0.5f, focusSnapshot_.wireframeThickness * 1.4f));
+    }
+    mol.showRepr(ReprType::Wireframe);
+    mol.showReprForAtoms(ReprType::Wireframe, nbhdIndices);
+
+    // Ball-stick on top of wireframe so atoms are clearly readable.
+    mol.showRepr(ReprType::BallStick);
+    mol.showReprForAtoms(ReprType::BallStick, nbhdIndices);
+
+    // Spacefill stays at user's prior preference, just gated to neighborhood.
+    if (mol.reprVisible(ReprType::Spacefill)) {
+        mol.showReprForAtoms(ReprType::Spacefill, nbhdIndices);
+    }
+
+    // Always show the interface ∩ focus subset of interactions so the
+    // user gets H-bond / salt / hydrophobic dotted lines for the
+    // pocket without having to run `:interface` first. If the global
+    // overlay is on we reuse the cached contacts; otherwise compute
+    // them now on demand.
+    if (interfaceContacts_.empty()) {
+        contactMapPanel_.update(mol);
+        contactMapPanel_.contactMap().computeInterface(mol, 4.5f);
+        // Snapshot the computed list into the application's cache so
+        // exit-without-clear keeps the state predictable. We tag this
+        // as "from focus" so exitFocus can drop it.
+        interfaceContacts_ =
+            contactMapPanel_.contactMap().interfaceContacts();
+        focusComputedInterface_ = true;
+    }
+    std::vector<InterfaceContact> filtered;
+    filtered.reserve(interfaceContacts_.size());
+    for (const auto& c : interfaceContacts_) {
+        if (c.atom1 < 0 || c.atom2 < 0) continue;
+        if (c.atom1 >= (int)atoms.size() || c.atom2 >= (int)atoms.size()) continue;
+        if (focusNbhdMask_[c.atom1] && focusNbhdMask_[c.atom2])
+            filtered.push_back(c);
+    }
+    interfaceRepr_.setData(focusNbhdMask_, std::move(filtered));
+    interfaceRepr_.setDrawSidechains(false);   // wireframe already covers it
+    interfaceRepr_.setInteractionThickness(interfaceThickness_);
+
+    focusExpr_ = exprDesc.empty() ? std::string("focus") : exprDesc;
+    char msg[160];
+    std::snprintf(msg, sizeof(msg),
+        "Focus: %d atoms (radius=%.1fA zoom=%.1f) — F or Esc to exit",
+        (int)nbhdIndices.size(), focusRadius_, focusZoom_);
+    cmdLine_.setMessage(msg);
+    needsRedraw_ = true;
+}
+
+void Application::exitFocus() {
+    if (!focusSnapshot_.active) return;
+    auto obj = tabMgr_.currentTab().currentObject();
+    if (!obj) {
+        focusSnapshot_.active = false;
+        focusAtomMask_.clear();
+        focusNbhdMask_.clear();
+        focusExpr_.clear();
+        return;
+    }
+
+    // Restore camera.
+    auto& cam = tabMgr_.currentTab().camera();
+    cam.setRotation(focusSnapshot_.rot);
+    cam.setCenter(focusSnapshot_.cx, focusSnapshot_.cy, focusSnapshot_.cz);
+    cam.setPan(focusSnapshot_.panX, focusSnapshot_.panY);
+    cam.setZoom(focusSnapshot_.zoom);
+
+    // Restore per-repr visibility atom-for-atom.
+    for (const auto& s : focusSnapshot_.reprs) {
+        if (s.atomMask.empty()) {
+            // Pre-focus state was "all visible" → clear any per-atom mask.
+            // showRepr with no per-atom args resets the mask in current API.
+            if (s.objectLevel) obj->showRepr(s.type);
+            else               obj->hideRepr(s.type);
+        } else {
+            // Pre-focus state had a custom mask — re-apply it via
+            // showReprForAtoms with the previously-visible indices.
+            std::vector<int> idxs;
+            idxs.reserve(s.atomMask.size());
+            for (size_t i = 0; i < s.atomMask.size(); ++i)
+                if (s.atomMask[i]) idxs.push_back((int)i);
+            obj->showReprForAtoms(s.type, idxs);
+            if (!s.objectLevel) obj->hideRepr(s.type);
+        }
+    }
+
+    // Restore spline reprs.
+    if (focusSnapshot_.cartoonVisible)  obj->showRepr(ReprType::Cartoon);
+    else                                obj->hideRepr(ReprType::Cartoon);
+    if (focusSnapshot_.ribbonVisible)   obj->showRepr(ReprType::Ribbon);
+    else                                obj->hideRepr(ReprType::Ribbon);
+    if (focusSnapshot_.backboneVisible) obj->showRepr(ReprType::Backbone);
+    else                                obj->hideRepr(ReprType::Backbone);
+
+    // Restore wireframe thickness.
+    if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
+        wf->setThickness(focusSnapshot_.wireframeThickness);
+    }
+
+    // Put the unfiltered interface contact list back if the global
+    // overlay was on. If focus computed interactions on demand (no
+    // pre-existing :interface), drop them entirely on exit.
+    if (focusComputedInterface_) {
+        interfaceContacts_.clear();
+        interfaceAtomMask_.clear();
+        interfaceRepr_.clear();
+        focusComputedInterface_ = false;
+    } else if (interfaceOverlay_ && !interfaceContacts_.empty()) {
+        interfaceRepr_.setData(interfaceAtomMask_, interfaceContacts_);
+        interfaceRepr_.setDrawSidechains(interfaceSidechains_);
+    } else {
+        interfaceRepr_.clear();
+    }
+
+    focusSnapshot_.active = false;
+    focusSnapshot_.reprs.clear();
+    focusAtomMask_.clear();
+    focusNbhdMask_.clear();
+    focusExpr_.clear();
+    cmdLine_.setMessage("Focus exited");
+    needsRedraw_ = true;
 }
 
 void Application::executeSearch(const std::string& query) {
@@ -2252,6 +2651,110 @@ void Application::registerCommands() {
             app.setOutlineDarken(std::stof(cmd.args[1]));
             return {true, "Outline darken set to " + cmd.args[1]};
         }
+        if (opt == "focus_dim" || opt == "fd") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set focus_dim <0.0-1.0>"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.0f, std::min(1.0f, v));
+            app.focusDimStrength_ = v;
+            return {true, "Focus dim strength: " + std::to_string(v)};
+        }
+        if (opt == "focus_radius" || opt == "fr") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set focus_radius <Å>"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.5f, std::min(50.0f, v));
+            app.focusRadius_ = v;
+            return {true, "Focus radius: " + std::to_string(v) + " Å"};
+        }
+        if (opt == "focus_zoom" || opt == "fz") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set focus_zoom <float>"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.1f, std::min(50.0f, v));
+            app.focusZoom_ = v;
+            return {true, "Focus zoom (fallback): " + std::to_string(v) +
+                          " (subject-size aware zoom is now used; tune via focus_fill)"};
+        }
+        if (opt == "focus_fill" || opt == "ff") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set focus_fill <0.05-1.0>"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.05f, std::min(1.0f, v));
+            app.focusFillFraction_ = v;
+            return {true, "Focus fill fraction: " + std::to_string(v)};
+        }
+        if (opt == "focus_extra" || opt == "fe") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set focus_extra <Å>"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.0f, std::min(50.0f, v));
+            app.focusExtraRadius_ = v;
+            return {true, "Focus extra radius: " + std::to_string(v) + " Å"};
+        }
+        if (opt == "focus_min_radius" || opt == "fmr") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set focus_min_radius <Å>"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.1f, std::min(50.0f, v));
+            app.focusMinRadius_ = v;
+            return {true, "Focus min radius: " + std::to_string(v) + " Å"};
+        }
+        if (opt == "focus_granularity" || opt == "fg") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set focus_granularity <residue|chain|sidechain>"};
+            const std::string& g = cmd.args[1];
+            if (g == "residue" || g == "res") {
+                app.focusGranularity_ = FocusGranularity::Residue;
+            } else if (g == "chain" || g == "c") {
+                app.focusGranularity_ = FocusGranularity::Chain;
+            } else if (g == "sidechain" || g == "sc") {
+                app.focusGranularity_ = FocusGranularity::Sidechain;
+            } else {
+                return {false, "Unknown granularity: " + g + " (use residue|chain|sidechain)"};
+            }
+            return {true, "Focus granularity: " + g};
+        }
+        if (opt == "wf_thickness" || opt == "wft") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set wf_thickness <0.1-2.0>"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.1f, std::min(2.0f, v));
+            auto* wf = dynamic_cast<WireframeRepr*>(
+                app.getRepr(ReprType::Wireframe));
+            if (!wf) return {false, "Wireframe repr not found"};
+            wf->setThickness(v);
+            return {true, "Wireframe thickness: " + std::to_string(v)};
+        }
+        if (opt == "interface_zoom" || opt == "iz") {
+            if (cmd.args.size() < 2) {
+                app.interfaceZoomGate_.setEnabled(false);
+                return {true, "interface_zoom disabled"};
+            }
+            const std::string& v = cmd.args[1];
+            if (v == "off" || v == "none") {
+                app.interfaceZoomGate_.setEnabled(false);
+                return {true, "interface_zoom disabled"};
+            }
+            float thresh = std::stof(v);
+            app.interfaceZoomGate_.setThreshold(thresh);
+            app.interfaceZoomGate_.setEnabled(true);
+            return {true, "interface_zoom threshold: " + v};
+        }
+        if (opt == "interface_sidechains" || opt == "isc") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set interface_sidechains on|off"};
+            auto vb = parseBool(cmd.args[1]);
+            if (!vb) return {false, "Usage: :set interface_sidechains on|off"};
+            app.interfaceSidechains_ = *vb;
+            app.interfaceRepr_.setDrawSidechains(*vb);
+            return {true, std::string("Interface sidechains: ") +
+                          (*vb ? "on" : "off")};
+        }
+        if (opt == "interface_thickness" || opt == "ith") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set interface_thickness <1-6>"};
+            int t = std::stoi(cmd.args[1]);
+            t = std::max(1, std::min(6, t));
+            app.interfaceThickness_ = t;
+            app.interfaceRepr_.setInteractionThickness(t);
+            app.interfaceRepr_.setLineThickness(std::max(1, t - 1));
+            return {true, "Interface thickness: " + std::to_string(t)};
+        }
         if (opt == "cartoon_helix" || opt == "ch") {
             if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_helix <0.1-3.0>"};
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
@@ -2275,6 +2778,76 @@ void Application::registerCommands() {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
             if (ct) { ct->setSubdivisions(std::stoi(cmd.args[1])); return {true, "Cartoon subdivisions: " + cmd.args[1]}; }
             return {false, "Cartoon repr not found"};
+        }
+        if (opt == "cartoon_aspect" || opt == "csa") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_aspect <1.0-12.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(1.0f, std::min(12.0f, v));
+            ct->setHelixAspect(v);
+            return {true, "Cartoon helix aspect (W:H): " + std::to_string(v)};
+        }
+        if (opt == "cartoon_helix_radial" || opt == "chr") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_helix_radial <4-64>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            int v = std::stoi(cmd.args[1]);
+            ct->setHelixRadialSegments(v);
+            return {true, "Cartoon helix radial vertices: " +
+                          std::to_string(ct->helixRadialSegments())};
+        }
+        if (opt == "cartoon_tubular_helix" || opt == "cth") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_tubular_helix on|off"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            auto on = parseBool(cmd.args[1]);
+            if (!on) return {false, "Use on|off|true|false"};
+            ct->setTubularHelix(*on);
+            return {true, std::string("Cartoon tubular helix: ") +
+                          (*on ? "on (circular tube)" : "off (elliptical ribbon)")};
+        }
+        if (opt == "cartoon_tubular_radius" || opt == "ctr") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_tubular_radius <0.1-3.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.1f, std::min(3.0f, v));
+            ct->setTubularRadius(v);
+            return {true, "Cartoon tubular helix radius: " + std::to_string(v) + " Å"};
+        }
+        if (opt == "bs_units") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set bs_units vdw|cell"};
+            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
+            if (!bs) return {false, "BallStick repr not found"};
+            const std::string& v = cmd.args[1];
+            if (v == "vdw" || v == "a") {
+                bs->setUseVdwSize(true);
+                return {true, "BallStick units: vdw (Å × bs_factor)"};
+            }
+            if (v == "cell" || v == "subpx") {
+                bs->setUseVdwSize(false);
+                return {true, "BallStick units: cell (legacy ball_radius)"};
+            }
+            return {false, "Unknown bs_units: " + v + " (use vdw|cell)"};
+        }
+        if (opt == "bs_factor" || opt == "bsf") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set bs_factor <0.05-1.0>"};
+            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
+            if (!bs) return {false, "BallStick repr not found"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.05f, std::min(1.0f, v));
+            bs->setSizeFactor(v);
+            return {true, "BallStick size factor (×vdW): " + std::to_string(v)};
+        }
+        if (opt == "spacefill_scale" || opt == "ss_scale" || opt == "sfs") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set spacefill_scale <0.1-2.0>"};
+            auto* sf = dynamic_cast<SpacefillRepr*>(app.getRepr(ReprType::Spacefill));
+            if (!sf) return {false, "Spacefill repr not found"};
+            float v = std::stof(cmd.args[1]);
+            v = std::max(0.1f, std::min(2.0f, v));
+            sf->setScale(v);
+            return {true, "Spacefill scale (×vdW): " + std::to_string(v)};
         }
         if (opt == "nucleic_backbone" || opt == "nb") {
             if (cmd.args.size() < 2)
@@ -2428,6 +3001,44 @@ void Application::registerCommands() {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
             if (!ct) return {false, "Cartoon repr not found"};
             return {true, "cartoon_subdiv = " + std::to_string(ct->subdivisions())};
+        }
+        if (opt == "cartoon_aspect" || opt == "csa") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_aspect = " + std::to_string(ct->helixAspect())};
+        }
+        if (opt == "cartoon_helix_radial" || opt == "chr") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_helix_radial = " +
+                          std::to_string(ct->helixRadialSegments())};
+        }
+        if (opt == "cartoon_tubular_helix" || opt == "cth") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, std::string("cartoon_tubular_helix = ") +
+                          (ct->tubularHelix() ? "on" : "off")};
+        }
+        if (opt == "cartoon_tubular_radius" || opt == "ctr") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_tubular_radius = " +
+                          std::to_string(ct->tubularRadius())};
+        }
+        if (opt == "bs_units") {
+            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
+            if (!bs) return {false, "BallStick repr not found"};
+            return {true, std::string("bs_units = ") + (bs->useVdwSize() ? "vdw" : "cell")};
+        }
+        if (opt == "bs_factor" || opt == "bsf") {
+            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
+            if (!bs) return {false, "BallStick repr not found"};
+            return {true, "bs_factor = " + std::to_string(bs->sizeFactor())};
+        }
+        if (opt == "spacefill_scale" || opt == "ss_scale" || opt == "sfs") {
+            auto* sf = dynamic_cast<SpacefillRepr*>(app.getRepr(ReprType::Spacefill));
+            if (!sf) return {false, "Spacefill repr not found"};
+            return {true, "spacefill_scale = " + std::to_string(sf->scale())};
         }
         if (opt == "nucleic_backbone" || opt == "nb") {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
@@ -2885,6 +3496,23 @@ void Application::registerCommands() {
         if (app.fogStrength() > 0.0f)
             offscreen.applyDepthFog(app.fogStrength());
 
+        // Mirror the live render pipeline: focus-dim (mask-driven) +
+        // interface overlay so the captured PNG matches what's on screen.
+        const std::vector<bool>* dimMask = nullptr;
+        if (app.interfaceOverlay_ && !app.interfaceAtomMask_.empty()) {
+            dimMask = &app.interfaceAtomMask_;
+        } else if (!app.focusAtomMask_.empty()) {
+            dimMask = &app.focusAtomMask_;
+        }
+        if (dimMask) offscreen.applyFocusDim(*dimMask, app.focusDimStrength_);
+
+        if ((app.interfaceOverlay_ || app.focusSnapshot_.active) &&
+            app.interfaceRepr_.hasData()) {
+            if (auto obj = tab.currentObject()) {
+                app.interfaceRepr_.render(*obj, tab.camera(), offscreen);
+            }
+        }
+
         // Restore projection for the active canvas
         auto* canvas = app.canvas();
         if (canvas)
@@ -2940,9 +3568,12 @@ void Application::registerCommands() {
         return {true, "Labels cleared"};
     }, ":unlabel", "Remove all labels");
 
-    // :overlay [clear] — toggle or clear overlays (labels, measurements, selection)
+    // :overlay on|off | :overlay clear
     cmdRegistry_.registerCmd("overlay", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        if (!cmd.args.empty() && cmd.args[0] == "clear") {
+        if (cmd.args.empty()) {
+            return {false, "Usage: :overlay on|off | :overlay clear"};
+        }
+        if (cmd.args[0] == "clear") {
             int mc = static_cast<int>(app.measurements().size());
             int lc = static_cast<int>(app.labelAtoms().size());
             app.measurements().clear();
@@ -2950,9 +3581,11 @@ void Application::registerCommands() {
             return {true, "Cleared " + std::to_string(mc) + " measurements, " +
                    std::to_string(lc) + " labels"};
         }
-        app.overlayVisible_ = !app.overlayVisible_;
-        return {true, app.overlayVisible_ ? "Overlays visible" : "Overlays hidden"};
-    }, ":overlay [clear]", "Toggle or clear overlays");
+        auto v = parseBool(cmd.args[0]);
+        if (!v) return {false, "Usage: :overlay on|off | :overlay clear"};
+        app.overlayVisible_ = *v;
+        return {true, *v ? "Overlays visible" : "Overlays hidden"};
+    }, ":overlay on|off | clear", "Show/hide overlays or clear labels+measurements");
 
     // :run [--strict] <script.mt> — execute a command script
     cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3182,11 +3815,28 @@ void Application::registerCommands() {
     }, ":cmap [cutoff]", "Alias for :contactmap");
 
     cmdRegistry_.registerCmd("interface", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        float cutoff = 4.5f;
-        if (!cmd.args.empty()) {
-            try { cutoff = std::stof(cmd.args[0]); } catch (...) {}
+        if (cmd.args.empty()) {
+            return {false, "Usage: :interface on|off [cutoff]"};
         }
-        app.interfaceOverlay_ = !app.interfaceOverlay_;
+        // First arg is on|off, second arg (optional) is cutoff in Å.
+        // Numeric-only first arg keeps the original `:interface 4.5`
+        // shorthand working: it implies "on" with that cutoff.
+        bool wantOn;
+        float cutoff = 4.5f;
+        size_t cutoffArgIdx = 1;
+        auto parsedBool = parseBool(cmd.args[0]);
+        if (parsedBool) {
+            wantOn = *parsedBool;
+        } else {
+            // Try as numeric cutoff → "on" with that cutoff.
+            try { cutoff = std::stof(cmd.args[0]); wantOn = true; cutoffArgIdx = 99; }
+            catch (...) { return {false, "Usage: :interface on|off [cutoff]"}; }
+        }
+        if (cmd.args.size() > cutoffArgIdx) {
+            try { cutoff = std::stof(cmd.args[cutoffArgIdx]); }
+            catch (...) { return {false, "Cutoff must be a number"}; }
+        }
+        app.interfaceOverlay_ = wantOn;
         if (app.interfaceOverlay_) {
             auto obj = app.tabs().currentTab().currentObject();
             if (!obj) {
@@ -3208,6 +3858,33 @@ void Application::registerCommands() {
                 return {false, buf};
             }
 
+            // Build per-atom interface mask: expand contact atoms to
+            // whole residues — this is the "same residue as" propagation
+            // VMD provides as a Selection primitive, applied here directly.
+            const auto& atoms = obj->atoms();
+            app.interfaceAtomMask_.assign(atoms.size(), false);
+            std::set<std::tuple<std::string,int,char>> interfaceResidues;
+            for (const auto& c : app.interfaceContacts_) {
+                if (c.atom1 >= 0 && c.atom1 < (int)atoms.size()) {
+                    const auto& a = atoms[c.atom1];
+                    interfaceResidues.emplace(a.chainId, a.resSeq, a.insCode);
+                }
+                if (c.atom2 >= 0 && c.atom2 < (int)atoms.size()) {
+                    const auto& a = atoms[c.atom2];
+                    interfaceResidues.emplace(a.chainId, a.resSeq, a.insCode);
+                }
+            }
+            for (size_t i = 0; i < atoms.size(); ++i) {
+                const auto& a = atoms[i];
+                if (interfaceResidues.count({a.chainId, a.resSeq, a.insCode}))
+                    app.interfaceAtomMask_[i] = true;
+            }
+            app.interfaceRepr_.setData(app.interfaceAtomMask_,
+                                       app.interfaceContacts_);
+            app.interfaceRepr_.setDrawSidechains(app.interfaceSidechains_);
+            app.interfaceRepr_.setInteractionThickness(app.interfaceThickness_);
+            app.interfaceRepr_.setLineThickness(std::max(1, app.interfaceThickness_ - 1));
+
             int nHB = 0, nSalt = 0, nHyd = 0, nOther = 0;
             for (const auto& c : app.interfaceContacts_) {
                 switch (c.type) {
@@ -3226,8 +3903,65 @@ void Application::registerCommands() {
             return {true, buf};
         }
         app.interfaceContacts_.clear();
+        app.interfaceAtomMask_.clear();
+        app.interfaceRepr_.clear();
+        app.interfaceFromZoom_ = false;
         return {true, "Interface overlay hidden"};
-    }, ":interface [cutoff]", "Toggle classified inter-chain contact overlay");
+    }, ":interface on|off [cutoff]", "Show/hide classified inter-chain contact overlay");
+
+    // :focus <selection>  → Mol*-style focus on selection
+    //                        (camera + hide non-neighborhood + show
+    //                        sidechains + dim cartoon context).
+    // :focus off           → restore pre-focus camera + visibility.
+    cmdRegistry_.registerCmd("focus", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) {
+            return {false, "Usage: :focus <selection>  |  :focus off"};
+        }
+        if (cmd.args.size() == 1 &&
+            (cmd.args[0] == "off" || cmd.args[0] == "none" || cmd.args[0] == "clear")) {
+            if (!app.focusActive()) return {true, "Focus already off"};
+            app.exitFocus();
+            return {true, "Focus exited"};
+        }
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object loaded"};
+        std::string expr;
+        for (size_t i = 0; i < cmd.args.size(); ++i) {
+            if (i) expr += ' ';
+            expr += cmd.args[i];
+        }
+        Selection sel = app.parseSelection(expr, *obj);
+        if (sel.empty()) return {false, "Empty selection: " + expr};
+        app.enterFocus(*obj, sel.indices(), expr);
+        return {true, "Focus: " + std::to_string(sel.size()) +
+                      " atoms (" + expr + ")"};
+    }, ":focus <selection>|off",
+       "Mol*-style click-to-focus: zoom + hide occluders + show sidechains");
+
+    // :dssp — Re-run DSSP secondary-structure assignment on the current
+    // state. Useful for trajectory frames where the loader's initial SS
+    // (from headers, if any) doesn't reflect the current conformation.
+    cmdRegistry_.registerCmd("dssp", [](Application& app, const ParsedCommand&) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object loaded"};
+        // Drop cached SS for this state, force recompute, re-sync atoms.
+        obj->invalidateSSCache();
+        const auto& ss = obj->ssAtState(obj->activeState());
+        if (ss.size() != obj->atoms().size()) {
+            return {false, "DSSP: size mismatch (state " +
+                           std::to_string(obj->activeState() + 1) + ")"};
+        }
+        auto& atoms = obj->atoms();
+        int nH = 0, nE = 0;
+        for (size_t i = 0; i < atoms.size(); ++i) {
+            atoms[i].ssType = ss[i];
+            if (ss[i] == SSType::Helix) ++nH;
+            else if (ss[i] == SSType::Sheet) ++nE;
+        }
+        return {true, "DSSP recomputed: " + std::to_string(nH) +
+                      " H, " + std::to_string(nE) + " E (state " +
+                      std::to_string(obj->activeState() + 1) + ")"};
+    }, ":dssp", "Recompute secondary structure (Kabsch-Sander) for current state");
 }
 
 } // namespace molterm

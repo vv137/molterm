@@ -3,10 +3,13 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
+#include <unordered_set>
 
 #include "molterm/core/Selection.h"
 #include "molterm/core/BondTable.h"
 #include "molterm/core/MolObject.h"
+#include "molterm/core/SpatialHash.h"
 
 namespace molterm {
 
@@ -163,6 +166,12 @@ private:
     Token readNumber() {
         size_t start = pos_;
         while (pos_ < input_.size() && std::isdigit(input_[pos_])) ++pos_;
+        // Accept a single decimal point + fractional digits (e.g. "4.5").
+        if (pos_ < input_.size() && input_[pos_] == '.' &&
+            pos_ + 1 < input_.size() && std::isdigit(input_[pos_ + 1])) {
+            ++pos_;
+            while (pos_ < input_.size() && std::isdigit(input_[pos_])) ++pos_;
+        }
         return {Token::Number, input_.substr(start, pos_ - start)};
     }
 
@@ -383,6 +392,26 @@ private:
         if (kwLower == "all") {
             return Selection::all(totalAtoms_);
         }
+        if (kwLower == "vis" || kwLower == "visible") {
+            // Atoms visible in ANY currently-shown repr. Mirrors PyMOL's
+            // `visible` / VMD's "drawn" — useful as the default subject
+            // for commands like `:focus vis`.
+            const MolObject* mp = &mol_;
+            return Selection::fromPredicate(mol_,
+                [mp](int idx, const AtomData&) {
+                    if (!mp->visible()) return false;
+                    static const ReprType kReprs[] = {
+                        ReprType::Wireframe, ReprType::BallStick,
+                        ReprType::Spacefill, ReprType::Cartoon,
+                        ReprType::Ribbon,    ReprType::Backbone,
+                    };
+                    for (ReprType r : kReprs) {
+                        if (mp->reprVisibleForAtom(r, idx)) return true;
+                    }
+                    return false;
+                },
+                "vis");
+        }
         if (kwLower == "chain") {
             std::vector<std::string> ids;
             ids.push_back(current_.value);
@@ -553,9 +582,117 @@ private:
                 return Selection::all(totalAtoms_);
             return Selection({}, "obj " + objName);  // empty if no match
         }
+        if (kwLower == "within" || kwLower == "exwithin") {
+            // within N of <subselection>   — atoms within N Å of subselection
+            // exwithin N of <subselection> — same, minus the subselection
+            const bool exclusive = (kwLower == "exwithin");
+            if (current_.type != Token::Number) {
+                return Selection({}, kwLower);   // malformed → empty
+            }
+            float dist = std::stof(current_.value);
+            advance();
+            if (!matchWord("of")) {
+                return Selection({}, kwLower);   // missing "of" → empty
+            }
+            Selection sub = parseAtom();
+            return spatialWithin(sub, dist, exclusive);
+        }
+        if (kwLower == "same") {
+            // same KW as <subselection> — atoms sharing KW with subselection
+            // KW ∈ residue, chain, resname/resn
+            if (current_.type != Token::Word) {
+                return Selection({}, "same");
+            }
+            std::string keyword = current_.value;
+            std::string keywordLower = keyword;
+            std::transform(keywordLower.begin(), keywordLower.end(),
+                           keywordLower.begin(), ::tolower);
+            advance();
+            if (!matchWord("as")) {
+                return Selection({}, "same " + keyword);
+            }
+            Selection sub = parseAtom();
+            return sameAs(sub, keywordLower);
+        }
 
         // Unknown keyword — treat as empty selection
         return Selection({}, kw);
+    }
+
+    // Build a Selection of atoms within `dist` Å of any atom in `sub`.
+    // If `exclusive`, atoms in `sub` itself are removed from the result.
+    Selection spatialWithin(const Selection& sub, float dist, bool exclusive) {
+        const auto& atoms = mol_.atoms();
+        if (sub.empty() || atoms.empty()) {
+            return Selection({}, "");
+        }
+        // Cell size = dist so each query touches at most a 3×3×3 cell window.
+        SpatialHash hash(dist > 0.0f ? dist : 1.0f,
+                         static_cast<int>(sub.size()));
+        for (int idx : sub.indices()) {
+            const auto& a = atoms[idx];
+            hash.insert(idx, a.x, a.y, a.z);
+        }
+        const float distSq = dist * dist;
+        std::unordered_set<int> subSet(sub.indices().begin(), sub.indices().end());
+        std::vector<int> result;
+        result.reserve(atoms.size());
+        for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+            const auto& a = atoms[i];
+            bool hit = false;
+            hash.forEachNeighbor(a.x, a.y, a.z, dist, [&](int j) {
+                if (hit) return;
+                const auto& b = atoms[j];
+                float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+                if (dx*dx + dy*dy + dz*dz <= distSq) hit = true;
+            });
+            if (!hit) continue;
+            if (exclusive && subSet.count(i)) continue;
+            result.push_back(i);
+        }
+        std::ostringstream eos;
+        eos << (exclusive ? "exwithin " : "within ")
+            << dist << " of (" << sub.expression() << ")";
+        return Selection(std::move(result), eos.str());
+    }
+
+    // Atoms sharing `keyword` (residue / chain / resname) with `sub`.
+    Selection sameAs(const Selection& sub, const std::string& keyword) {
+        const auto& atoms = mol_.atoms();
+        if (sub.empty() || atoms.empty()) {
+            return Selection({}, "same " + keyword + " as ()");
+        }
+        std::vector<int> result;
+        std::string exprDescr = "same " + keyword + " as (" + sub.expression() + ")";
+
+        if (keyword == "residue") {
+            // (chainId, resSeq, insCode) tuple — collect all from sub
+            std::set<std::tuple<std::string, int, char>> keys;
+            for (int idx : sub.indices()) {
+                const auto& a = atoms[idx];
+                keys.emplace(a.chainId, a.resSeq, a.insCode);
+            }
+            for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+                const auto& a = atoms[i];
+                if (keys.count({a.chainId, a.resSeq, a.insCode}))
+                    result.push_back(i);
+            }
+        } else if (keyword == "chain") {
+            std::set<std::string> chains;
+            for (int idx : sub.indices()) chains.insert(atoms[idx].chainId);
+            for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+                if (chains.count(atoms[i].chainId)) result.push_back(i);
+            }
+        } else if (keyword == "resname" || keyword == "resn") {
+            std::set<std::string> resnames;
+            for (int idx : sub.indices()) resnames.insert(atoms[idx].resName);
+            for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
+                if (resnames.count(atoms[i].resName)) result.push_back(i);
+            }
+        } else {
+            return Selection({}, exprDescr);  // unknown keyword → empty
+        }
+        return Selection(std::move(result), exprDescr);
     }
 };
 

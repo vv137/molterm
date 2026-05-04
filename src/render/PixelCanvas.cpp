@@ -56,6 +56,7 @@ void PixelCanvas::resize(int termW, int termH) {
     size_t nPix = static_cast<size_t>(pixW_) * pixH_;
     rgb_.resize(nPix * 3);
     colorIds_.resize(nPix);
+    if (!atomIds_.empty()) atomIds_.resize(nPix);
     prevRgb_.clear();
     zbuf_.resize(pixW_, pixH_);
     clear();
@@ -77,6 +78,7 @@ void PixelCanvas::resizePixels(int pixW, int pixH) {
     size_t nPix = static_cast<size_t>(pixW_) * pixH_;
     rgb_.resize(nPix * 3);
     colorIds_.resize(nPix);
+    if (!atomIds_.empty()) atomIds_.resize(nPix);
     prevRgb_.clear();
     zbuf_.resize(pixW_, pixH_);
     clear();
@@ -85,9 +87,18 @@ void PixelCanvas::resizePixels(int pixW, int pixH) {
 void PixelCanvas::clear() {
     std::memset(rgb_.data(), 0, rgb_.size());
     std::memset(colorIds_.data(), 0xFF, colorIds_.size());
+    if (!atomIds_.empty()) std::fill(atomIds_.begin(), atomIds_.end(), -1);
     zbuf_.clear();
     zMin_ = std::numeric_limits<float>::max();
     zMax_ = std::numeric_limits<float>::lowest();
+}
+
+void PixelCanvas::setActiveAtomIndex(int idx) {
+    activeAtomIdx_ = idx;
+    if (idx >= 0 && atomIds_.empty() && pixW_ > 0 && pixH_ > 0) {
+        // Lazy alloc on first stamping caller
+        atomIds_.assign(static_cast<size_t>(pixW_) * pixH_, -1);
+    }
 }
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
@@ -106,7 +117,9 @@ void PixelCanvas::drawDot(int sx, int sy, float depth, int colorPair) {
     if (depth > zMax_) zMax_ = depth;
     auto c = colorPairToRGB(colorPair);
     setPixel(sx, sy, c.r, c.g, c.b);
-    colorIds_[static_cast<size_t>(sy) * pixW_ + sx] = static_cast<int8_t>(colorPair);
+    size_t pIdx = static_cast<size_t>(sy) * pixW_ + sx;
+    colorIds_[pIdx] = static_cast<int8_t>(colorPair);
+    if (!atomIds_.empty()) atomIds_[pIdx] = activeAtomIdx_;
 }
 
 void PixelCanvas::drawLine(int x0, int y0, float d0,
@@ -115,6 +128,8 @@ void PixelCanvas::drawLine(int x0, int y0, float d0,
     // Closer segments are brighter, farther are dimmer (complements depth fog).
     auto base = colorPairToRGB(colorPair);
 
+    int32_t* aid = atomIds_.empty() ? nullptr : atomIds_.data();
+    int32_t aIdx = activeAtomIdx_;
     Canvas::bresenham(x0, y0, d0, x1, y1, d1,
         [&](int x, int y, float depth) {
             if (!inBounds(x, y)) return;
@@ -129,7 +144,9 @@ void PixelCanvas::drawLine(int x0, int y0, float d0,
             uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
             uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
             setPixel(x, y, cr, cg, cb);
-            colorIds_[static_cast<size_t>(y) * pixW_ + x] = static_cast<int8_t>(colorPair);
+            size_t pIdx = static_cast<size_t>(y) * pixW_ + x;
+            colorIds_[pIdx] = static_cast<int8_t>(colorPair);
+            if (aid) aid[pIdx] = aIdx;
         });
 }
 
@@ -174,7 +191,9 @@ void PixelCanvas::drawCircle(int cx, int cy, float depth,
             uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
             uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
             setPixel(px, py, cr, cg, cb);
-            colorIds_[static_cast<size_t>(py) * pixW_ + px] = static_cast<int8_t>(colorPair);
+            size_t pIdx = static_cast<size_t>(py) * pixW_ + px;
+            colorIds_[pIdx] = static_cast<int8_t>(colorPair);
+            if (!atomIds_.empty()) atomIds_[pIdx] = activeAtomIdx_;
         }
     }
 }
@@ -259,7 +278,9 @@ void PixelCanvas::drawTriangle(float x0, float y0, float z0,
             if (depth > zMax_) zMax_ = depth;
 
             setPixel(px, py, cr, cg, cb);
-            colorIds_[static_cast<size_t>(py) * pixW_ + px] = static_cast<int8_t>(colorPair);
+            size_t pIdx = static_cast<size_t>(py) * pixW_ + px;
+            colorIds_[pIdx] = static_cast<int8_t>(colorPair);
+            if (!atomIds_.empty()) atomIds_[pIdx] = activeAtomIdx_;
         }
     }
 }
@@ -369,6 +390,12 @@ void PixelCanvas::drawTriangleBatch(const TriangleSpan* tris,
     std::vector<float> tileZMin(numTiles, std::numeric_limits<float>::max());
     std::vector<float> tileZMax(numTiles, std::numeric_limits<float>::lowest());
 
+    // All triangles in the batch share whatever atom index was set when
+    // the call started (per-triangle atom IDs would require extending
+    // TriangleSpan). Capture once so workers don't race on the field.
+    int32_t* aidBuf = atomIds_.empty() ? nullptr : atomIds_.data();
+    const int32_t batchAtomIdx = activeAtomIdx_;
+
     auto rasterizeTile = [&](int tileIdx) {
         const auto& bin = bins[tileIdx];
         if (bin.empty()) return;
@@ -423,7 +450,9 @@ void PixelCanvas::drawTriangleBatch(const TriangleSpan* tris,
                     if (depth > lZMax) lZMax = depth;
 
                     setPixel(px, py, p.cr, p.cg, p.cb);
-                    colorIds_[static_cast<size_t>(py) * pixW_ + px] = p.colorPair;
+                    size_t pIdx = static_cast<size_t>(py) * pixW_ + px;
+                    colorIds_[pIdx] = p.colorPair;
+                    if (aidBuf) aidBuf[pIdx] = batchAtomIdx;
                 }
             }
         }
@@ -638,6 +667,34 @@ void PixelCanvas::applyOutline(float threshold, float darken) {
     }
 }
 
+void PixelCanvas::applyFocusDim(const std::vector<bool>& keepBright, float strength) {
+    if (atomIds_.empty()) return;            // no consumer ever stamped
+    if (strength <= 0.0f) return;
+    if (pixW_ <= 0 || pixH_ <= 0) return;
+
+    const float s     = std::min(1.0f, strength);
+    const float darkF = 1.0f - 0.4f * s;     // overall darken factor
+    const int   maxId = static_cast<int>(keepBright.size());
+
+    size_t nPix = static_cast<size_t>(pixW_) * pixH_;
+    for (size_t i = 0; i < nPix; ++i) {
+        int id = atomIds_[i];
+        if (id < 0) continue;                // untagged (background, text)
+        if (id < maxId && keepBright[id]) continue;   // focus subject — leave vivid
+
+        size_t pi = i * 3;
+        // BT.601 luma → desaturate toward gray, then darken.
+        float r = rgb_[pi], g = rgb_[pi + 1], b = rgb_[pi + 2];
+        float y = 0.299f * r + 0.587f * g + 0.114f * b;
+        r = (r + (y - r) * s) * darkF;
+        g = (g + (y - g) * s) * darkF;
+        b = (b + (y - b) * s) * darkF;
+        rgb_[pi]     = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, r)));
+        rgb_[pi + 1] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, g)));
+        rgb_[pi + 2] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, b)));
+    }
+}
+
 void PixelCanvas::applyDepthFog(float strength, uint8_t fogR, uint8_t fogG, uint8_t fogB) {
     preFogRgb_ = rgb_;
 
@@ -688,11 +745,10 @@ static void pngWriteChunk(std::ofstream& f, const char* type,
 bool PixelCanvas::savePNG(const std::string& path, int dpi) const {
     if (pixW_ <= 0 || pixH_ <= 0) return false;
 
-    // Use pre-fog image for brighter PNG export.
-    // Fall back to prevRgb_ (post-fog but pre-swap), then rgb_.
-    const std::vector<uint8_t>& src =
-        (!preFogRgb_.empty() && preFogRgb_.size() == static_cast<size_t>(pixW_ * pixH_ * 3)) ? preFogRgb_ :
-        (!prevRgb_.empty() && prevRgb_.size() == rgb_.size()) ? prevRgb_ : rgb_;
+    // Always export the live framebuffer so post-passes that run AFTER
+    // fog (focus-dim, interface overlay) appear in the PNG. The earlier
+    // "preFogRgb_ for brighter PNG" path silently dropped those layers.
+    const std::vector<uint8_t>& src = rgb_;
 
     std::ofstream f(path, std::ios::binary);
     if (!f) return false;

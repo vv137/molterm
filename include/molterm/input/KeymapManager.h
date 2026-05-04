@@ -25,6 +25,7 @@ private:
     void bindNormalDefaults();
     void bindCommandDefaults();
     void bindVisualDefaults();
+    void bindSearchDefaults();
 
     static Mode modeFromName(const std::string& name);
 };

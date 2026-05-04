@@ -55,6 +55,12 @@ public:
     virtual void drawLine(int x0, int y0, float d0,
                           int x1, int y1, float d1,
                           int colorPair);
+    // Dashed line — default impl walks the segment and emits drawLine for
+    // each dash. dashLen / gapLen are in sub-pixels. Backend-agnostic.
+    virtual void drawDashedLine(int x0, int y0, float d0,
+                                int x1, int y1, float d1,
+                                int colorPair,
+                                int dashLen = 4, int gapLen = 3);
     virtual void drawCircle(int cx, int cy, float depth,
                             int radius, int colorPair, bool filled);
 
@@ -74,6 +80,11 @@ public:
     // Convenience: draw char at terminal cell coords (for labels)
     virtual void drawChar(int termX, int termY, float depth,
                           char ch, int colorPair) = 0;
+
+    // Tag the next pixel writes with an atom index. Backends that own a
+    // per-pixel atom buffer (PixelCanvas) record the index for post-passes
+    // such as focus-dim. Other backends ignore the call. Default = -1.
+    virtual void setActiveAtomIndex(int /*idx*/) {}
 
     // Bresenham line helper (public so representations can use for thick lines)
     static void bresenham(int x0, int y0, float d0,

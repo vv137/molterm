@@ -1,5 +1,6 @@
 #include "molterm/io/CifLoader.h"
 #include "molterm/core/BondTable.h"
+#include "molterm/core/DSSP.h"
 #include "molterm/core/SpatialHash.h"
 
 #include <gemmi/mmread.hpp>
@@ -201,9 +202,19 @@ static void assignSSGeometric(std::vector<AtomData>& atoms) {
 
 static void assignSS(std::vector<AtomData>& atoms, const gemmi::Structure& st) {
     if (st.helices.empty() && st.sheets.empty()) {
-        // No HELIX/SHEET records (CASP TS, AlphaFold output, bare coords) —
-        // fall back to a φ/ψ geometric classifier.
-        assignSSGeometric(atoms);
+        // No HELIX/SHEET records (CASP TS, AlphaFold output, bare coords).
+        // Run DSSP first — it's the canonical computed assignment and
+        // works on any backbone-complete structure. Fall back to the
+        // φ/ψ Ramachandran classifier only if DSSP came up empty
+        // (rare: structures with broken or mostly-missing backbones).
+        auto ss = molterm::dssp::compute(atoms);
+        bool any = false;
+        for (auto s : ss) if (s != SSType::Loop) { any = true; break; }
+        if (any) {
+            for (size_t i = 0; i < atoms.size(); ++i) atoms[i].ssType = ss[i];
+        } else {
+            assignSSGeometric(atoms);
+        }
         return;
     }
     for (auto& ad : atoms) {
@@ -371,6 +382,7 @@ std::unique_ptr<MolObject> CifLoader::loadCif(const std::string& filepath) {
 
     obj->atoms() = convertModel(st.models[0]);
     assignSS(obj->atoms(), st);
+    obj->seedSSCacheFromAtoms(0);    // pin loader-derived SS to state 0
     buildBonds(*obj);
 
     // Add explicit connections from _struct_conn (disulfide, metal, covalent links)
@@ -492,6 +504,7 @@ std::unique_ptr<MolObject> CifLoader::loadAssembly(const std::string& filepath,
 
     obj->atoms() = convertModel(bioModel);
     assignSS(obj->atoms(), st);
+    obj->seedSSCacheFromAtoms(0);
     buildBonds(*obj);
 
     return obj;

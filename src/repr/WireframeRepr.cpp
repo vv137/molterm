@@ -12,7 +12,15 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     const auto& atoms = ctx.atoms;
     const auto& bonds = mol.bonds();
 
-    int r = toSubPixels(thickness_, canvas.scaleX());
+    // Thickness scales gently with camera zoom so lines stay readable
+    // without bloating at close-up. Square-root tames the response so
+    // 4× zoom is only 2× thicker; clamped to [0.75×, 1.8×] of the base.
+    float zoom = cam.zoom();
+    float scale = std::sqrt(zoom > 0.0f ? zoom : 1.0f);
+    if (scale < 0.75f) scale = 0.75f;
+    if (scale > 1.8f)  scale = 1.8f;
+    float effThickness = thickness_ * scale;
+    int r = toSubPixels(effThickness, canvas.scaleX());
     bool thick = (r > 1);
 
     // Pre-project all atoms using cached projection
@@ -55,7 +63,9 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
 
         int c1 = ctx.colorFor(bond.atom1);
         int c2 = ctx.colorFor(bond.atom2);
+        canvas.setActiveAtomIndex(bond.atom1);
         drawSeg(x0, y0, p1.depth, mx, my, md, c1);
+        canvas.setActiveAtomIndex(bond.atom2);
         drawSeg(mx, my, md, x1, y1, p2.depth, c2);
     }
 
@@ -68,12 +78,14 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         int sx = static_cast<int>(std::round(proj[i].sx));
         int sy = static_cast<int>(std::round(proj[i].sy));
         int color = ctx.colorFor(static_cast<int>(i));
+        canvas.setActiveAtomIndex(static_cast<int>(i));
         if (thick) {
             canvas.drawCircle(sx, sy, proj[i].depth, r, color, true);
         } else {
             canvas.drawDot(sx, sy, proj[i].depth, color);
         }
     }
+    canvas.setActiveAtomIndex(-1);
 }
 
 } // namespace molterm

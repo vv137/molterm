@@ -1,25 +1,12 @@
 #include "molterm/repr/SpacefillRepr.h"
+#include "molterm/core/VdwTable.h"
 #include <algorithm>
 #include <cmath>
 
 namespace molterm {
 
 float SpacefillRepr::vdwRadius(const std::string& element) {
-    // Van der Waals radii in Å (Bondi)
-    if (element == "H")  return 1.20f;
-    if (element == "C")  return 1.70f;
-    if (element == "N")  return 1.55f;
-    if (element == "O")  return 1.52f;
-    if (element == "S")  return 1.80f;
-    if (element == "P")  return 1.80f;
-    if (element == "F")  return 1.47f;
-    if (element == "Cl") return 1.75f;
-    if (element == "Br") return 1.85f;
-    if (element == "I")  return 1.98f;
-    if (element == "Se") return 1.90f;
-    if (element == "Fe") return 2.00f;
-    if (element == "Zn") return 1.39f;
-    return 1.70f;  // default
+    return molterm::vdwRadius(element);
 }
 
 void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
@@ -64,8 +51,10 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
     for (int si : sortedIndices_) {
         if (si >= static_cast<int>(projected.size())) continue;
         const auto& pa = projected[si];
+        canvas.setActiveAtomIndex(pa.idx);
         canvas.drawCircle(pa.sx, pa.sy, pa.depth, pa.radius, pa.color, true);
     }
+    canvas.setActiveAtomIndex(-1);
 }
 
 } // namespace molterm

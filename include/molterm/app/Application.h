@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
@@ -18,6 +19,8 @@
 #include "molterm/render/Canvas.h"
 #include "molterm/render/ColorMapper.h"
 #include "molterm/render/ProtocolPicker.h"
+#include "molterm/render/ZoomGate.h"
+#include "molterm/repr/InterfaceRepr.h"
 #include "molterm/repr/Representation.h"
 #include "molterm/tui/CommandLine.h"
 #include "molterm/tui/ContactMapPanel.h"
@@ -31,7 +34,14 @@
 namespace molterm {
 
 enum class InspectLevel { Atom, Residue, Chain, Object };
-enum class PickMode { Inspect, SelectAtom, SelectResidue, SelectChain };
+enum class PickMode { Inspect, SelectAtom, SelectResidue, SelectChain, Focus };
+
+// What to expand a clicked atom into when entering focus.
+//   Residue   — atoms sharing chainId+resSeq+insCode (default; matches prior F behavior)
+//   Chain     — every atom in the same chainId
+//   Sidechain — same residue minus backbone (N/CA/C/O); falls back to Residue
+//               when sidechain is empty (Gly).
+enum class FocusGranularity { Residue, Chain, Sidechain };
 
 enum class RendererType {
     Ascii,
@@ -161,11 +171,75 @@ private:
     // Cached classified inter-chain contacts; one entry per residue
     // pair, color-coded at render time by interaction type.
     std::vector<InterfaceContact> interfaceContacts_;
+    // Per-atom mask: true for atoms in interface residues. Built from
+    // `interfaceContacts_` by expanding to whole residues.
+    std::vector<bool> interfaceAtomMask_;
+    // Overlay renderer (sidechain bonds + dashed interaction lines).
+    InterfaceRepr interfaceRepr_;
+    // Auto-engage gate: when zoom > threshold, simulate :interface on.
+    ZoomGate interfaceZoomGate_;
+    // True iff the overlay is currently engaged via the zoom gate
+    // (so we can auto-disengage cleanly without clobbering a manual toggle).
+    bool interfaceFromZoom_ = false;
+    // Focus mode (Mol*-style click-to-focus). Tracks the live "focus
+    // subject" (a Selection) and the saved view + visibility state to
+    // restore on exit. focusActive_ false → no focus mode; the
+    // focusAtomMask_ drives `applyFocusDim` only.
+    struct FocusSavedRepr {
+        ReprType  type;
+        bool      objectLevel;            // pre-focus mol.reprVisible(type)
+        std::vector<bool> atomMask;       // pre-focus per-atom mask (empty = all)
+    };
+    struct FocusSnapshot {
+        bool                 active = false;
+        // Camera
+        std::array<float, 9> rot{};
+        float cx = 0, cy = 0, cz = 0;
+        float panX = 0, panY = 0;
+        float zoom = 1.0f;
+        // Per-repr visibility, captured on entry, restored on exit.
+        std::vector<FocusSavedRepr> reprs;
+        // Object-level (no per-atom mask) visibility for the spline
+        // reprs we toggle off during focus — restore to original on exit.
+        bool cartoonVisible  = false;
+        bool ribbonVisible   = false;
+        bool backboneVisible = false;
+        // Original wireframe thickness — temporarily bumped during focus.
+        float wireframeThickness = 0.3f;
+    };
+    FocusSnapshot     focusSnapshot_;
+    std::vector<bool> focusAtomMask_;       // focus subject (kept vivid)
+    std::vector<bool> focusNbhdMask_;       // neighborhood (visible during focus)
+    std::string       focusExpr_;
+    float             focusDimStrength_ = 0.55f;
+    float             focusRadius_      = 5.0f;   // Å around the subject
+    float             focusZoom_        = 4.0f;   // fallback zoom (used only when
+                                                  // subject bounding sphere can't
+                                                  // be computed)
+    // Subject-size aware zoom (Mol*-style). The effective zoom for a focus
+    // subject of enclosing radius R is:
+    //   zoom = focusFillFraction_ * 20.0 / max(R + focusExtraRadius_, focusMinRadius_)
+    // Calibration: at fillFraction=1.0 the formula matches the existing
+    // `:zoom` heuristic (40 / span ≈ 20 / R) so a default of 0.6 leaves
+    // generous headroom around the subject.
+    float             focusFillFraction_ = 0.6f;
+    float             focusExtraRadius_  = 4.0f;  // Å padding (matches Mol*)
+    float             focusMinRadius_    = 2.0f;  // Å clamp (single-atom subject)
+    FocusGranularity  focusGranularity_  = FocusGranularity::Residue;
+    bool              focusComputedInterface_ = false;   // true if enterFocus
+                                                          // ran computeInterface
+                                                          // itself (so exitFocus
+                                                          // clears the cache).
     // Fallback color used when classification is disabled
     // (`:set interface_classify off`).
     int interfaceColor_ = kColorYellow;
-    int interfaceThickness_ = 2; // pixel-mode line thickness (1-4)
+    int interfaceThickness_ = 4; // pixel-mode line thickness (1-6) —
+                                  // bumped from 2 so dashed contact lines
+                                  // read against cartoon at 1080p+. Tunable
+                                  // live via :set interface_thickness.
     bool interfaceClassify_ = true;
+    // Toggle: draw element-colored sidechain bonds for interface residues.
+    bool interfaceSidechains_ = true;
 
     // Inspect / pick state (mouse-only)
     InspectLevel inspectLevel_ = InspectLevel::Atom;
@@ -236,6 +310,23 @@ private:
     void registerCommands();
     Selection parseSelection(const std::string& expr, const MolObject& mol);
     void buildProjCache();
+
+    // Focus Selection mode (Mol*-style click-to-focus).
+    // `subjectIndices` are the atoms forming the focus subject (e.g. a
+    // residue's atoms). enterFocus saves current camera + repr-visibility
+    // state, snaps the camera to the centroid at focus_zoom, hides non-
+    // neighborhood atoms for atom-direct reprs, and ensures ball-stick is
+    // visible on the neighborhood. exitFocus restores everything.
+    void enterFocus(MolObject& mol,
+                    const std::vector<int>& subjectIndices,
+                    const std::string& exprDesc);
+    void exitFocus();
+    bool focusActive() const { return focusSnapshot_.active; }
+    // Expand a single clicked atom into the focus subject according to
+    // `focusGranularity_`. Used by both Action::FocusPick (F key) and
+    // PickMode::Focus (gf + click) so they stay in lockstep.
+    std::vector<int> expandByFocusGranularity(const MolObject& mol,
+                                              int atomIdx) const;
     int findNearestAtom(int termX, int termY) const;
     std::string atomInfoString(const MolObject& mol, int atomIdx) const;
     void initRepresentations();

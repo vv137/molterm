@@ -13,6 +13,32 @@ void Canvas::drawLine(int x0, int y0, float d0,
         });
 }
 
+void Canvas::drawDashedLine(int x0, int y0, float d0,
+                            int x1, int y1, float d1,
+                            int colorPair,
+                            int dashLen, int gapLen) {
+    if (dashLen < 1) dashLen = 1;
+    if (gapLen  < 1) gapLen  = 1;
+    int dx = x1 - x0, dy = y1 - y0;
+    float len = std::sqrt(static_cast<float>(dx*dx + dy*dy));
+    if (len < 1.0f) { drawDot(x0, y0, d0, colorPair); return; }
+    const int period = dashLen + gapLen;
+    int n = static_cast<int>(len / static_cast<float>(period)) + 1;
+    for (int i = 0; i < n; ++i) {
+        float t0 = static_cast<float>(i * period)            / len;
+        float t1 = static_cast<float>(i * period + dashLen)  / len;
+        if (t0 >= 1.0f) break;
+        if (t1 > 1.0f) t1 = 1.0f;
+        int sx0 = x0 + static_cast<int>(static_cast<float>(dx) * t0);
+        int sy0 = y0 + static_cast<int>(static_cast<float>(dy) * t0);
+        int sx1 = x0 + static_cast<int>(static_cast<float>(dx) * t1);
+        int sy1 = y0 + static_cast<int>(static_cast<float>(dy) * t1);
+        float dz0 = d0 + (d1 - d0) * t0;
+        float dz1 = d0 + (d1 - d0) * t1;
+        drawLine(sx0, sy0, dz0, sx1, sy1, dz1, colorPair);
+    }
+}
+
 void Canvas::drawCircle(int cx, int cy, float depth,
                         int radius, int colorPair, bool filled) {
     if (filled) {

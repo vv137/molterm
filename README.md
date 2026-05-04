@@ -16,9 +16,34 @@
 MolTerm renders 3D molecular structures directly in the terminal. It targets structural biologists and computational chemists who live in the terminal and want quick molecule inspection without launching a full GUI.
 
 <p align="center">
-  <img src="assets/orient_spin.gif" alt="1crn rotating, frames produced entirely by :orient view in a script" width="520">
+  <img src="assets/cartoon_quality.png" alt="4HHB hemoglobin hetero-tetramer (α2β2) — Mol*-aligned cartoon with elliptical helix tubes, smoothstep SS transitions, and chain coloring" width="640">
+  <br>
+  <em>4HHB hemoglobin hetero-tetramer (α2β2) — Mol*-aligned cartoon: elliptical helix tubes, smoothstep SS transitions, chain coloring. Rendered offscreen in pixel mode at 300 DPI.</em>
+</p>
+
+### Press <code>m</code> — terminal-only Braille becomes pixel-perfect
+
+<p align="center">
+  <img src="assets/m_key_demo.png" alt="Same scene in Braille (left) and Pixel (right)" width="640">
+  <br>
+  <em>Left: Unicode Braille — works in any terminal, no graphics protocol required.<br>
+      Right: native pixel protocol (Sixel / Kitty / iTerm2) — toggled with one keypress (<code>m</code>).</em>
+</p>
+
+### Animation showcase
+
+<p align="center">
+  <img src="assets/orient_spin.gif" alt="1crn rotating via :orient view" width="520">
   <br>
   <em>Every frame is a separate <code>:orient view</code> call — no rotate command, just a sweep of the view vector through the PCA frame.</em>
+</p>
+
+### DNA and nucleic acids
+
+<p align="center">
+  <img src="assets/dna_helix.png" alt="1bna B-DNA dodecamer with flat ribbon backbone and shaped base prisms" width="640">
+  <br>
+  <em>1bna — flat-ribbon nucleic backbone (Mol* <code>nucleicProfile='square'</code>). Bases rendered as polygonal prisms following actual ring atom positions: hexagonal pyrimidines (C/T in blue/cyan), L-shaped fused bicyclic purines (A/G in red/green), each with a thin stem connecting to C1' of the sugar.</em>
 </p>
 
 ## Features
@@ -27,7 +52,7 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 - **3-tier bond detection** — standard residue table (20 AA + 8 nucleotides, with bond order) → inter-residue peptide/phosphodiester bonds → distance fallback for ligands
 - **Multi-renderer pipeline** — Unicode Braille (8x resolution), half-block, ASCII, and native pixel protocols (Sixel, Kitty, iTerm2) with auto-detection
 - **VIM-like modal interface** — Normal, Command, Search modes with trie-based multi-key bindings (`sw`, `dd`, `gt`, etc.)
-- **Rich representations** — wireframe, ball-and-stick, spacefill, cartoon (Catmull-Rom spline + cross-section rasterization), flat ribbon, backbone trace — per-object or per-selection visibility
+- **Rich representations** — wireframe, ball-and-stick, spacefill, cartoon (Catmull-Rom spline + Mol*-aligned elliptical/tubular helix + tension-tuned spline + 3-point frame smoothing + smoothstep SS transitions + nucleic flat-ribbon backbone + hexagonal/bicyclic base ring prisms), flat ribbon, backbone trace — per-object or per-selection visibility
 - **Selection algebra** — recursive descent parser: `chain A and helix`, `resi 50-60 or name CA`, boolean `and/or/not` with parentheses
 - **Mouse selection** — `gs`/`gS`/`gc` pick modes for atom/residue/chain selection with `$sele` highlight overlay
 - **Multi-level inspect** — click to inspect at atom/residue/chain/object level (`I` cycles), pick registers pk1-pk4 for measurements
@@ -42,7 +67,9 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 - **Screenshot from any renderer** — `:screenshot` renders offscreen via PixelCanvas even in braille/ASCII mode
 - **Multi-state animation** — NMR ensemble / trajectory state cycling with `[`/`]` keys
 - **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
-- **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode)
+- **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode); dashed lines respect z-buffer so atoms in front occlude them
+- **Mol*-style focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
+- **DSSP secondary structure** — internal Kabsch-Sander assignment (3-10/α/π helix + parallel/antiparallel β-bridges) collapsed to molterm's 3-class SS. Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`
 - **Full customization** — keybindings, color themes, and settings via TOML configs in `~/.molterm/`
 - **Structured logging** — session log to `~/.molterm/molterm.log`
 
@@ -251,14 +278,15 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `gs` | Enter atom select mode (click to toggle atoms in `$sele`) |
 | `gS` | Enter residue select mode (click to toggle residues) |
 | `gc` | Enter chain select mode (click to toggle chains) |
-| `ESC` | Exit select mode, keep selection |
+| `gf` | Enter focus pick mode (click to focus, Mol*-style) |
+| `ESC` | Exit pick mode / exit focus session / cancel pending |
 | `[` / `]` | Prev/next state (NMR ensembles) |
 | `m` | Toggle braille/pixel renderer |
 | `P` | Screenshot (PNG, pixel renderer) |
 | `I` | Toggle interface overlay |
+| `F` | Focus on picked residue (subject-size aware zoom); press again to exit |
 | `q` + `a-z` | Record macro |
 | `@` + `a-z` | Play macro |
-| `F` | Cycle sequence bar (hidden → scroll → wrap → hidden) |
 | `{` / `}` | Sequence bar prev/next chain |
 | `?` | Help overlay |
 
@@ -300,15 +328,25 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png] [W H [DPI]] " Save PNG; W H force off-screen size, optional DPI stamps pHYs metadata
 :interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
+:focus <selection>              " Mol*-style click-to-focus: zoom + isolate sidechains
+:focus off                      " Exit focus session, restore camera + reprs
+:dssp                           " Recompute DSSP secondary structure for current state (per-state cached)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set fog <0-1>                  " Depth fog strength (default: 0.35)
 :set outline on|off             " Silhouette outlines
 :set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
 :set od|outline_darken <n>      " Outline darkness (default: 0.3, 0=black)
-:set ch|cartoon_helix <n>       " Cartoon helix radius (default: 0.8)
-:set csh|cartoon_sheet <n>      " Cartoon sheet width (default: 0.7)
-:set cl|cartoon_loop <n>        " Cartoon loop radius (default: 0.25)
-:set csd|cartoon_subdiv <n>     " Cartoon spline subdivisions (default: 8)
+:set ch|cartoon_helix <n>       " Cartoon helix half-width Å (default: 1.30)
+:set csh|cartoon_sheet <n>      " Cartoon sheet half-width Å (default: 1.50)
+:set cl|cartoon_loop <n>        " Cartoon loop radius Å (default: 0.20, Mol*-aligned)
+:set csd|cartoon_subdiv <n>     " Cartoon spline subdivisions (default: 14)
+:set csa|cartoon_aspect <n>     " Cartoon helix W:H aspect ratio (default: 5.0, Mol*-aligned)
+:set chr|cartoon_helix_radial <n> " Cartoon helix elliptical cross-section vertices (4-64, default: 16)
+:set cth|cartoon_tubular_helix on|off " Tubular helix mode (circular tube vs elliptical ribbon, default: off)
+:set ctr|cartoon_tubular_radius <n> " Tubular helix tube radius Å (default: 0.7, Mol*-aligned)
+:set bs_units vdw|cell          " BallStick sizing: vdw (Å×factor) or cell (legacy sub-pixel)
+:set bsf|bs_factor <n>          " BallStick sizeFactor × vdW when bs_units=vdw (default: 0.15, Mol*-aligned)
+:set sfs|spacefill_scale <n>    " Spacefill ×vdW (default: 1.0, full vdW = CPK)
 :set panel on|off                " Object panel visibility
 :set auto_center on|off          " Auto-center camera on load
 :set seqbar on|off               " Sequence bar visibility
@@ -316,6 +354,12 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set ic|interface_color <name>   " Interface overlay color (default: yellow)
 :set it|interface_thickness <n>  " Interface line thickness in pixel mode (1-4, default: 2)
 :set bt|wt|br <n>               " Backbone/wireframe thickness, ball radius
+:set ff|focus_fill <0.05-1.0>    " Focus fill fraction — fraction of screen the subject occupies (default: 0.6)
+:set fe|focus_extra <Å>          " Focus extra radius padding around the subject (default: 4.0)
+:set fmr|focus_min_radius <Å>    " Focus minimum radius clamp (default: 2.0)
+:set fr|focus_radius <Å>         " Focus neighborhood cutoff (default: 5.0)
+:set fd|focus_dim <0-1>          " Focus dim strength for non-subject atoms (default: 0.55)
+:set fg|focus_granularity <g>    " residue|chain|sidechain — what gf+click expands to (default: residue)
 :get <option>                    " Query current value of any :set option (for scripting)
 :info                           " Show atom/bond count
 :q                              " Quit

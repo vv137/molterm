@@ -16,7 +16,9 @@ public:
     void setScale(float s) { scale_ = (s < 0.1f) ? 0.1f : s; }
 
 private:
-    float scale_ = 0.5f;
+    // Mol*-aligned: full vdW radius (CPK convention). Override via
+    // `:set spacefill_scale` (which clamps to [0.1, ...]).
+    float scale_ = 1.0f;
 
     // Cached depth-sorted indices (re-sort only when camera dirty)
     mutable std::vector<int> sortedIndices_;

@@ -52,10 +52,24 @@ public:
     float zoom() const { return zoom_; }
     void setZoom(float z) { zoom_ = z; markDirty(); }
     void setRotation(const std::array<float, 9>& r) { rot_ = r; markDirty(); }
+    void setPan(float x, float y) { panX_ = x; panY_ = y; markDirty(); }
     float rotationSpeed() const { return rotSpeed_; }
     void setRotationSpeed(float s) { rotSpeed_ = s; }
     float panSpeed() const { return panSpeed_; }
     void setPanSpeed(float s) { panSpeed_ = s; }
+
+    // Snap the camera to focus on (cx,cy,cz) at `targetZoom`. Resets pan
+    // so the focus subject sits at screen center under the current
+    // rotation. Used by Focus Selection (Mol*-style click-to-focus).
+    void focusOn(float cx, float cy, float cz, float targetZoom) {
+        centerX_ = cx;
+        centerY_ = cy;
+        centerZ_ = cz;
+        panX_ = 0.0f;
+        panY_ = 0.0f;
+        zoom_ = targetZoom;
+        markDirty();
+    }
 
     // Dirty tracking — check and clear in one call
     bool isDirty() const { return dirty_; }

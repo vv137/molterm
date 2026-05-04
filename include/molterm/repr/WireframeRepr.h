@@ -17,10 +17,11 @@ public:
     void setThickness(float t) { thickness_ = (t < 0.1f) ? 0.1f : t; }
 
 private:
-    // 0.3 = ~3 px on a 1920-wide pixel canvas (cellPixW≈10), ~1 px on
-    // braille (scaleX=2). Thinner default than the previous 1.0 — at
-    // 1920×1080 the old setting drew 10-pixel circles per atom.
-    float thickness_ = 0.3f;  // sub-pixels per cell
+    // 0.35 ≈ 3.5 px on a 1920-wide pixel canvas (cellPixW≈10), 1 px on
+    // braille (scaleX=2). Tunable live via `:set wf_thickness <float>`;
+    // also scales gently with camera zoom in render() so close-ups
+    // stay readable without the default looking chunky.
+    float thickness_ = 0.35f;  // sub-pixels per cell
 };
 
 } // namespace molterm

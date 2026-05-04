@@ -99,6 +99,21 @@ public:
     bool nextState();
     bool prevState();
 
+    // Per-state secondary structure cache. SS labels are computed via
+    // DSSP on demand and stored per state index — switching states in a
+    // trajectory yields per-frame SS without re-running DSSP each time.
+    //
+    // Returns a reference to the cached SSType vector for `stateIdx`
+    // (length == atoms in that state). On first access for a given
+    // state, runs DSSP synchronously. The active state's atoms_[i].ssType
+    // is also re-synced from this cache by setActiveState().
+    const std::vector<SSType>& ssAtState(int stateIdx) const;
+    void invalidateSSCache();   // call when SS source / settings change
+    // Snapshot the current atoms_[i].ssType into the per-state cache —
+    // used by the loader so returning to state 0 keeps header-derived
+    // labels rather than triggering a fresh DSSP run.
+    void seedSSCacheFromAtoms(int stateIdx) const;
+
 private:
     std::string name_;
     std::string sourcePath_;
@@ -116,6 +131,11 @@ private:
     ColorScheme colorScheme_ = ColorScheme::Element;
     std::vector<int> atomColors_;  // per-atom override, -1 = use scheme
     mutable std::vector<float> rainbowCache_;
+
+    // Per-state DSSP cache: ssPerState_[stateIdx] = SS labels for that
+    // state's atoms. Lazily populated by ssAtState(). Cleared by
+    // invalidateSSCache() (e.g. when atoms or settings change).
+    mutable std::vector<std::vector<SSType>> ssPerState_;
 };
 
 } // namespace molterm

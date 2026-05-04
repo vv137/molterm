@@ -23,10 +23,13 @@ public:
     void setSubdivisions(int n) { subdivisions_ = n; }
 
 private:
-    float helixWidth_ = 3.5f;
+    // Defaults follow Mol*'s ribbon-style cartoon: helix and sheet both
+    // wide flat ribbons (~2.5× loop width), sheet slightly thicker for
+    // strand visibility, coil hairline.
+    float helixWidth_ = 2.5f;
     float sheetWidth_ = 4.0f;
-    float loopWidth_ = 1.0f;
-    int subdivisions_ = 8;
+    float loopWidth_  = 1.0f;
+    int   subdivisions_ = 8;
 };
 
 } // namespace molterm

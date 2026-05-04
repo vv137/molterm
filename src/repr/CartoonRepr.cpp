@@ -1,9 +1,11 @@
 #include "molterm/repr/CartoonRepr.h"
 #include "molterm/repr/ReprUtil.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace molterm {
@@ -38,7 +40,8 @@ bool CartoonRepr::CacheKey::operator==(const CacheKey& o) const {
            atomColorsSize == o.atomColorsSize &&
            atomColorsHash == o.atomColorsHash &&
            perAtomRepr == o.perAtomRepr &&
-           visMaskHash == o.visMaskHash;
+           visMaskHash == o.visMaskHash &&
+           ssHash == o.ssHash;
 }
 
 // ─── Main render entry point ─────────────────────────────────────────────────
@@ -50,7 +53,14 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     const auto& atoms = ctx.atoms;
 
     int subdiv = adjustLOD(subdivisions_, atoms.size());
-    int coilSegments = (atoms.size() > 5000) ? 6 : 12;
+    // Coil tube + elliptical helix radial vertex counts. Mol* uses 16 by
+    // default; we LOD down to 8 for medium structures and 6 for very large.
+    int coilSegments = (atoms.size() > 10000) ? 6
+                     : (atoms.size() >  5000) ? 8
+                                              : 16;
+    int helixSegments = (atoms.size() > 10000) ? 8
+                      : (atoms.size() >  5000) ? 12
+                                               : helixRadialSegments_;
 
     // Build cache fingerprint. The cartoon spline + parallel-transport
     // frame depend only on atoms/SS/coloring/repr params, not the camera —
@@ -85,6 +95,16 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         }
         key.visMaskHash = h;
     }
+    // FNV1a over per-atom SS labels (1 byte each) — captures `:dssp`
+    // recomputes that don't bump activeState or any other key field.
+    {
+        std::uint64_t h = 1469598103934665603ULL;
+        for (const auto& a : atoms) {
+            h ^= static_cast<std::uint64_t>(a.ssType);
+            h *= 1099511628211ULL;
+        }
+        key.ssHash = h;
+    }
 
     if (!cacheValid_ || key != cacheKey_) {
         rebuildCache(mol, ctx, subdiv, coilSegments);
@@ -101,7 +121,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     if (useTriangles) triBatch.reserve(cachedSpine_.x.size() * 8);
 
     for (const auto& span : cachedChains_) {
-        drawChainCached(span.start, span.end, coilSegments, cam, canvas,
+        drawChainCached(span.start, span.end, coilSegments, helixSegments,
+                        cam, canvas,
                         useTriangles ? &triBatch : nullptr);
     }
 
@@ -130,7 +151,7 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
     cachedChains_.clear();
 
     // ── Phase A: collect Cα/P per residue with C→O hint ──────────────────
-    std::vector<CaAtom> cas;
+    std::vector<TraceAtom> traces;
     int n = static_cast<int>(atoms.size());
     int i = 0;
     while (i < n) {
@@ -183,16 +204,16 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
             if (normalize3(hx, hy, hz) > 1e-6f) hasHint = true;
         }
 
-        cas.push_back({caIdx, atoms[caIdx].x, atoms[caIdx].y, atoms[caIdx].z,
+        traces.push_back({caIdx, atoms[caIdx].x, atoms[caIdx].y, atoms[caIdx].z,
                        atoms[caIdx].ssType, atoms[caIdx].chainId,
-                       hx, hy, hz, hasHint});
+                       hx, hy, hz, hasHint, nucleic});
     }
 
     // ── Phase B: per chain, build local spine + frame, append to cache ──
     std::size_t cStart = 0;
-    while (cStart < cas.size()) {
+    while (cStart < traces.size()) {
         std::size_t cEnd = cStart + 1;
-        while (cEnd < cas.size() && cas[cEnd].chain == cas[cStart].chain) ++cEnd;
+        while (cEnd < traces.size() && traces[cEnd].chain == traces[cStart].chain) ++cEnd;
 
         int cLen = static_cast<int>(cEnd - cStart);
         if (cLen < 2) { cStart = cEnd; continue; }
@@ -207,30 +228,41 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
             int i2 = static_cast<int>(cStart) + std::min(seg + 1, cLen - 1);
             int i3 = static_cast<int>(cStart) + std::min(seg + 2, cLen - 1);
 
-            int col1 = ctx.colorFor(cas[i1].idx);
-            int col2 = ctx.colorFor(cas[i2].idx);
-            bool isSheetEnd = (cas[i1].ss == SSType::Sheet &&
-                               cas[i2].ss != SSType::Sheet);
+            int col1 = ctx.colorFor(traces[i1].idx);
+            int col2 = ctx.colorFor(traces[i2].idx);
+            bool isSheetEnd = (traces[i1].ss == SSType::Sheet &&
+                               traces[i2].ss != SSType::Sheet);
+            // Mol*-style helix tension: a tighter spline through helices
+            // makes the ribbon hug the residue centres so the elliptical
+            // tube doesn't bulge out at curved helix ends. Both endpoints
+            // helix → use HelixTension; otherwise standard.
+            const float kHelixTension = 0.9f;
+            const float kStdTension   = 0.5f;
+            float tension = (traces[i1].ss == SSType::Helix &&
+                             traces[i2].ss == SSType::Helix)
+                              ? kHelixTension : kStdTension;
 
             for (int s = 0; s < subdiv; ++s) {
                 float t = static_cast<float>(s) / static_cast<float>(subdiv);
                 float af = isSheetEnd ? t : -1.0f;
-                const auto& near = (t < 0.5f) ? cas[i1] : cas[i2];
+                const auto& near = (t < 0.5f) ? traces[i1] : traces[i2];
                 spine.push_back({
-                    catmullRom(cas[i0].x, cas[i1].x, cas[i2].x, cas[i3].x, t),
-                    catmullRom(cas[i0].y, cas[i1].y, cas[i2].y, cas[i3].y, t),
-                    catmullRom(cas[i0].z, cas[i1].z, cas[i2].z, cas[i3].z, t),
+                    catmullRomT(traces[i0].x, traces[i1].x, traces[i2].x, traces[i3].x, t, tension),
+                    catmullRomT(traces[i0].y, traces[i1].y, traces[i2].y, traces[i3].y, t, tension),
+                    catmullRomT(traces[i0].z, traces[i1].z, traces[i2].z, traces[i3].z, t, tension),
                     near.ss,
                     (t < 0.5f) ? col1 : col2,
                     af,
-                    near.hintX, near.hintY, near.hintZ, near.hasHint
+                    near.hintX, near.hintY, near.hintZ, near.hasHint,
+                    near.isNucleic
                 });
             }
         }
-        const auto& last = cas[cEnd - 1];
+        const auto& last = traces[cEnd - 1];
         spine.push_back({last.x, last.y, last.z, last.ss,
             ctx.colorFor(last.idx), -1.0f,
-            last.hintX, last.hintY, last.hintZ, last.hasHint});
+            last.hintX, last.hintY, last.hintZ, last.hasHint,
+            last.isNucleic});
 
         int nPts = static_cast<int>(spine.size());
         if (nPts < 2) { cStart = cEnd; continue; }
@@ -311,6 +343,35 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
             }
         }
 
+        // Step 3c: 3-point smoothing — Mol*-style averaging that takes
+        // the rough edges off SS-boundary frame transitions. We average
+        // each interior normal with its neighbours, re-orthogonalise
+        // against the tangent, and rebuild the binormal. Endpoints keep
+        // their original frame to anchor the chain ends.
+        if (nPts >= 3) {
+            std::vector<float> nx2(nPts), ny2(nPts), nz2(nPts);
+            nx2[0] = nx[0]; ny2[0] = ny[0]; nz2[0] = nz[0];
+            nx2[nPts-1] = nx[nPts-1]; ny2[nPts-1] = ny[nPts-1]; nz2[nPts-1] = nz[nPts-1];
+            for (int j = 1; j < nPts - 1; ++j) {
+                float ax = (nx[j-1] + nx[j] + nx[j+1]) / 3.0f;
+                float ay = (ny[j-1] + ny[j] + ny[j+1]) / 3.0f;
+                float az = (nz[j-1] + nz[j] + nz[j+1]) / 3.0f;
+                // orthogonalise against tangent
+                float d = ax * tx[j] + ay * ty[j] + az * tz[j];
+                ax -= d * tx[j]; ay -= d * ty[j]; az -= d * tz[j];
+                if (normalize3(ax, ay, az) < 1e-6f) {
+                    ax = nx[j]; ay = ny[j]; az = nz[j];
+                }
+                nx2[j] = ax; ny2[j] = ay; nz2[j] = az;
+            }
+            for (int j = 0; j < nPts; ++j) {
+                nx[j] = nx2[j]; ny[j] = ny2[j]; nz[j] = nz2[j];
+                cross3(tx[j], ty[j], tz[j], nx[j], ny[j], nz[j],
+                       bx[j], by[j], bz[j]);
+                normalize3(bx[j], by[j], bz[j]);
+            }
+        }
+
         // Append flattened arrays to cache and record the chain span.
         int spineStart = static_cast<int>(C.x.size());
         for (int j = 0; j < nPts; ++j) {
@@ -323,9 +384,10 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
             C.tx.push_back(tx[j]); C.ty.push_back(ty[j]); C.tz.push_back(tz[j]);
             C.nx.push_back(nx[j]); C.ny.push_back(ny[j]); C.nz.push_back(nz[j]);
             C.bx.push_back(bx[j]); C.by.push_back(by[j]); C.bz.push_back(bz[j]);
+            C.isNucleic.push_back(spine[j].isNucleic);
         }
         int spineEnd = static_cast<int>(C.x.size());
-        cachedChains_.push_back({cas[cStart].chain, spineStart, spineEnd});
+        cachedChains_.push_back({traces[cStart].chain, spineStart, spineEnd});
 
         cStart = cEnd;
     }
@@ -333,23 +395,37 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
 
 // ─── Per-chain rendering from cache ──────────────────────────────────────────
 
-void CartoonRepr::drawChainCached(int chainStart, int chainEnd, int coilSegments,
+void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
+                                  int coilSegments, int helixSegments,
                                   const Camera& cam, Canvas& canvas,
                                   std::vector<TriangleSpan>* triBatch) const {
     int nPts = chainEnd - chainStart;
     if (nPts < 2) return;
     const auto& C = cachedSpine_;
 
-    auto ssHalfW = [&](SSType ss) -> float {
+    // Nucleic backbone uses a flat ribbon ("square" profile in Mol*
+    // parlance — wider than tall) so DNA/RNA reads as a ribbon rather
+    // than a thin coil indistinguishable from a protein loop.
+    constexpr float kNucleicHalfW = 0.60f;     // Å
+    constexpr float kNucleicHalfH = 0.30f;     // Å
+
+    auto ssHalfW = [&](SSType ss, bool nucleic) -> float {
+        if (nucleic) return kNucleicHalfW;
         switch (ss) {
-            case SSType::Helix: return helixRadius_;
+            case SSType::Helix:
+                return tubularHelix_ ? tubularRadius_ : helixRadius_;
             case SSType::Sheet: return sheetRadius_;
             default:            return loopRadius_;
         }
     };
-    auto ssHalfH = [&](SSType ss) -> float {
+    auto ssHalfH = [&](SSType ss, bool nucleic) -> float {
+        if (nucleic) return kNucleicHalfH;
         switch (ss) {
-            case SSType::Helix: return 0.40f;
+            case SSType::Helix:
+                // Tubular: same as half-width → circle.
+                // Elliptical: half-width / aspect → flat ribbon.
+                return tubularHelix_ ? tubularRadius_
+                                     : helixRadius_ / helixAspect_;
             case SSType::Sheet: return 0.20f;
             default:            return loopRadius_;
         }
@@ -357,10 +433,47 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd, int coilSegments
 
     if (triBatch) {
         struct Vert { float x, y, z; };
+
+        // Smoothstep SS transitions (Mol*-aligned). At a helix→loop or
+        // sheet→loop boundary the unsmoothed cross-section changes width
+        // by 5-10× in a single segment, leaving a visible step in the
+        // strip stitching. We average each spinePoint's base half-W/H
+        // with its neighbours so the dimension changes over a few
+        // sub-segments instead of one. arrowFrac and the per-SS profile
+        // (elliptical/sheet slab) still drive the geometry — only the
+        // numeric width/height feeds into makeRing through these arrays.
+        std::vector<float> halfW(nPts), halfH(nPts);
+        for (int j = 0; j < nPts; ++j) {
+            int gi = chainStart + j;
+            bool nucleic = (gi < (int)C.isNucleic.size()) && C.isNucleic[gi];
+            halfW[j] = ssHalfW(C.ss[gi], nucleic);
+            halfH[j] = ssHalfH(C.ss[gi], nucleic);
+        }
+        // Two passes of 3-point averaging — close to a smoothstep over
+        // a 5-point window without the boundary artefacts of a single
+        // wider blur.
+        for (int pass = 0; pass < 2; ++pass) {
+            std::vector<float> w2 = halfW, h2 = halfH;
+            for (int j = 1; j < nPts - 1; ++j) {
+                w2[j] = (halfW[j-1] + halfW[j] + halfW[j+1]) / 3.0f;
+                h2[j] = (halfH[j-1] + halfH[j] + halfH[j+1]) / 3.0f;
+            }
+            halfW.swap(w2);
+            halfH.swap(h2);
+        }
+
         auto makeRing = [&](int gi) -> std::vector<Vert> {
-            float hw = ssHalfW(C.ss[gi]);
-            float hh = ssHalfH(C.ss[gi]);
-            bool isCoil = (C.ss[gi] == SSType::Loop);
+            int j = gi - chainStart;
+            float hw = halfW[j];
+            float hh = halfH[j];
+            const bool isNuc   = (gi < (int)C.isNucleic.size()) && C.isNucleic[gi];
+            // Nucleic backbone always renders as a flat 4-vertex ribbon
+            // (Mol*'s `nucleicProfile = 'square'`), regardless of SS — DSSP
+            // doesn't classify nucleotides so SS would otherwise stick
+            // them in the circular Loop tube. This makes the helical
+            // backbone read as a flat strap, distinct from protein loops.
+            const bool isCoil  = !isNuc && (C.ss[gi] == SSType::Loop);
+            const bool isHelix = !isNuc && (C.ss[gi] == SSType::Helix);
 
             if (C.arrowFrac[gi] >= 0.0f) {
                 constexpr float kArrowTipScale = 2.20f / 1.50f;
@@ -370,16 +483,36 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd, int coilSegments
 
             std::vector<Vert> ring;
             if (isCoil) {
+                // Circular tube: hw == hh == loopRadius_, N vertices.
                 for (int s = 0; s < coilSegments; ++s) {
                     float angle = 2.0f * 3.14159265f * s / coilSegments;
                     float c = std::cos(angle), si = std::sin(angle);
                     ring.push_back({
-                        C.x[gi] + hw * (c * C.nx[gi] + si * C.bx[gi]),
-                        C.y[gi] + hw * (c * C.ny[gi] + si * C.by[gi]),
-                        C.z[gi] + hw * (c * C.nz[gi] + si * C.bz[gi])
+                        C.x[gi] + hw * (c * C.bx[gi] + si * C.nx[gi]),
+                        C.y[gi] + hw * (c * C.by[gi] + si * C.ny[gi]),
+                        C.z[gi] + hw * (c * C.bz[gi] + si * C.nz[gi])
+                    });
+                }
+            } else if (isHelix) {
+                // Mol*-style elliptical helix profile (tube.ts:43-100):
+                // ellipse with half-width hw on binormal axis, half-height
+                // hh on normal axis, sampled with helixSegments vertices.
+                // Reads as a rounded ribbon when viewed edge-on, distinct
+                // from the slab-y rectangle we used before.
+                int N = std::max(4, helixSegments);
+                ring.reserve(N);
+                for (int s = 0; s < N; ++s) {
+                    float angle = 2.0f * 3.14159265f * s / N;
+                    float c = std::cos(angle), si = std::sin(angle);
+                    ring.push_back({
+                        C.x[gi] + hw * c * C.bx[gi] + hh * si * C.nx[gi],
+                        C.y[gi] + hw * c * C.by[gi] + hh * si * C.ny[gi],
+                        C.z[gi] + hw * c * C.bz[gi] + hh * si * C.nz[gi]
                     });
                 }
             } else {
+                // Sheet: 4-vertex flat rectangle (kept slab-shaped — sheets
+                // visually want the hard edge that says "strand").
                 ring.push_back({C.x[gi] + hw*C.bx[gi] + hh*C.nx[gi],
                                 C.y[gi] + hw*C.by[gi] + hh*C.ny[gi],
                                 C.z[gi] + hw*C.bz[gi] + hh*C.nz[gi]});
@@ -612,92 +745,139 @@ void CartoonRepr::renderNucleicBases(const MolObject& /* mol */,
 
     static const char* k6ring[] = {"N1","C2","N3","C4","C5","C6"};
     static const char* k5ring[] = {"C4","C5","N7","C8","N9"};
-    // Fused purine ring atoms (used in pixel mode to span both rings
-    // with a single slab).
-    static const char* k9ring[] = {
-        "N1","C2","N3","C4","C5","C6","N7","C8","N9"
+    // Fused purine ring atoms in **perimeter order** — going around
+    // the outside of the bicyclic. The 6-ring contributes N1, C2, N3,
+    // C4 then we cross into the 5-ring via C4→N9→C8→N7→C5, then back
+    // to the 6-ring at C5 → C6 → (back to N1). Used by pixel-mode
+    // polygon prism rendering so the slab outline traces the real
+    // base shape rather than a generic rectangle.
+    static const char* k9ringPerim[] = {
+        "N1","C2","N3","C4","N9","C8","N7","C5","C6"
     };
 
     bool useTriangles = (canvas.scaleX() >= 8);
     std::vector<TriangleSpan> triBatch;
 
-    // Build a flat 8-vertex slab (1.0 Å half-width × 0.2 Å half-thickness)
-    // running from C1' to the ring centroid. Width lies in the ring
-    // plane perpendicular to the slab axis; thickness lies along the
-    // ring normal. Pushes 12 triangles into `triBatch`.
-    auto pushSlab = [&](int c1idx, const std::vector<int>& ringAtoms,
-                        int color) {
+    // Build a thin polygonal prism around the actual base ring atoms.
+    // For pyrimidines (C/T/U) this is a hexagonal prism (6-vertex face).
+    // For purines (A/G) the input atoms are arranged in perimeter order
+    // around the fused 6+5 bicyclic, so the prism naturally takes the
+    // recognisable "L-shape" outline of a real purine. Plus a thin stem
+    // from C1' to the nearest ring atom to anchor the base on the sugar.
+    auto pushBaseRing = [&](int c1idx, const std::vector<int>& ringAtoms,
+                            int color, bool purine) {
         if (ringAtoms.size() < 3) return;
 
         float cx, cy, cz, nnx, nny, nnz;
         ringGeometry(ringAtoms, cx, cy, cz, nnx, nny, nnz);
 
-        float c1x = atoms[c1idx].x, c1y = atoms[c1idx].y, c1z = atoms[c1idx].z;
-        float lx = cx - c1x, ly = cy - c1y, lz = cz - c1z;
-        if (normalize3(lx, ly, lz) < 1e-6f) return;
+        // Half-thickness along the ring normal — purines slightly thicker
+        // so the bicyclic reads at zoom-out.
+        const float HT = purine ? 0.22f : 0.16f;
 
-        // Width axis: perpendicular to slab axis and ring normal,
-        // i.e. lies in the ring plane.
-        float wxa, wya, wza;
-        cross3(lx, ly, lz, nnx, nny, nnz, wxa, wya, wza);
-        if (normalize3(wxa, wya, wza) < 1e-6f) {
-            // Slab axis is parallel to ring normal — pick any
-            // perpendicular as a fallback.
-            cross3(lx, ly, lz, 0.0f, 1.0f, 0.0f, wxa, wya, wza);
-            if (normalize3(wxa, wya, wza) < 1e-6f) {
-                cross3(lx, ly, lz, 1.0f, 0.0f, 0.0f, wxa, wya, wza);
-                normalize3(wxa, wya, wza);
+        const int N = static_cast<int>(ringAtoms.size());
+        // Top + bottom faces (offset along ring normal).
+        std::vector<std::array<float,3>> botW(N), topW(N);
+        for (int i = 0; i < N; ++i) {
+            const auto& a = atoms[ringAtoms[i]];
+            botW[i] = {a.x - HT * nnx, a.y - HT * nny, a.z - HT * nnz};
+            topW[i] = {a.x + HT * nnx, a.y + HT * nny, a.z + HT * nnz};
+        }
+        // Project all once.
+        std::vector<std::array<float,3>> botP(N), topP(N);
+        for (int i = 0; i < N; ++i) {
+            cam.projectCached(botW[i][0], botW[i][1], botW[i][2],
+                              botP[i][0], botP[i][1], botP[i][2]);
+            cam.projectCached(topW[i][0], topW[i][1], topW[i][2],
+                              topP[i][0], topP[i][1], topP[i][2]);
+        }
+        float ctTop[3], ctBot[3];
+        cam.projectCached(cx + HT * nnx, cy + HT * nny, cz + HT * nnz,
+                          ctTop[0], ctTop[1], ctTop[2]);
+        cam.projectCached(cx - HT * nnx, cy - HT * nny, cz - HT * nnz,
+                          ctBot[0], ctBot[1], ctBot[2]);
+
+        auto tri = [&](float x0,float y0,float z0,
+                       float x1,float y1,float z1,
+                       float x2,float y2,float z2) {
+            triBatch.push_back({{x0,x1,x2}, {y0,y1,y2}, {z0,z1,z2}, color});
+        };
+
+        for (int i = 0; i < N; ++i) {
+            int j = (i + 1) % N;
+            // Top face — fan from centroid.
+            tri(ctTop[0], ctTop[1], ctTop[2],
+                topP[i][0], topP[i][1], topP[i][2],
+                topP[j][0], topP[j][1], topP[j][2]);
+            // Bottom face — fan from centroid (reverse winding).
+            tri(ctBot[0], ctBot[1], ctBot[2],
+                botP[j][0], botP[j][1], botP[j][2],
+                botP[i][0], botP[i][1], botP[i][2]);
+            // Side strip — two triangles per edge.
+            tri(topP[i][0], topP[i][1], topP[i][2],
+                topP[j][0], topP[j][1], topP[j][2],
+                botP[j][0], botP[j][1], botP[j][2]);
+            tri(topP[i][0], topP[i][1], topP[i][2],
+                botP[j][0], botP[j][1], botP[j][2],
+                botP[i][0], botP[i][1], botP[i][2]);
+        }
+
+        // Thin stem from C1' (sugar) to the nearest ring atom — anchors
+        // the base to the backbone visually. Implemented as a small
+        // 4-faced prism (square cross-section, ~0.20 Å half-side).
+        float c1x = atoms[c1idx].x, c1y = atoms[c1idx].y, c1z = atoms[c1idx].z;
+        // Find closest ring atom to C1'.
+        int nearest = 0;
+        {
+            float best = std::numeric_limits<float>::max();
+            for (int i = 0; i < N; ++i) {
+                const auto& a = atoms[ringAtoms[i]];
+                float dx = a.x - c1x, dy = a.y - c1y, dz = a.z - c1z;
+                float d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 < best) { best = d2; nearest = i; }
             }
         }
-        // Thickness axis: complete the right-handed frame.
-        float txa, tya, tza;
-        cross3(lx, ly, lz, wxa, wya, wza, txa, tya, tza);
-        normalize3(txa, tya, tza);
-
-        constexpr float HW = 1.0f;   // half-width  (Å)
-        constexpr float HT = 0.2f;   // half-thickness (Å)
-
-        auto corner = [&](float bx, float by, float bz, float ws, float ts,
-                          float& ox, float& oy, float& oz) {
-            ox = bx + ws * HW * wxa + ts * HT * txa;
-            oy = by + ws * HW * wya + ts * HT * tya;
-            oz = bz + ws * HW * wza + ts * HT * tza;
-        };
-
-        // 8 corners: 0..3 at C1' end, 4..7 at centroid end.
-        // Layout: 0=TL(+w+t) 1=TR(-w+t) 2=BR(-w-t) 3=BL(+w-t)
-        float v[8][3];
-        corner(c1x, c1y, c1z, +1, +1, v[0][0], v[0][1], v[0][2]);
-        corner(c1x, c1y, c1z, -1, +1, v[1][0], v[1][1], v[1][2]);
-        corner(c1x, c1y, c1z, -1, -1, v[2][0], v[2][1], v[2][2]);
-        corner(c1x, c1y, c1z, +1, -1, v[3][0], v[3][1], v[3][2]);
-        corner(cx,  cy,  cz,  +1, +1, v[4][0], v[4][1], v[4][2]);
-        corner(cx,  cy,  cz,  -1, +1, v[5][0], v[5][1], v[5][2]);
-        corner(cx,  cy,  cz,  -1, -1, v[6][0], v[6][1], v[6][2]);
-        corner(cx,  cy,  cz,  +1, -1, v[7][0], v[7][1], v[7][2]);
-
-        // Project once per vertex; reuse for all 12 triangles.
-        float p[8][3];
-        for (int k = 0; k < 8; ++k) {
-            cam.projectCached(v[k][0], v[k][1], v[k][2],
-                              p[k][0], p[k][1], p[k][2]);
+        const auto& nr = atoms[ringAtoms[nearest]];
+        float lx = nr.x - c1x, ly = nr.y - c1y, lz = nr.z - c1z;
+        if (normalize3(lx, ly, lz) > 1e-6f) {
+            // Build a square cross-section perpendicular to stem.
+            float wx, wy, wz;
+            cross3(lx, ly, lz, nnx, nny, nnz, wx, wy, wz);
+            normalize3(wx, wy, wz);
+            const float SH = 0.18f;          // stem half-side (Å)
+            auto stemCorner = [&](float bx, float by, float bz,
+                                  float ws, float ts) {
+                return std::array<float,3>{
+                    bx + ws * SH * wx + ts * SH * nnx,
+                    by + ws * SH * wy + ts * SH * nny,
+                    bz + ws * SH * wz + ts * SH * nnz};
+            };
+            std::array<float,3> sV[8] = {
+                stemCorner(c1x, c1y, c1z, +1, +1),
+                stemCorner(c1x, c1y, c1z, -1, +1),
+                stemCorner(c1x, c1y, c1z, -1, -1),
+                stemCorner(c1x, c1y, c1z, +1, -1),
+                stemCorner(nr.x, nr.y, nr.z, +1, +1),
+                stemCorner(nr.x, nr.y, nr.z, -1, +1),
+                stemCorner(nr.x, nr.y, nr.z, -1, -1),
+                stemCorner(nr.x, nr.y, nr.z, +1, -1),
+            };
+            std::array<float,3> sP[8];
+            for (int k = 0; k < 8; ++k) {
+                cam.projectCached(sV[k][0], sV[k][1], sV[k][2],
+                                  sP[k][0], sP[k][1], sP[k][2]);
+            }
+            auto sQuad = [&](int a, int b, int c, int d) {
+                tri(sP[a][0], sP[a][1], sP[a][2],
+                    sP[b][0], sP[b][1], sP[b][2],
+                    sP[c][0], sP[c][1], sP[c][2]);
+                tri(sP[a][0], sP[a][1], sP[a][2],
+                    sP[c][0], sP[c][1], sP[c][2],
+                    sP[d][0], sP[d][1], sP[d][2]);
+            };
+            sQuad(0, 4, 5, 1); sQuad(1, 5, 6, 2);
+            sQuad(2, 6, 7, 3); sQuad(3, 7, 4, 0);
         }
-
-        auto pushQuad = [&](int a, int b, int c, int d) {
-            triBatch.push_back({{p[a][0], p[b][0], p[c][0]},
-                                {p[a][1], p[b][1], p[c][1]},
-                                {p[a][2], p[b][2], p[c][2]}, color});
-            triBatch.push_back({{p[a][0], p[c][0], p[d][0]},
-                                {p[a][1], p[c][1], p[d][1]},
-                                {p[a][2], p[c][2], p[d][2]}, color});
-        };
-
-        pushQuad(0, 1, 2, 3);  // front (at C1')
-        pushQuad(5, 4, 7, 6);  // back  (at centroid, reverse winding)
-        pushQuad(0, 4, 5, 1);  // top
-        pushQuad(3, 2, 6, 7);  // bottom
-        pushQuad(0, 3, 7, 4);  // left
-        pushQuad(1, 5, 6, 2);  // right
     };
 
     int ai = 0;
@@ -724,14 +904,14 @@ void CartoonRepr::renderNucleicBases(const MolObject& /* mol */,
             // fused bicyclic so the slab spans both rings as a single
             // tablet.
             std::vector<int> ringAtoms;
-            const char* const* names = purine ? k9ring : k6ring;
+            const char* const* names = purine ? k9ringPerim : k6ring;
             int count = purine ? 9 : 6;
             ringAtoms.reserve(count);
             for (int n = 0; n < count; ++n) {
                 int idx = findAtom(resStart, resEnd, names[n]);
                 if (idx >= 0) ringAtoms.push_back(idx);
             }
-            pushSlab(c1idx, ringAtoms, color);
+            pushBaseRing(c1idx, ringAtoms, color, purine);
         } else {
             // Text-mode fallback: stick + ring outline (purines also
             // get the 5-ring outline so the bicyclic is visible).

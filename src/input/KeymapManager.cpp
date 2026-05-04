@@ -13,6 +13,7 @@ void KeymapManager::loadDefaults() {
     bindNormalDefaults();
     bindCommandDefaults();
     bindVisualDefaults();
+    bindSearchDefaults();
 }
 
 void KeymapManager::loadFromFile() {
@@ -118,7 +119,12 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'g', 's'},  Action::EnterSelectAtom,    "Select atoms (click)");
     km.bind(Mode::Normal, {'g', 'S'},  Action::EnterSelectResidue, "Select residues (click)");
     km.bind(Mode::Normal, {'g', 'c'},  Action::EnterSelectChain,   "Select chains (click)");
-    km.bind(Mode::Normal, {'F'},       Action::ToggleSeqBar, "Toggle sequence bar");
+    km.bind(Mode::Normal, {'g', 'f'},  Action::EnterFocusPickMode, "Focus on click (Mol*-style)");
+    km.bind(Mode::Normal, {27},        Action::ExitToNormal, "Exit focus / cancel pickmode");  // ESC
+    km.bind(Mode::Normal, {3},         Action::ExitToNormal, "Exit (Ctrl+C)");
+    // (F was previously bound to ToggleSeqBar here, but the later
+    // `F → FocusPick` binding below silently overrode it. The dead
+    // duplicate is removed; toggle the seqbar via :seq instead.)
     km.bind(Mode::Normal, {'}'},       Action::SeqBarNextChain, "Seqbar next chain");
     km.bind(Mode::Normal, {'{'},       Action::SeqBarPrevChain, "Seqbar prev chain");
     km.bind(Mode::Normal, {'?'},       Action::ShowHelp,    "Show help");
@@ -140,6 +146,7 @@ void KeymapManager::bindNormalDefaults() {
 
     // Analysis
     km.bind(Mode::Normal, {'I'},       Action::ToggleInterface,  "Toggle interface overlay");
+    km.bind(Mode::Normal, {'F'},       Action::FocusPick,        "Focus residue at picked atom");
 
     // Macro recording
     km.bind(Mode::Normal, {'q'},       Action::StartMacro,  "Record/stop macro");
@@ -163,6 +170,17 @@ void KeymapManager::bindVisualDefaults() {
     auto& km = keymap_;
     km.bind(Mode::Visual, {27},  Action::ExitToNormal, "Exit to normal");
     km.bind(Mode::Visual, {3},   Action::ExitToNormal, "Exit (Ctrl+C)");
+}
+
+void KeymapManager::bindSearchDefaults() {
+    // Every key in Search mode is text input by default; the keymap only
+    // surfaces the explicit non-text actions (ESC, Ctrl+C to cancel; Enter
+    // to commit; arrow keys for history would go here too).
+    auto& km = keymap_;
+    km.bind(Mode::Search, {27},        Action::ExitToNormal,   "Exit to normal");  // ESC
+    km.bind(Mode::Search, {3},         Action::ExitToNormal,   "Exit (Ctrl+C)");
+    km.bind(Mode::Search, {'\n'},      Action::ExecuteSearch,  "Execute search");
+    km.bind(Mode::Search, {KEY_ENTER}, Action::ExecuteSearch,  "Execute search");
 }
 
 } // namespace molterm

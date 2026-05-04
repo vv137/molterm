@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(molterm VERSION 0.8.0 LANGUAGES CXX)
+project(molterm VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,7 @@ set(MOLTERM_SOURCES
     src/core/Selection.cpp
     src/core/Logger.cpp
     src/core/BondTable.cpp
+    src/core/DSSP.cpp
     # IO
     src/io/CifLoader.cpp
     src/io/Aligner.cpp
@@ -110,6 +111,7 @@ set(MOLTERM_SOURCES
     src/repr/SpacefillRepr.cpp
     src/repr/CartoonRepr.cpp
     src/repr/RibbonRepr.cpp
+    src/repr/InterfaceRepr.cpp
     # Input
     src/input/Keymap.cpp
     src/input/KeymapManager.cpp

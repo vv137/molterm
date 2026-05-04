@@ -6,16 +6,10 @@ InputHandler::InputHandler(const Keymap& keymap)
     : keymap_(keymap) {}
 
 Action InputHandler::processKey(int key) {
-    // ESC always returns to normal from any non-Normal mode
-    if (key == 27 && mode_ != Mode::Normal) {
-        clearPending();
-        return Action::ExitToNormal;
-    }
-    // Ctrl+C also exits to normal
-    if (key == 3 && mode_ != Mode::Normal) {
-        clearPending();
-        return Action::ExitToNormal;
-    }
+    // Every key — including ESC and Ctrl+C — is dispatched through the
+    // keymap. Each mode (Normal/Command/Visual/Search) registers its own
+    // ExitToNormal binding for {27} and {3} via KeymapManager defaults, so
+    // users can rebind them per mode if they want.
 
     // In Command/Search mode, most keys are text input
     if (isTextInput()) {

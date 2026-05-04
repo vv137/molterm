@@ -50,6 +50,11 @@ public:
     void drawChar(int termX, int termY, float depth,
                   char ch, int colorPair) override;
 
+    // Tag subsequent pixel writes with this atom index. Pass -1 to clear.
+    // The buffer is allocated lazily on the first call with idx >= 0, so
+    // this costs nothing when no consumer (e.g. focus-dim) is active.
+    void setActiveAtomIndex(int idx) override;
+
     // Render a text string at sub-pixel coordinates with depth testing.
     void drawText(int sx, int sy, float depth,
                   const std::string& text, int colorPair);
@@ -69,6 +74,15 @@ public:
     // Apply depth fog: blend pixels toward fogColor based on depth.
     void applyDepthFog(float strength = 0.35f,
                        uint8_t fogR = 30, uint8_t fogG = 35, uint8_t fogB = 50);
+
+    // Desaturate + darken pixels whose stamped atom index is NOT in
+    // `keepBright` (mask indexed by atom). Pixels that were never
+    // stamped (id == -1, e.g. background, text overlays) are left
+    // untouched. Independent of depth, so a foreground non-keep atom
+    // is dimmed while a foreground keep atom stays vivid.
+    //   strength = 0  → no-op
+    //   strength = 1  → full grayscale + ~40% darken
+    void applyFocusDim(const std::vector<bool>& keepBright, float strength);
 
     // Save current framebuffer as PNG (captures pre-fog on next frame).
     // If dpi > 0, embed a pHYs chunk so LaTeX / Word / image viewers know
@@ -91,6 +105,11 @@ private:
     std::vector<uint8_t> rgb_;
     // Per-pixel color pair ID for dirty detection (-1 = bg)
     std::vector<int8_t> colorIds_;
+    // Per-pixel atom index for atom-aware post-passes (-1 = none / bg).
+    // Lazily allocated: stays empty until setActiveAtomIndex(>=0) is first
+    // called, so untouched canvases pay no cost.
+    std::vector<int32_t> atomIds_;
+    int activeAtomIdx_ = -1;
     // Previous frame for diff
     std::vector<uint8_t> prevRgb_;
 

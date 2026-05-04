@@ -26,13 +26,52 @@ inline void cross3(float ax, float ay, float az,
     oz = ax * by - ay * bx;
 }
 
-// Catmull-Rom cubic interpolation between p1 and p2.
+// Catmull-Rom cubic interpolation between p1 and p2 with tunable
+// tension (Mol* convention — `tension` is the multiplier on the
+// derivative estimate at p1 and p2). tension=0.5 gives the classic
+// Catmull-Rom spline; tension=0.9 yields tighter helices, matching
+// Mol*'s `HelixTension`.
+inline float catmullRomT(float p0, float p1, float p2, float p3,
+                         float t, float tension) {
+    const float v0 = (p2 - p0) * tension;
+    const float v1 = (p3 - p1) * tension;
+    const float t2 = t * t, t3 = t2 * t;
+    return (2.0f * p1 - 2.0f * p2 + v0 + v1) * t3
+         + (-3.0f * p1 + 3.0f * p2 - 2.0f * v0 - v1) * t2
+         + v0 * t
+         + p1;
+}
+
+// Backwards-compatible alias — same numerical result as the original
+// 0.5-tension form.
 inline float catmullRom(float p0, float p1, float p2, float p3, float t) {
-    float t2 = t * t, t3 = t2 * t;
-    return 0.5f * ((2.0f * p1) +
-                   (-p0 + p2) * t +
-                   (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
-                   (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+    return catmullRomT(p0, p1, p2, p3, t, 0.5f);
+}
+
+// Spherical linear interpolation of two unit-length 3-vectors. Falls
+// back to lerp + renormalise when the angle is small (numerical
+// stability) or close to π (axis ambiguous).
+inline void slerp3(float ax, float ay, float az,
+                   float bx, float by, float bz, float t,
+                   float& ox, float& oy, float& oz) {
+    float d = ax * bx + ay * by + az * bz;
+    if (d > 1.0f)  d = 1.0f;
+    if (d < -1.0f) d = -1.0f;
+    if (d > 0.9995f) {
+        ox = ax + t * (bx - ax);
+        oy = ay + t * (by - ay);
+        oz = az + t * (bz - az);
+        normalize3(ox, oy, oz);
+        return;
+    }
+    float theta = std::acos(d);
+    float sinTheta = std::sin(theta);
+    float wa = std::sin((1.0f - t) * theta) / sinTheta;
+    float wb = std::sin(t * theta) / sinTheta;
+    ox = wa * ax + wb * bx;
+    oy = wa * ay + wb * by;
+    oz = wa * az + wb * bz;
+    normalize3(ox, oy, oz);
 }
 
 } // namespace molterm
