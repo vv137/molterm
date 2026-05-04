@@ -34,4 +34,10 @@ namespace molterm::dssp {
 // receive SSType::Loop.
 std::vector<SSType> compute(const std::vector<AtomData>& atoms);
 
+// φ/ψ Ramachandran classifier — fallback when full DSSP returns
+// all-Loop (typical for files with broken backbones or non-standard
+// hydrogen positions). Cheaper, no H-bond pass; accuracy is good enough
+// for cartoon visualization.
+std::vector<SSType> computeGeometric(const std::vector<AtomData>& atoms);
+
 } // namespace molterm::dssp

@@ -1,4 +1,5 @@
 #include "molterm/core/DSSP.h"
+#include "molterm/core/Geometry.h"
 #include "molterm/core/SpatialHash.h"
 
 #include <cmath>
@@ -300,6 +301,103 @@ std::vector<SSType> compute(const std::vector<AtomData>& atoms) {
         SSType ss = ssRes[r];
         for (int j = residues[r].firstAtom; j <= residues[r].lastAtom; ++j) {
             result[j] = ss;
+        }
+    }
+    return result;
+}
+
+namespace {
+
+// Ramachandran box bounds (degrees). The α-helix box is centered on
+// (-57°, -47°) and the β-strand box covers φ ∈ [-180, -90], ψ ∈ [+80,
+// +180] with a wrap-around tail at ψ ∈ [-180, -160].
+struct RamaBox { float phiLo, phiHi, psiLo, psiHi; };
+constexpr RamaBox kHelixBox  = {-100.0f, -30.0f, -80.0f, 10.0f};
+constexpr RamaBox kSheetBox1 = {-180.0f, -90.0f,  80.0f, 180.0f};
+constexpr RamaBox kSheetBox2 = {-180.0f, -90.0f, -180.0f, -160.0f};
+
+constexpr int kMinHelixRun = 4;   // one full α-turn
+constexpr int kMinSheetRun = 3;
+
+inline bool inBox(float phi, float psi, const RamaBox& b) {
+    return phi >= b.phiLo && phi <= b.phiHi &&
+           psi >= b.psiLo && psi <= b.psiHi;
+}
+
+// φ/ψ in IUPAC convention (right-handed α-helix at ≈ -57°, -47°) is the
+// negation of the standard signed-dihedral atan2 result.
+inline float phiPsi(float ax, float ay, float az,
+                    float bx, float by, float bz,
+                    float cx, float cy, float cz,
+                    float dx, float dy, float dz) {
+    return -geom::dihedralDeg(ax, ay, az, bx, by, bz,
+                              cx, cy, cz, dx, dy, dz);
+}
+
+void classifyByRamachandran(const std::vector<AtomData>& atoms,
+                            const std::vector<Res>& residues,
+                            std::vector<SSType>& ssRes) {
+    for (std::size_t k = 0; k < residues.size(); ++k) {
+        const auto& r = residues[k];
+        if (r.N < 0 || r.CA < 0 || r.C < 0) continue;
+        if (k == 0 || k + 1 >= residues.size()) continue;
+        const auto& prev = residues[k - 1];
+        const auto& next = residues[k + 1];
+        if (prev.C < 0 || next.N < 0) continue;
+        if (prev.chainId != r.chainId || next.chainId != r.chainId) continue;
+
+        float phi = phiPsi(
+            atoms[prev.C].x, atoms[prev.C].y, atoms[prev.C].z,
+            atoms[r.N].x,    atoms[r.N].y,    atoms[r.N].z,
+            atoms[r.CA].x,   atoms[r.CA].y,   atoms[r.CA].z,
+            atoms[r.C].x,    atoms[r.C].y,    atoms[r.C].z);
+        float psi = phiPsi(
+            atoms[r.N].x,    atoms[r.N].y,    atoms[r.N].z,
+            atoms[r.CA].x,   atoms[r.CA].y,   atoms[r.CA].z,
+            atoms[r.C].x,    atoms[r.C].y,    atoms[r.C].z,
+            atoms[next.N].x, atoms[next.N].y, atoms[next.N].z);
+
+        if (inBox(phi, psi, kHelixBox))                    ssRes[k] = SSType::Helix;
+        else if (inBox(phi, psi, kSheetBox1) ||
+                 inBox(phi, psi, kSheetBox2))              ssRes[k] = SSType::Sheet;
+        else                                                ssRes[k] = SSType::Loop;
+    }
+}
+
+// Drop runs shorter than kMinHelixRun / kMinSheetRun back to Loop.
+// Run boundaries also stop at chain breaks.
+void smoothRuns(const std::vector<Res>& residues,
+                std::vector<SSType>& ssRes) {
+    if (residues.empty()) return;
+    auto raw = ssRes;
+    std::size_t a = 0;
+    while (a < raw.size()) {
+        std::size_t b = a + 1;
+        while (b < raw.size() && raw[b] == raw[a] &&
+               residues[b].chainId == residues[a].chainId) ++b;
+        int runLen = static_cast<int>(b - a);
+        if ((raw[a] == SSType::Helix && runLen < kMinHelixRun) ||
+            (raw[a] == SSType::Sheet && runLen < kMinSheetRun)) {
+            for (std::size_t k = a; k < b; ++k) ssRes[k] = SSType::Loop;
+        }
+        a = b;
+    }
+}
+
+} // namespace
+
+std::vector<SSType> computeGeometric(const std::vector<AtomData>& atoms) {
+    std::vector<SSType> result(atoms.size(), SSType::Loop);
+    auto residues = collectResidues(atoms);
+    if (residues.empty()) return result;
+
+    std::vector<SSType> ssRes(residues.size(), SSType::Loop);
+    classifyByRamachandran(atoms, residues, ssRes);
+    smoothRuns(residues, ssRes);
+
+    for (std::size_t k = 0; k < residues.size(); ++k) {
+        for (int j = residues[k].firstAtom; j <= residues[k].lastAtom; ++j) {
+            result[j] = ssRes[k];
         }
     }
     return result;

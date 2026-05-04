@@ -1,7 +1,6 @@
 #include "molterm/io/CifLoader.h"
 #include "molterm/core/BondTable.h"
 #include "molterm/core/DSSP.h"
-#include "molterm/core/Geometry.h"
 #include "molterm/core/SpatialHash.h"
 
 #include <gemmi/mmread.hpp>
@@ -12,7 +11,6 @@
 #include <gemmi/logger.hpp>
 
 #include <algorithm>
-#include <cmath>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -74,115 +72,6 @@ static std::vector<AtomData> convertModel(const gemmi::Model& model) {
     return result;
 }
 
-// φ/ψ in IUPAC convention (right-handed α-helix at ≈ -57°, -47°) is the
-// negation of the standard signed-dihedral atan2 result.
-static float phiPsiDeg(float ax, float ay, float az,
-                       float bx, float by, float bz,
-                       float cx, float cy, float cz,
-                       float dx, float dy, float dz) {
-    return -geom::dihedralDeg(ax, ay, az, bx, by, bz,
-                              cx, cy, cz, dx, dy, dz);
-}
-
-// Geometric fallback for files without HELIX/SHEET records (CASP/AlphaFold
-// predictions, raw coordinate dumps). Classifies each residue by its φ/ψ
-// dihedrals — Ramachandran α-region → Helix, β-region → Sheet, else Loop —
-// then smooths out single-residue noise. Cheaper and simpler than full DSSP
-// (no H-bond energy pass), accurate enough for cartoon visualization.
-static void assignSSGeometric(std::vector<AtomData>& atoms) {
-    struct Res {
-        std::string chain;
-        int n = -1, ca = -1, c = -1;
-        SSType ss = SSType::Loop;
-        int firstAtom = -1, lastAtom = -1;
-    };
-
-    auto sameRes = [&](int a, int b) {
-        return atoms[a].chainId == atoms[b].chainId &&
-               atoms[a].resSeq == atoms[b].resSeq &&
-               atoms[a].insCode == atoms[b].insCode;
-    };
-
-    std::vector<Res> residues;
-    int n = static_cast<int>(atoms.size());
-    int i = 0;
-    while (i < n) {
-        int rs = i;
-        while (i < n && sameRes(rs, i)) ++i;
-        Res r;
-        r.chain = atoms[rs].chainId;
-        r.firstAtom = rs;
-        r.lastAtom = i - 1;
-        for (int j = rs; j < i; ++j) {
-            const auto& a = atoms[j];
-            if (a.name == "N")  r.n  = j;
-            if (a.name == "CA") r.ca = j;
-            if (a.name == "C")  r.c  = j;
-        }
-        residues.push_back(r);
-    }
-
-    // φ/ψ classification per residue (skips chain ends and incomplete backbones).
-    for (std::size_t k = 0; k < residues.size(); ++k) {
-        auto& r = residues[k];
-        if (r.n < 0 || r.ca < 0 || r.c < 0) continue;
-        if (k == 0 || k + 1 >= residues.size()) continue;
-        const auto& prev = residues[k - 1];
-        const auto& next = residues[k + 1];
-        if (prev.c < 0 || next.n < 0) continue;
-        if (prev.chain != r.chain || next.chain != r.chain) continue;
-
-        float phi = phiPsiDeg(
-            atoms[prev.c].x, atoms[prev.c].y, atoms[prev.c].z,
-            atoms[r.n].x,    atoms[r.n].y,    atoms[r.n].z,
-            atoms[r.ca].x,   atoms[r.ca].y,   atoms[r.ca].z,
-            atoms[r.c].x,    atoms[r.c].y,    atoms[r.c].z);
-        float psi = phiPsiDeg(
-            atoms[r.n].x,    atoms[r.n].y,    atoms[r.n].z,
-            atoms[r.ca].x,   atoms[r.ca].y,   atoms[r.ca].z,
-            atoms[r.c].x,    atoms[r.c].y,    atoms[r.c].z,
-            atoms[next.n].x, atoms[next.n].y, atoms[next.n].z);
-
-        // Right-handed α-helix region centered on (-57°, -47°), allow ±~30°.
-        bool helix = (phi >= -100.0f && phi <= -30.0f &&
-                      psi >= -80.0f  && psi <=  10.0f);
-        // β-strand region: φ very negative, ψ near +130° (with wrap-around tail).
-        bool sheet = (phi >= -180.0f && phi <= -90.0f &&
-                      ((psi >= 80.0f  && psi <= 180.0f) ||
-                       (psi >= -180.0f && psi <= -160.0f)));
-
-        if (helix)      r.ss = SSType::Helix;
-        else if (sheet) r.ss = SSType::Sheet;
-        else            r.ss = SSType::Loop;
-    }
-
-    // Smoothing: require ≥4 consecutive helix residues (one full α-turn) and
-    // ≥3 consecutive sheet residues to keep the assignment; isolated hits get
-    // dropped back to Loop. Run boundaries also stop at chain breaks.
-    if (!residues.empty()) {
-        std::vector<SSType> raw(residues.size());
-        for (std::size_t k = 0; k < residues.size(); ++k) raw[k] = residues[k].ss;
-        auto out = raw;
-        std::size_t a = 0;
-        while (a < raw.size()) {
-            std::size_t b = a + 1;
-            while (b < raw.size() && raw[b] == raw[a] &&
-                   residues[b].chain == residues[a].chain) ++b;
-            int runLen = static_cast<int>(b - a);
-            if ((raw[a] == SSType::Helix && runLen < 4) ||
-                (raw[a] == SSType::Sheet && runLen < 3)) {
-                for (std::size_t k = a; k < b; ++k) out[k] = SSType::Loop;
-            }
-            a = b;
-        }
-        for (std::size_t k = 0; k < residues.size(); ++k) residues[k].ss = out[k];
-    }
-
-    for (const auto& r : residues) {
-        for (int j = r.firstAtom; j <= r.lastAtom; ++j) atoms[j].ssType = r.ss;
-    }
-}
-
 static void assignSS(std::vector<AtomData>& atoms, const gemmi::Structure& st) {
     if (st.helices.empty() && st.sheets.empty()) {
         // No HELIX/SHEET records (CASP TS, AlphaFold output, bare coords).
@@ -193,11 +82,8 @@ static void assignSS(std::vector<AtomData>& atoms, const gemmi::Structure& st) {
         auto ss = molterm::dssp::compute(atoms);
         bool any = false;
         for (auto s : ss) if (s != SSType::Loop) { any = true; break; }
-        if (any) {
-            for (size_t i = 0; i < atoms.size(); ++i) atoms[i].ssType = ss[i];
-        } else {
-            assignSSGeometric(atoms);
-        }
+        if (!any) ss = molterm::dssp::computeGeometric(atoms);
+        for (size_t i = 0; i < atoms.size(); ++i) atoms[i].ssType = ss[i];
         return;
     }
     for (auto& ad : atoms) {
