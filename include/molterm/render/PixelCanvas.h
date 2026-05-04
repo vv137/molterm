@@ -38,6 +38,8 @@ public:
                       float x1, float y1, float z1,
                       float x2, float y2, float z2,
                       int colorPair) override;
+    void drawTriangleBatch(const TriangleSpan* tris,
+                           std::size_t count) override;
     void drawChar(int termX, int termY, float depth,
                   char ch, int colorPair) override;
 

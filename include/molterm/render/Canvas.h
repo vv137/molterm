@@ -1,11 +1,22 @@
 #pragma once
 
+#include <cstddef>
 #include <functional>
 
 #include "molterm/render/DepthBuffer.h"
 #include "molterm/tui/Window.h"
 
 namespace molterm {
+
+// Bundled triangle for batched submission. Storing the three vertices
+// inline lets the rasterizer bin and dispatch them to tiles without
+// touching the originating data structure.
+struct TriangleSpan {
+    float x[3];
+    float y[3];
+    float z[3];
+    int colorPair;
+};
 
 // Abstract canvas for sub-pixel rendering.
 // All coordinates are in sub-pixel space.
@@ -52,6 +63,13 @@ public:
                               float x1, float y1, float z1,
                               float x2, float y2, float z2,
                               int colorPair);
+
+    // Batched submission of many triangles in one call. Default
+    // implementation forwards to drawTriangle in a loop; PixelCanvas
+    // overrides this to bin triangles into tiles and rasterize the
+    // tiles in parallel. Caller must keep `tris` alive until the
+    // function returns.
+    virtual void drawTriangleBatch(const TriangleSpan* tris, std::size_t count);
 
     // Convenience: draw char at terminal cell coords (for labels)
     virtual void drawChar(int termX, int termY, float depth,

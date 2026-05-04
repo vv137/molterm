@@ -67,13 +67,26 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         }
     }
 
-    // Process each chain
+    // Process each chain. When the canvas can rasterize triangles
+    // (pixel mode), accumulate them into a single batch so the canvas
+    // can bin them into tiles and dispatch in parallel; otherwise the
+    // chain falls back to the line/circle path which writes to the
+    // canvas immediately.
+    bool useTriangles = (canvas.scaleX() >= 8);
+    std::vector<TriangleSpan> triBatch;
+    if (useTriangles) triBatch.reserve(cas.size() * subdiv * 8);
+
     size_t cStart = 0;
     while (cStart < cas.size()) {
         size_t cEnd = cStart + 1;
         while (cEnd < cas.size() && cas[cEnd].chain == cas[cStart].chain) ++cEnd;
-        renderChain(cas, cStart, cEnd, subdiv, coilSegments, ctx, cam, canvas);
+        renderChain(cas, cStart, cEnd, subdiv, coilSegments, ctx, cam, canvas,
+                    useTriangles ? &triBatch : nullptr);
         cStart = cEnd;
+    }
+
+    if (useTriangles && !triBatch.empty()) {
+        canvas.drawTriangleBatch(triBatch.data(), triBatch.size());
     }
 
     // Nucleic acid base ladders
@@ -85,7 +98,8 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
 void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
                               size_t end, int subdiv, int coilSegments,
                               const RenderContext& ctx,
-                              const Camera& cam, Canvas& canvas) const {
+                              const Camera& cam, Canvas& canvas,
+                              std::vector<TriangleSpan>* triBatch) const {
     int cLen = static_cast<int>(end - start);
     if (cLen < 2) return;
 
@@ -313,8 +327,10 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
                 cam.projectCached(c.x, c.y, c.z, cs, cy, cd);
                 cam.projectCached(d.x, d.y, d.z, ds, dy, dd);
 
-                canvas.drawTriangle(as, ay, ad, bs, by2, bd, ds, dy, dd, color);
-                canvas.drawTriangle(bs, by2, bd, cs, cy, cd, ds, dy, dd, color);
+                triBatch->push_back({{as, bs, ds}, {ay, by2, dy},
+                                     {ad, bd, dd}, color});
+                triBatch->push_back({{bs, cs, ds}, {by2, cy, dy},
+                                     {bd, cd, dd}, color});
             }
         };
 
@@ -333,9 +349,9 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
                 float asx, asy, ad, bsx, bsy, bd;
                 cam.projectCached(a.x, a.y, a.z, asx, asy, ad);
                 cam.projectCached(b.x, b.y, b.z, bsx, bsy, bd);
-                canvas.drawTriangle(ccsx, ccsy, ccsd,
-                                    asx, asy, ad,
-                                    bsx, bsy, bd, color);
+                triBatch->push_back({{ccsx, asx, bsx},
+                                     {ccsy, asy, bsy},
+                                     {ccsd, ad, bd}, color});
             }
         };
 

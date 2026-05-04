@@ -5,11 +5,14 @@
 #include "font_data.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <thread>
+#include <vector>
 #include <ncurses.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -237,6 +240,204 @@ void PixelCanvas::drawTriangle(float x0, float y0, float z0,
             setPixel(px, py, cr, cg, cb);
             colorIds_[static_cast<size_t>(py) * pixW_ + px] = static_cast<int8_t>(colorPair);
         }
+    }
+}
+
+// Tile-binned, thread-parallel batch rasterizer.
+//
+// 1. Project (already in screen space) + flat-shade + AABB-clip every
+//    triangle once. Triangles whose bounding box falls outside the
+//    framebuffer are dropped here.
+// 2. Bin each surviving triangle into the 64×64 tiles its bounding box
+//    overlaps.
+// 3. Walk tiles in parallel; tiles are disjoint so workers writing to
+//    the shared rgb_ / zbuf_ / colorIds_ buffers never touch the same
+//    pixel. Each tile clamps the per-triangle inner loop to its own
+//    rectangle, so a triangle straddling several tiles is only
+//    rasterized N times where N is the number of tiles it covers.
+// 4. After workers finish, fold the per-tile zMin / zMax into the
+//    canvas-wide min/max used by the depth-fog post-pass.
+void PixelCanvas::drawTriangleBatch(const TriangleSpan* tris,
+                                    std::size_t count) {
+    if (count == 0 || pixW_ <= 0 || pixH_ <= 0) return;
+
+    constexpr int TILE = 64;
+    constexpr float kEdgeEps = -1e-4f;
+
+    const int numTilesX = (pixW_ + TILE - 1) / TILE;
+    const int numTilesY = (pixH_ + TILE - 1) / TILE;
+    const int numTiles = numTilesX * numTilesY;
+
+    struct ProjTri {
+        float x[3], y[3], z[3];
+        uint8_t cr, cg, cb;
+        int8_t colorPair;
+        int minX, maxX, minY, maxY;
+    };
+
+    std::vector<ProjTri> projected;
+    projected.reserve(count);
+    std::vector<std::vector<uint32_t>> bins(numTiles);
+
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& t = tris[i];
+
+        // Force CCW winding so the inside-test in the inner loop can use
+        // a single sign convention. The shader is two-sided, so flipping
+        // an implicit normal direction has no visible effect.
+        ProjTri p{};
+        float denom = (t.y[1] - t.y[2]) * (t.x[0] - t.x[2])
+                    + (t.x[2] - t.x[1]) * (t.y[0] - t.y[2]);
+        if (std::abs(denom) < 1e-6f) continue;
+        if (denom < 0.0f) {
+            p.x[0] = t.x[0]; p.y[0] = t.y[0]; p.z[0] = t.z[0];
+            p.x[1] = t.x[2]; p.y[1] = t.y[2]; p.z[1] = t.z[2];
+            p.x[2] = t.x[1]; p.y[2] = t.y[1]; p.z[2] = t.z[1];
+        } else {
+            for (int k = 0; k < 3; ++k) {
+                p.x[k] = t.x[k]; p.y[k] = t.y[k]; p.z[k] = t.z[k];
+            }
+        }
+
+        // Flat-shade once (matches the per-triangle path's lighting).
+        float ax = p.x[1] - p.x[0], ay = p.y[1] - p.y[0], az = p.z[1] - p.z[0];
+        float bx = p.x[2] - p.x[0], by = p.y[2] - p.y[0], bz = p.z[2] - p.z[0];
+        float nx = ay * bz - az * by;
+        float ny = az * bx - ax * bz;
+        float nz = ax * by - ay * bx;
+        float nLen = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (nLen > 1e-6f) { nx /= nLen; ny /= nLen; nz /= nLen; }
+
+        float dot = -0.4f * nx - 0.4f * ny + 0.82f * nz;
+        float halfLambert = std::abs(dot) * 0.5f + 0.5f;
+        float intensity = 0.2f + 0.8f * halfLambert;
+
+        auto base = colorPairToRGB(t.colorPair);
+        p.cr = static_cast<uint8_t>(std::min(255.0f, base.r * intensity));
+        p.cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
+        p.cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
+        p.colorPair = static_cast<int8_t>(t.colorPair);
+
+        int aabMinX = static_cast<int>(std::min({p.x[0], p.x[1], p.x[2]}));
+        int aabMaxX = static_cast<int>(std::max({p.x[0], p.x[1], p.x[2]})) + 1;
+        int aabMinY = static_cast<int>(std::min({p.y[0], p.y[1], p.y[2]}));
+        int aabMaxY = static_cast<int>(std::max({p.y[0], p.y[1], p.y[2]})) + 1;
+
+        p.minX = std::max(0, aabMinX);
+        p.maxX = std::min(pixW_ - 1, aabMaxX);
+        p.minY = std::max(0, aabMinY);
+        p.maxY = std::min(pixH_ - 1, aabMaxY);
+        if (p.minX > p.maxX || p.minY > p.maxY) continue;
+
+        uint32_t triIdx = static_cast<uint32_t>(projected.size());
+        projected.push_back(p);
+
+        int t0x = p.minX / TILE;
+        int t1x = p.maxX / TILE;
+        int t0y = p.minY / TILE;
+        int t1y = p.maxY / TILE;
+        for (int ty = t0y; ty <= t1y; ++ty) {
+            for (int tx = t0x; tx <= t1x; ++tx) {
+                bins[ty * numTilesX + tx].push_back(triIdx);
+            }
+        }
+    }
+
+    if (projected.empty()) return;
+
+    std::vector<float> tileZMin(numTiles, std::numeric_limits<float>::max());
+    std::vector<float> tileZMax(numTiles, std::numeric_limits<float>::lowest());
+
+    auto rasterizeTile = [&](int tileIdx) {
+        const auto& bin = bins[tileIdx];
+        if (bin.empty()) return;
+
+        int tx = tileIdx % numTilesX;
+        int ty = tileIdx / numTilesX;
+        int xs = tx * TILE;
+        int ys = ty * TILE;
+        int xe = std::min(xs + TILE - 1, pixW_ - 1);
+        int ye = std::min(ys + TILE - 1, pixH_ - 1);
+
+        float lZMin = std::numeric_limits<float>::max();
+        float lZMax = std::numeric_limits<float>::lowest();
+
+        for (uint32_t idx : bin) {
+            const auto& p = projected[idx];
+
+            int minX = std::max(xs, p.minX);
+            int maxX = std::min(xe, p.maxX);
+            int minY = std::max(ys, p.minY);
+            int maxY = std::min(ye, p.maxY);
+            if (minX > maxX || minY > maxY) continue;
+
+            float denom = (p.y[1] - p.y[2]) * (p.x[0] - p.x[2])
+                        + (p.x[2] - p.x[1]) * (p.y[0] - p.y[2]);
+            if (std::abs(denom) < 1e-6f) continue;
+            float invDenom = 1.0f / denom;
+
+            float u_x_step  = (p.y[1] - p.y[2]) * invDenom;
+            float v_x_step  = (p.y[2] - p.y[0]) * invDenom;
+            float u_y_coeff = (p.x[2] - p.x[1]) * invDenom;
+            float v_y_coeff = (p.x[0] - p.x[2]) * invDenom;
+
+            for (int py = minY; py <= maxY; ++py) {
+                float fpy = static_cast<float>(py) + 0.5f;
+                float dy  = fpy - p.y[2];
+                float u_y = u_y_coeff * dy;
+                float v_y = v_y_coeff * dy;
+
+                for (int px = minX; px <= maxX; ++px) {
+                    float fpx = static_cast<float>(px) + 0.5f;
+                    float dx  = fpx - p.x[2];
+
+                    float u = u_x_step * dx + u_y;
+                    float v = v_x_step * dx + v_y;
+                    float w = 1.0f - u - v;
+                    if (u < kEdgeEps || v < kEdgeEps || w < kEdgeEps) continue;
+
+                    float depth = u * p.z[0] + v * p.z[1] + w * p.z[2];
+                    if (!zbuf_.testAndSet(px, py, depth)) continue;
+                    if (depth < lZMin) lZMin = depth;
+                    if (depth > lZMax) lZMax = depth;
+
+                    setPixel(px, py, p.cr, p.cg, p.cb);
+                    colorIds_[static_cast<size_t>(py) * pixW_ + px] = p.colorPair;
+                }
+            }
+        }
+
+        tileZMin[tileIdx] = lZMin;
+        tileZMax[tileIdx] = lZMax;
+    };
+
+    unsigned hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 1;
+    int numThreads = static_cast<int>(std::min(hw, 8u));
+
+    // Below this many tiles or triangles, threading overhead dominates.
+    bool serial = (numThreads < 2 || numTiles < 4 || projected.size() < 200);
+
+    if (serial) {
+        for (int t = 0; t < numTiles; ++t) rasterizeTile(t);
+    } else {
+        std::atomic<int> nextTile{0};
+        auto worker = [&]() {
+            while (true) {
+                int t = nextTile.fetch_add(1, std::memory_order_relaxed);
+                if (t >= numTiles) break;
+                rasterizeTile(t);
+            }
+        };
+        std::vector<std::thread> threads;
+        threads.reserve(numThreads);
+        for (int i = 0; i < numThreads; ++i) threads.emplace_back(worker);
+        for (auto& th : threads) th.join();
+    }
+
+    for (int i = 0; i < numTiles; ++i) {
+        if (tileZMin[i] < zMin_) zMin_ = tileZMin[i];
+        if (tileZMax[i] > zMax_) zMax_ = tileZMax[i];
     }
 }
 

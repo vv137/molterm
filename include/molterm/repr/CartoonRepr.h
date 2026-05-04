@@ -41,7 +41,8 @@ private:
 
     void renderChain(const std::vector<CaAtom>& cas, size_t start, size_t end,
                      int subdiv, int coilSegs, const RenderContext& ctx,
-                     const Camera& cam, Canvas& canvas) const;
+                     const Camera& cam, Canvas& canvas,
+                     std::vector<TriangleSpan>* triBatch) const;
     void renderNucleicBases(const MolObject& mol, const RenderContext& ctx,
                             const Camera& cam, Canvas& canvas) const;
 

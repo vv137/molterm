@@ -69,6 +69,15 @@ void Canvas::bresenham(int x0, int y0, float d0,
     }
 }
 
+void Canvas::drawTriangleBatch(const TriangleSpan* tris, std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& t = tris[i];
+        drawTriangle(t.x[0], t.y[0], t.z[0],
+                     t.x[1], t.y[1], t.z[1],
+                     t.x[2], t.y[2], t.z[2], t.colorPair);
+    }
+}
+
 void Canvas::drawTriangle(float x0, float y0, float z0,
                           float x1, float y1, float z1,
                           float x2, float y2, float z2,

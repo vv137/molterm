@@ -158,11 +158,13 @@ target_include_directories(molterm PRIVATE
 )
 
 find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
 
 target_link_libraries(molterm PRIVATE
     gemmi::gemmi_cpp
     tomlplusplus::tomlplusplus
     ZLIB::ZLIB
+    Threads::Threads
     $<IF:$<BOOL:${NCURSESW_FOUND}>,PkgConfig::NCURSESW,${CURSES_LIBRARIES}>
 )
 
