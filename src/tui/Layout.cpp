@@ -56,9 +56,23 @@ void Layout::toggleSeqBar() {
     updateLayout();
 }
 
+void Layout::setSeqBar(bool visible) {
+    if (seqBarVisible_ != visible) {
+        seqBarVisible_ = visible;
+        updateLayout();
+    }
+}
+
 void Layout::toggleSeqBarWrap() {
     seqBarWrap_ = !seqBarWrap_;
     updateLayout();
+}
+
+void Layout::setSeqBarWrap(bool wrap) {
+    if (seqBarWrap_ != wrap) {
+        seqBarWrap_ = wrap;
+        updateLayout();
+    }
 }
 
 void Layout::setSeqBarHeight(int h) {

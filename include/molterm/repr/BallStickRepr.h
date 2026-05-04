@@ -12,6 +12,7 @@ public:
     void render(const MolObject& mol, const Camera& cam,
                 Canvas& canvas) override;
 
+    int ballRadius() const { return ballRadius_; }
     void setBallRadius(int r) { ballRadius_ = r; }
 
 private:

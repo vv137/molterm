@@ -145,7 +145,7 @@ from a script):
 :set ch  1.6                    # helix half-width  Å           (def 1.30)
 :set csh 1.8                    # sheet half-width  Å           (def 1.50)
 :set cl  0.55                   # loop  tube radius Å           (def 0.40)
-:set outline                    # silhouette outlines (pixel)
+:set outline on                 # silhouette outlines (pixel)
 :set ot 0.2                     # outline depth threshold       (def 0.3)
 :set od 0.2                     # outline darken (0=black)      (def 0.3)
 :set fog 0.4                    # atmospheric depth fog 0-1     (def 0.35)
@@ -296,18 +296,21 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set fog <0-1>                  " Depth fog strength (default: 0.35)
-:set outline                    " Toggle silhouette outlines
+:set outline on|off             " Silhouette outlines
 :set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
 :set od|outline_darken <n>      " Outline darkness (default: 0.3, 0=black)
 :set ch|cartoon_helix <n>       " Cartoon helix radius (default: 0.8)
 :set csh|cartoon_sheet <n>      " Cartoon sheet width (default: 0.7)
 :set cl|cartoon_loop <n>        " Cartoon loop radius (default: 0.25)
 :set csd|cartoon_subdiv <n>     " Cartoon spline subdivisions (default: 8)
-:set seqbar                     " Toggle sequence bar
-:set seqwrap                    " Toggle sequence wrap mode
+:set panel on|off                " Object panel visibility
+:set auto_center on|off          " Auto-center camera on load
+:set seqbar on|off               " Sequence bar visibility
+:set seqwrap on|off              " Sequence bar wrap mode
 :set ic|interface_color <name>   " Interface overlay color (default: yellow)
 :set it|interface_thickness <n>  " Interface line thickness in pixel mode (1-4, default: 2)
 :set bt|wt|br <n>               " Backbone/wireframe thickness, ball radius
+:get <option>                    " Query current value of any :set option (for scripting)
 :info                           " Show atom/bond count
 :q                              " Quit
 ```
@@ -411,7 +414,7 @@ If `~/.molterm/init.mt` exists, MolTerm runs it on startup right after commands 
 # ~/.molterm/init.mt
 :set renderer pixel
 :set fog 0.4
-:set outline
+:set outline on
 ```
 
 </details>
@@ -689,7 +692,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **F key cycling** — hidden → scroll → wrap → hidden
 - [x] **Auto-scroll** — centers on inspected/clicked residue
 - [x] **Chain switcher** — `{`/`}` to cycle active chain in scroll mode
-- [x] **Wrap mode** — `:set seqwrap` for multi-row display (height capped at screen/4)
+- [x] **Wrap mode** — `:set seqwrap on` for multi-row display (height capped at screen/4)
 - [x] **Selection highlight** — `$sele` atoms shown in reverse video
 - [x] **Color by scheme** — SS, chain coloring on sequence text
 - [x] **Click to navigate** — click residue in seqbar to center camera on it
@@ -701,7 +704,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Heteroatom coloring** — `ce` / `:color element` now colors N/O/S/P by element, carbon unchanged
 - [x] **Command line editing** — `Left`/`Right` cursor, `Home`/`End`, `Del`, fast input (no viewport re-render)
 - [x] **Canvas::drawTriangle** — scanline rasterizer with bounding box clamp (all canvases)
-- [x] **Silhouette outlines** — depth edge detection + 2px thick dark outlines (pixel mode, `:set outline`)
+- [x] **Silhouette outlines** — depth edge detection + 2px thick dark outlines (pixel mode, `:set outline on`)
 - [x] **Lambert shading** — pixel triangle 20-100% intensity, braille stamp radius 65-100%
 - [x] **Cartoon braille** — SS-dependent thick lines (helix=1.2, sheet=1.8 wide, loop=0.4), sheet arrowheads
 - [x] **Configurable parameters** — `:set outline/ot/od`, `:set ch/csh/cl/csd` for cartoon radii/subdivisions

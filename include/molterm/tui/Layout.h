@@ -52,8 +52,10 @@ public:
 
     bool seqBarVisible() const { return seqBarVisible_; }
     void toggleSeqBar();
+    void setSeqBar(bool visible);
     bool seqBarWrap() const { return seqBarWrap_; }
     void toggleSeqBarWrap();
+    void setSeqBarWrap(bool wrap);
     void setSeqBarHeight(int h);
 
     int viewportWidth() const;

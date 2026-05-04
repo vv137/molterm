@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <signal.h>
 
 namespace molterm {
@@ -62,6 +63,14 @@ static const char* pickModeName(PickMode pm) {
         case PickMode::SelectChain:   return "SEL:CHAIN";
     }
     return "?";
+}
+
+// Parse a bool option value for :set commands.
+// Accepts on/1/true/yes (true), off/0/false/no (false). Empty / unknown returns std::nullopt.
+static std::optional<bool> parseBool(const std::string& v) {
+    if (v == "on" || v == "1" || v == "true" || v == "yes")  return true;
+    if (v == "off" || v == "0" || v == "false" || v == "no") return false;
+    return std::nullopt;
 }
 
 // Global resize flag
@@ -801,7 +810,7 @@ void Application::handleAction(Action action) {
                         std::string cs(c);
                         if (cs.find(partial) == 0) candidates.push_back(cs);
                     }
-                } else if (cmdName == "set") {
+                } else if (cmdName == "set" || cmdName == "get") {
                     for (const auto& o : {"renderer", "backbone_thickness", "bt",
                                            "wireframe_thickness", "wt", "ball_radius", "br",
                                            "pan_speed", "ps", "fog", "outline", "outline_threshold", "ot",
@@ -2151,7 +2160,10 @@ void Application::registerCommands() {
         if (cmd.args.empty()) return {false, "Usage: :set <option> [value]"};
         const auto& opt = cmd.args[0];
         if (opt == "panel") {
-            app.layout().togglePanel();
+            if (cmd.args.size() < 2) return {false, "Usage: :set panel on|off"};
+            auto v = parseBool(cmd.args[1]);
+            if (!v) return {false, "Usage: :set panel on|off"};
+            app.layout().setPanel(*v);
             app.tabs().currentTab().viewState().panelVisible = app.layout().panelVisible();
             return {true, app.layout().panelVisible() ? "Panel visible" : "Panel hidden"};
         }
@@ -2221,8 +2233,11 @@ void Application::registerCommands() {
             return {true, "Fog strength set to " + std::to_string(val)};
         }
         if (opt == "outline") {
-            app.setOutlineEnabled(!app.outlineEnabled());
-            return {true, std::string("Outline: ") + (app.outlineEnabled() ? "on" : "off")};
+            if (cmd.args.size() < 2) return {false, "Usage: :set outline on|off"};
+            auto v = parseBool(cmd.args[1]);
+            if (!v) return {false, "Usage: :set outline on|off"};
+            app.setOutlineEnabled(*v);
+            return {true, std::string("Outline: ") + (*v ? "on" : "off")};
         }
         if (opt == "outline_threshold" || opt == "ot") {
             if (cmd.args.size() < 2) return {false, "Usage: :set outline_threshold <0.0-1.0>"};
@@ -2291,11 +2306,17 @@ void Application::registerCommands() {
             return {true, "Backbone fallback cutoff: " + cmd.args[1]};
         }
         if (opt == "auto_center") {
-            app.setAutoCenter(!app.autoCenter());
-            return {true, std::string("Auto-center on load: ") + (app.autoCenter() ? "on" : "off")};
+            if (cmd.args.size() < 2) return {false, "Usage: :set auto_center on|off"};
+            auto v = parseBool(cmd.args[1]);
+            if (!v) return {false, "Usage: :set auto_center on|off"};
+            app.setAutoCenter(*v);
+            return {true, std::string("Auto-center on load: ") + (*v ? "on" : "off")};
         }
         if (opt == "seqbar") {
-            app.layout().toggleSeqBar();
+            if (cmd.args.size() < 2) return {false, "Usage: :set seqbar on|off"};
+            auto v = parseBool(cmd.args[1]);
+            if (!v) return {false, "Usage: :set seqbar on|off"};
+            app.layout().setSeqBar(*v);
             auto& vs = app.tabs().currentTab().viewState();
             vs.seqBarVisible = app.layout().seqBarVisible();
             if (app.canvas()) app.canvas()->invalidate();
@@ -2303,7 +2324,10 @@ void Application::registerCommands() {
             return {true, app.layout().seqBarVisible() ? "Sequence bar visible" : "Sequence bar hidden"};
         }
         if (opt == "seqwrap") {
-            app.layout().toggleSeqBarWrap();
+            if (cmd.args.size() < 2) return {false, "Usage: :set seqwrap on|off"};
+            auto v = parseBool(cmd.args[1]);
+            if (!v) return {false, "Usage: :set seqwrap on|off"};
+            app.layout().setSeqBarWrap(*v);
             auto& vs = app.tabs().currentTab().viewState();
             vs.seqBarWrap = app.layout().seqBarWrap();
             if (app.canvas()) app.canvas()->invalidate();
@@ -2326,18 +2350,101 @@ void Application::registerCommands() {
         if (opt == "interface_classify" || opt == "iclass") {
             if (cmd.args.size() < 2)
                 return {false, "Usage: :set interface_classify on|off"};
-            const std::string& v = cmd.args[1];
-            bool on = (v == "on" || v == "1" || v == "true" || v == "yes");
-            bool off = (v == "off" || v == "0" || v == "false" || v == "no");
-            if (!on && !off)
-                return {false, "Usage: :set interface_classify on|off"};
-            app.interfaceClassify_ = on;
-            return {true, on ? "Interface classification: on (cyan H-bond, "
+            auto v = parseBool(cmd.args[1]);
+            if (!v) return {false, "Usage: :set interface_classify on|off"};
+            app.interfaceClassify_ = *v;
+            return {true, *v ? "Interface classification: on (cyan H-bond, "
                                "red salt, yellow hydrophobic, gray other)"
                              : "Interface classification: off (single color)"};
         }
         return {false, "Unknown option: " + opt};
     }, ":set <option> [value]", "Set option");
+
+    // :get — query current value of a :set option (for scripting)
+    cmdRegistry_.registerCmd("get", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :get <option>"};
+        const auto& opt = cmd.args[0];
+        auto onoff = [](bool b) { return std::string(b ? "on" : "off"); };
+
+        if (opt == "panel")        return {true, "panel = " + onoff(app.layout().panelVisible())};
+        if (opt == "outline")      return {true, "outline = " + onoff(app.outlineEnabled())};
+        if (opt == "auto_center")  return {true, "auto_center = " + onoff(app.autoCenter())};
+        if (opt == "seqbar")       return {true, "seqbar = " + onoff(app.layout().seqBarVisible())};
+        if (opt == "seqwrap")      return {true, "seqwrap = " + onoff(app.layout().seqBarWrap())};
+        if (opt == "interface_classify" || opt == "iclass")
+            return {true, "interface_classify = " + onoff(app.interfaceClassify_)};
+
+        if (opt == "renderer" || opt == "render") {
+            const char* n = "?";
+            switch (app.rendererType()) {
+                case RendererType::Ascii:   n = "ascii";   break;
+                case RendererType::Braille: n = "braille"; break;
+                case RendererType::Block:   n = "block";   break;
+                case RendererType::Pixel:   n = "pixel";   break;
+            }
+            return {true, std::string("renderer = ") + n};
+        }
+        if (opt == "fog")              return {true, "fog = " + std::to_string(app.fogStrength())};
+        if (opt == "outline_threshold" || opt == "ot")
+            return {true, "outline_threshold = " + std::to_string(app.outlineThreshold())};
+        if (opt == "outline_darken" || opt == "od")
+            return {true, "outline_darken = " + std::to_string(app.outlineDarken())};
+        if (opt == "pan_speed" || opt == "ps")
+            return {true, "pan_speed = " + std::to_string(app.tabs().currentTab().camera().panSpeed())};
+        if (opt == "backbone_thickness" || opt == "bt") {
+            auto* bb = dynamic_cast<BackboneRepr*>(app.getRepr(ReprType::Backbone));
+            if (!bb) return {false, "Backbone repr not found"};
+            return {true, "backbone_thickness = " + std::to_string(bb->thickness())};
+        }
+        if (opt == "wireframe_thickness" || opt == "wt") {
+            auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe));
+            if (!wf) return {false, "Wireframe repr not found"};
+            return {true, "wireframe_thickness = " + std::to_string(wf->thickness())};
+        }
+        if (opt == "ball_radius" || opt == "br") {
+            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
+            if (!bs) return {false, "BallStick repr not found"};
+            return {true, "ball_radius = " + std::to_string(bs->ballRadius())};
+        }
+        if (opt == "cartoon_helix" || opt == "ch") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_helix = " + std::to_string(ct->helixRadius())};
+        }
+        if (opt == "cartoon_sheet" || opt == "csh") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_sheet = " + std::to_string(ct->sheetRadius())};
+        }
+        if (opt == "cartoon_loop" || opt == "cl") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_loop = " + std::to_string(ct->loopRadius())};
+        }
+        if (opt == "cartoon_subdiv" || opt == "csd") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_subdiv = " + std::to_string(ct->subdivisions())};
+        }
+        if (opt == "nucleic_backbone" || opt == "nb") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            const char* n = (ct->nucleicBackbone() == CartoonRepr::NucleicBackbone::P) ? "p" : "c4";
+            return {true, std::string("nucleic_backbone = ") + n};
+        }
+        if (opt == "lod_medium")
+            return {true, "lod_medium = " + std::to_string(Representation::lodMediumThreshold)};
+        if (opt == "lod_low")
+            return {true, "lod_low = " + std::to_string(Representation::lodLowThreshold)};
+        if (opt == "backbone_cutoff")
+            return {true, "backbone_cutoff = " + std::to_string(Representation::backboneCutoff)};
+        if (opt == "interface_color" || opt == "ic")
+            return {true, "interface_color = " + std::to_string(app.interfaceColor_)};
+        if (opt == "interface_thickness" || opt == "it")
+            return {true, "interface_thickness = " + std::to_string(app.interfaceThickness_)};
+
+        return {false, "Unknown option: " + opt};
+    }, ":get <option>", "Get current value of a :set option");
 
     // :help
     cmdRegistry_.registerCmd("help", [](Application&, const ParsedCommand&) -> ExecResult {
