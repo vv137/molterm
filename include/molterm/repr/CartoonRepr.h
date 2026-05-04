@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "molterm/repr/Representation.h"
@@ -51,12 +52,51 @@ private:
         bool hasHint;
     };
 
-    void renderChain(const std::vector<CaAtom>& cas, size_t start, size_t end,
-                     int subdiv, int coilSegs, const RenderContext& ctx,
-                     const Camera& cam, Canvas& canvas,
-                     std::vector<TriangleSpan>* triBatch) const;
     void renderNucleicBases(const MolObject& mol, const RenderContext& ctx,
                             const Camera& cam, Canvas& canvas) const;
+
+    // ── Camera-independent geometry cache ────────────────────────────────
+    // Catmull-Rom spline + parallel-transport frame + sheet-hint blend
+    // depend only on atom positions, SS, coloring, and repr params — not
+    // on the camera. We rebuild this when a fingerprint key changes, so a
+    // spinning animation reuses the same buffers across all frames.
+    struct CachedSpine {
+        std::vector<float> x, y, z;
+        std::vector<SSType> ss;
+        std::vector<int>   color;
+        std::vector<float> arrowFrac;
+        std::vector<float> tx, ty, tz;
+        std::vector<float> nx, ny, nz;
+        std::vector<float> bx, by, bz;
+    };
+    struct ChainSpan { std::string chainId; int start, end; };
+    struct CacheKey {
+        const MolObject* mol = nullptr;
+        int activeState = -1;
+        std::size_t atomCount = 0;
+        int subdiv = 0;
+        int coilSegments = 0;
+        float helixR = 0.0f, sheetR = 0.0f, loopR = 0.0f;
+        NucleicBackbone nb = NucleicBackbone::C4;
+        int colorScheme = -1;
+        std::size_t atomColorsSize = 0;
+        std::uint64_t atomColorsHash = 0;
+        bool perAtomRepr = false;
+        std::uint64_t visMaskHash = 0;
+        bool operator==(const CacheKey& o) const;
+        bool operator!=(const CacheKey& o) const { return !(*this == o); }
+    };
+
+    mutable CacheKey cacheKey_;
+    mutable CachedSpine cachedSpine_;
+    mutable std::vector<ChainSpan> cachedChains_;
+    mutable bool cacheValid_ = false;
+
+    void rebuildCache(const MolObject& mol, const RenderContext& ctx,
+                      int subdiv, int coilSegments) const;
+    void drawChainCached(int chainStart, int chainEnd, int coilSegments,
+                         const Camera& cam, Canvas& canvas,
+                         std::vector<TriangleSpan>* triBatch) const;
 
     // Cartoon defaults follow ProteinView's chunkier sizing so helices
     // and sheets read as solid 3-D ribbons rather than thin strips.

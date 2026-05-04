@@ -2,6 +2,8 @@
 #include "molterm/repr/ReprUtil.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace molterm {
@@ -10,6 +12,33 @@ static bool isNucleotide(const std::string& rn) {
     return rn == "A" || rn == "G" || rn == "C" || rn == "U" ||
            rn == "DA" || rn == "DG" || rn == "DC" || rn == "DT" || rn == "DU" ||
            rn == "ADE" || rn == "GUA" || rn == "CYT" || rn == "URA" || rn == "THY";
+}
+
+// FNV-1a 64-bit. Cheap fingerprint for cache invalidation; we don't care
+// about cryptographic strength, only that ~all real changes flip a bit.
+static std::uint64_t fnv1a64(const void* data, std::size_t bytes) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    std::uint64_t h = 1469598103934665603ULL;
+    for (std::size_t i = 0; i < bytes; ++i) {
+        h ^= p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+bool CartoonRepr::CacheKey::operator==(const CacheKey& o) const {
+    return mol == o.mol &&
+           activeState == o.activeState &&
+           atomCount == o.atomCount &&
+           subdiv == o.subdiv &&
+           coilSegments == o.coilSegments &&
+           helixR == o.helixR && sheetR == o.sheetR && loopR == o.loopR &&
+           nb == o.nb &&
+           colorScheme == o.colorScheme &&
+           atomColorsSize == o.atomColorsSize &&
+           atomColorsHash == o.atomColorsHash &&
+           perAtomRepr == o.perAtomRepr &&
+           visMaskHash == o.visMaskHash;
 }
 
 // ─── Main render entry point ─────────────────────────────────────────────────
@@ -23,239 +52,293 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     int subdiv = adjustLOD(subdivisions_, atoms.size());
     int coilSegments = (atoms.size() > 5000) ? 6 : 12;
 
-    // Collect Cα/P atoms with residue-scoped C→O frame hints (proteins).
-    // Walk each residue once; pick the first visible CA (or P), then look
-    // up backbone C and O within the same residue to compute the carbonyl
-    // direction. Hint is used later to orient β-sheet ribbons.
-    std::vector<CaAtom> cas;
+    // Build cache fingerprint. The cartoon spline + parallel-transport
+    // frame depend only on atoms/SS/coloring/repr params, not the camera —
+    // so a spinning animation (camera-only changes) hits the cache.
+    CacheKey key;
+    key.mol = &mol;
+    key.activeState = mol.activeState();
+    key.atomCount = atoms.size();
+    key.subdiv = subdiv;
+    key.coilSegments = coilSegments;
+    key.helixR = helixRadius_;
+    key.sheetR = sheetRadius_;
+    key.loopR = loopRadius_;
+    key.nb = nucleicBackbone_;
+    key.colorScheme = static_cast<int>(mol.colorScheme());
     {
-        int n = static_cast<int>(atoms.size());
-        int i = 0;
-        while (i < n) {
-            int rs = i;
-            while (i < n &&
-                   atoms[i].chainId == atoms[rs].chainId &&
-                   atoms[i].resSeq == atoms[rs].resSeq &&
-                   atoms[i].insCode == atoms[rs].insCode) {
-                ++i;
-            }
-            int re = i;
-
-            // Pick the backbone tracer atom for this residue:
-            //   protein  → CA
-            //   nucleic  → C4' (default) or P, per `nucleicBackbone_`
-            // The non-chosen alternative is kept as a fallback so a
-            // missing primary atom doesn't drop the whole residue.
-            const std::string& resName = atoms[rs].resName;
-            bool nucleic = isNucleotide(resName);
-            bool wantC4 = (nucleicBackbone_ == NucleicBackbone::C4);
-
-            auto isPrimaryBackbone = [&](const std::string& name) {
-                if (!nucleic) return name == "CA";
-                return wantC4 ? (name == "C4'" || name == "C4*")
-                              : (name == "P");
-            };
-            auto isFallbackBackbone = [&](const std::string& name) {
-                if (!nucleic) return false;
-                return wantC4 ? (name == "P")
-                              : (name == "C4'" || name == "C4*");
-            };
-
-            int caIdx = -1, fbIdx = -1, cIdx = -1, oIdx = -1;
-            for (int j = rs; j < re; ++j) {
-                if (caIdx < 0 && isPrimaryBackbone(atoms[j].name) &&
-                    ctx.visible(j)) {
-                    caIdx = j;
-                }
-                if (caIdx < 0 && fbIdx < 0 &&
-                    isFallbackBackbone(atoms[j].name) && ctx.visible(j)) {
-                    fbIdx = j;
-                }
-                if (atoms[j].name == "C" && cIdx < 0) cIdx = j;
-                if (atoms[j].name == "O" && oIdx < 0) oIdx = j;
-            }
-            if (caIdx < 0) caIdx = fbIdx;
-            if (caIdx < 0) continue;
-
-            float hx = 0.0f, hy = 0.0f, hz = 0.0f;
-            bool hasHint = false;
-            if (cIdx >= 0 && oIdx >= 0) {
-                hx = atoms[oIdx].x - atoms[cIdx].x;
-                hy = atoms[oIdx].y - atoms[cIdx].y;
-                hz = atoms[oIdx].z - atoms[cIdx].z;
-                if (normalize3(hx, hy, hz) > 1e-6f) hasHint = true;
-            }
-
-            cas.push_back({caIdx, atoms[caIdx].x, atoms[caIdx].y, atoms[caIdx].z,
-                           atoms[caIdx].ssType, atoms[caIdx].chainId,
-                           hx, hy, hz, hasHint});
+        const auto& ac = mol.atomColors();
+        key.atomColorsSize = ac.size();
+        if (!ac.empty()) {
+            key.atomColorsHash = fnv1a64(ac.data(), ac.size() * sizeof(int));
         }
     }
+    key.perAtomRepr = mol.hasPerAtomRepr();
+    if (key.perAtomRepr && !ctx.atomVis.empty()) {
+        // std::vector<bool> is bit-packed and exposes no .data(); fold one
+        // bit per atom into the FNV state. ~35k atoms ≈ 35k FNV rounds ≈
+        // a few hundred µs, comfortably under the cache rebuild cost.
+        std::uint64_t h = 1469598103934665603ULL;
+        for (std::size_t i = 0; i < ctx.atomVis.size(); ++i) {
+            h ^= ctx.atomVis[i] ? 1ULL : 0ULL;
+            h *= 1099511628211ULL;
+        }
+        key.visMaskHash = h;
+    }
 
-    // Process each chain. When the canvas can rasterize triangles
-    // (pixel mode), accumulate them into a single batch so the canvas
-    // can bin them into tiles and dispatch in parallel; otherwise the
-    // chain falls back to the line/circle path which writes to the
-    // canvas immediately.
+    if (!cacheValid_ || key != cacheKey_) {
+        rebuildCache(mol, ctx, subdiv, coilSegments);
+        cacheKey_ = key;
+        cacheValid_ = true;
+    }
+
+    // Per-frame: walk cached chain spans and rasterize. When the canvas
+    // can rasterize triangles (pixel mode), accumulate them into a single
+    // batch so the canvas can bin them into tiles and dispatch in
+    // parallel; otherwise the chain falls back to circle-stamped lines.
     bool useTriangles = (canvas.scaleX() >= 8);
     std::vector<TriangleSpan> triBatch;
-    if (useTriangles) triBatch.reserve(cas.size() * subdiv * 8);
+    if (useTriangles) triBatch.reserve(cachedSpine_.x.size() * 8);
 
-    size_t cStart = 0;
-    while (cStart < cas.size()) {
-        size_t cEnd = cStart + 1;
-        while (cEnd < cas.size() && cas[cEnd].chain == cas[cStart].chain) ++cEnd;
-        renderChain(cas, cStart, cEnd, subdiv, coilSegments, ctx, cam, canvas,
-                    useTriangles ? &triBatch : nullptr);
-        cStart = cEnd;
+    for (const auto& span : cachedChains_) {
+        drawChainCached(span.start, span.end, coilSegments, cam, canvas,
+                        useTriangles ? &triBatch : nullptr);
     }
 
     if (useTriangles && !triBatch.empty()) {
         canvas.drawTriangleBatch(triBatch.data(), triBatch.size());
     }
 
-    // Nucleic acid base ladders
+    // Nucleic acid base ladders (not currently cached — separate geometry path)
     renderNucleicBases(mol, ctx, cam, canvas);
 }
 
-// ─── Per-chain spline + rendering ────────────────────────────────────────────
+// ─── Cache rebuild: camera-independent geometry ──────────────────────────────
 
-void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
-                              size_t end, int subdiv, int coilSegments,
-                              const RenderContext& ctx,
-                              const Camera& cam, Canvas& canvas,
-                              std::vector<TriangleSpan>* triBatch) const {
-    int cLen = static_cast<int>(end - start);
-    if (cLen < 2) return;
+void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
+                               int subdiv, int coilSegments) const {
+    (void)mol;
+    (void)coilSegments;  // affects only ring construction, not cache geometry
+    const auto& atoms = ctx.atoms;
 
-    // Step 1: Generate spline points
-    std::vector<SplinePoint> spine;
-    spine.reserve(cLen * subdiv + 1);
+    auto& C = cachedSpine_;
+    C.x.clear(); C.y.clear(); C.z.clear();
+    C.ss.clear(); C.color.clear(); C.arrowFrac.clear();
+    C.tx.clear(); C.ty.clear(); C.tz.clear();
+    C.nx.clear(); C.ny.clear(); C.nz.clear();
+    C.bx.clear(); C.by.clear(); C.bz.clear();
+    cachedChains_.clear();
 
-    for (int seg = 0; seg < cLen - 1; ++seg) {
-        int i0 = static_cast<int>(start) + std::max(0, seg - 1);
-        int i1 = static_cast<int>(start) + seg;
-        int i2 = static_cast<int>(start) + std::min(seg + 1, cLen - 1);
-        int i3 = static_cast<int>(start) + std::min(seg + 2, cLen - 1);
-
-        int col1 = ctx.colorFor(cas[i1].idx);
-        int col2 = ctx.colorFor(cas[i2].idx);
-
-        // Detect sheet→non-sheet transition for arrowhead
-        bool isSheetEnd = (cas[i1].ss == SSType::Sheet && cas[i2].ss != SSType::Sheet);
-
-        for (int s = 0; s < subdiv; ++s) {
-            float t = static_cast<float>(s) / static_cast<float>(subdiv);
-            float af = isSheetEnd ? t : -1.0f;
-            const auto& near = (t < 0.5f) ? cas[i1] : cas[i2];
-            spine.push_back({
-                catmullRom(cas[i0].x, cas[i1].x, cas[i2].x, cas[i3].x, t),
-                catmullRom(cas[i0].y, cas[i1].y, cas[i2].y, cas[i3].y, t),
-                catmullRom(cas[i0].z, cas[i1].z, cas[i2].z, cas[i3].z, t),
-                near.ss,
-                (t < 0.5f) ? col1 : col2,
-                af,
-                near.hintX, near.hintY, near.hintZ, near.hasHint
-            });
+    // ── Phase A: collect Cα/P per residue with C→O hint ──────────────────
+    std::vector<CaAtom> cas;
+    int n = static_cast<int>(atoms.size());
+    int i = 0;
+    while (i < n) {
+        int rs = i;
+        while (i < n &&
+               atoms[i].chainId == atoms[rs].chainId &&
+               atoms[i].resSeq == atoms[rs].resSeq &&
+               atoms[i].insCode == atoms[rs].insCode) {
+            ++i;
         }
+        int re = i;
+
+        const std::string& resName = atoms[rs].resName;
+        bool nucleic = isNucleotide(resName);
+        bool wantC4 = (nucleicBackbone_ == NucleicBackbone::C4);
+
+        auto isPrimaryBackbone = [&](const std::string& name) {
+            if (!nucleic) return name == "CA";
+            return wantC4 ? (name == "C4'" || name == "C4*")
+                          : (name == "P");
+        };
+        auto isFallbackBackbone = [&](const std::string& name) {
+            if (!nucleic) return false;
+            return wantC4 ? (name == "P")
+                          : (name == "C4'" || name == "C4*");
+        };
+
+        int caIdx = -1, fbIdx = -1, cIdx = -1, oIdx = -1;
+        for (int j = rs; j < re; ++j) {
+            if (caIdx < 0 && isPrimaryBackbone(atoms[j].name) &&
+                ctx.visible(j)) {
+                caIdx = j;
+            }
+            if (caIdx < 0 && fbIdx < 0 &&
+                isFallbackBackbone(atoms[j].name) && ctx.visible(j)) {
+                fbIdx = j;
+            }
+            if (atoms[j].name == "C" && cIdx < 0) cIdx = j;
+            if (atoms[j].name == "O" && oIdx < 0) oIdx = j;
+        }
+        if (caIdx < 0) caIdx = fbIdx;
+        if (caIdx < 0) continue;
+
+        float hx = 0.0f, hy = 0.0f, hz = 0.0f;
+        bool hasHint = false;
+        if (cIdx >= 0 && oIdx >= 0) {
+            hx = atoms[oIdx].x - atoms[cIdx].x;
+            hy = atoms[oIdx].y - atoms[cIdx].y;
+            hz = atoms[oIdx].z - atoms[cIdx].z;
+            if (normalize3(hx, hy, hz) > 1e-6f) hasHint = true;
+        }
+
+        cas.push_back({caIdx, atoms[caIdx].x, atoms[caIdx].y, atoms[caIdx].z,
+                       atoms[caIdx].ssType, atoms[caIdx].chainId,
+                       hx, hy, hz, hasHint});
     }
-    // Last point
-    auto& last = cas[end - 1];
-    spine.push_back({last.x, last.y, last.z, last.ss,
-        ctx.colorFor(last.idx), -1.0f,
-        last.hintX, last.hintY, last.hintZ, last.hasHint});
 
-    int nPts = static_cast<int>(spine.size());
-    if (nPts < 2) return;
+    // ── Phase B: per chain, build local spine + frame, append to cache ──
+    std::size_t cStart = 0;
+    while (cStart < cas.size()) {
+        std::size_t cEnd = cStart + 1;
+        while (cEnd < cas.size() && cas[cEnd].chain == cas[cStart].chain) ++cEnd;
 
-    // Step 2: Compute tangents
-    std::vector<float> tx(nPts), ty(nPts), tz(nPts);
-    for (int i = 0; i < nPts; ++i) {
-        int prev = std::max(0, i - 1), next = std::min(nPts - 1, i + 1);
-        tx[i] = spine[next].x - spine[prev].x;
-        ty[i] = spine[next].y - spine[prev].y;
-        tz[i] = spine[next].z - spine[prev].z;
-        normalize3(tx[i], ty[i], tz[i]);
-    }
+        int cLen = static_cast<int>(cEnd - cStart);
+        if (cLen < 2) { cStart = cEnd; continue; }
 
-    // Step 3: Parallel-transport frame
-    std::vector<float> nx(nPts), ny(nPts), nz(nPts);
-    std::vector<float> bx(nPts), by(nPts), bz(nPts);
+        // Step 1: Catmull-Rom spline (with hint info kept locally).
+        std::vector<SplinePoint> spine;
+        spine.reserve(cLen * subdiv + 1);
 
-    // Initial normal: perpendicular to first tangent
-    if (std::abs(tx[0]) < 0.9f) {
-        cross3(tx[0], ty[0], tz[0], 1, 0, 0, nx[0], ny[0], nz[0]);
-    } else {
-        cross3(tx[0], ty[0], tz[0], 0, 1, 0, nx[0], ny[0], nz[0]);
-    }
-    normalize3(nx[0], ny[0], nz[0]);
-    cross3(tx[0], ty[0], tz[0], nx[0], ny[0], nz[0], bx[0], by[0], bz[0]);
-    normalize3(bx[0], by[0], bz[0]);
+        for (int seg = 0; seg < cLen - 1; ++seg) {
+            int i0 = static_cast<int>(cStart) + std::max(0, seg - 1);
+            int i1 = static_cast<int>(cStart) + seg;
+            int i2 = static_cast<int>(cStart) + std::min(seg + 1, cLen - 1);
+            int i3 = static_cast<int>(cStart) + std::min(seg + 2, cLen - 1);
 
-    // Propagate frame
-    for (int i = 1; i < nPts; ++i) {
-        float dot = nx[i-1]*tx[i] + ny[i-1]*ty[i] + nz[i-1]*tz[i];
-        nx[i] = nx[i-1] - dot * tx[i];
-        ny[i] = ny[i-1] - dot * ty[i];
-        nz[i] = nz[i-1] - dot * tz[i];
-        float l = len3(nx[i], ny[i], nz[i]);
-        if (l < 1e-6f) { nx[i] = nx[i-1]; ny[i] = ny[i-1]; nz[i] = nz[i-1]; }
-        else { nx[i] /= l; ny[i] /= l; nz[i] /= l; }
-        cross3(tx[i], ty[i], tz[i], nx[i], ny[i], nz[i], bx[i], by[i], bz[i]);
-        normalize3(bx[i], by[i], bz[i]);
-    }
+            int col1 = ctx.colorFor(cas[i1].idx);
+            int col2 = ctx.colorFor(cas[i2].idx);
+            bool isSheetEnd = (cas[i1].ss == SSType::Sheet &&
+                               cas[i2].ss != SSType::Sheet);
 
-    // Step 3b: Sheet frame guide.
-    // Within each contiguous β-sheet run, blend the carbonyl C→O hint
-    // (projected perpendicular to the tangent, sign-aligned along the run)
-    // into the binormal at 65 % weight. This makes parallel strands lie
-    // on a consistent plane instead of twisting under parallel-transport.
-    {
-        int k = 0;
-        while (k < nPts) {
-            if (spine[k].ss != SSType::Sheet) { ++k; continue; }
-            int rs = k;
-            while (k < nPts && spine[k].ss == SSType::Sheet) ++k;
-            int re = k;
-
-            float prevPx = 0.0f, prevPy = 0.0f, prevPz = 0.0f;
-            bool hasPrev = false;
-            for (int j = rs; j < re; ++j) {
-                if (!spine[j].hasHint) continue;
-                float hx = spine[j].hintX, hy = spine[j].hintY, hz = spine[j].hintZ;
-
-                // Project hint perpendicular to tangent.
-                float d = hx * tx[j] + hy * ty[j] + hz * tz[j];
-                float px = hx - d * tx[j];
-                float py = hy - d * ty[j];
-                float pz = hz - d * tz[j];
-                if (normalize3(px, py, pz) < 1e-6f) continue;
-
-                // Align sign with previous projected hint.
-                if (hasPrev && (px * prevPx + py * prevPy + pz * prevPz) < 0.0f) {
-                    px = -px; py = -py; pz = -pz;
-                }
-                prevPx = px; prevPy = py; prevPz = pz;
-                hasPrev = true;
-
-                // Blend 65 % hint + 35 % existing binormal, recompute normal.
-                float bbx = 0.65f * px + 0.35f * bx[j];
-                float bby = 0.65f * py + 0.35f * by[j];
-                float bbz = 0.65f * pz + 0.35f * bz[j];
-                if (normalize3(bbx, bby, bbz) < 1e-6f) continue;
-
-                float newNx, newNy, newNz;
-                cross3(bbx, bby, bbz, tx[j], ty[j], tz[j], newNx, newNy, newNz);
-                if (normalize3(newNx, newNy, newNz) < 1e-6f) continue;
-
-                bx[j] = bbx; by[j] = bby; bz[j] = bbz;
-                nx[j] = newNx; ny[j] = newNy; nz[j] = newNz;
+            for (int s = 0; s < subdiv; ++s) {
+                float t = static_cast<float>(s) / static_cast<float>(subdiv);
+                float af = isSheetEnd ? t : -1.0f;
+                const auto& near = (t < 0.5f) ? cas[i1] : cas[i2];
+                spine.push_back({
+                    catmullRom(cas[i0].x, cas[i1].x, cas[i2].x, cas[i3].x, t),
+                    catmullRom(cas[i0].y, cas[i1].y, cas[i2].y, cas[i3].y, t),
+                    catmullRom(cas[i0].z, cas[i1].z, cas[i2].z, cas[i3].z, t),
+                    near.ss,
+                    (t < 0.5f) ? col1 : col2,
+                    af,
+                    near.hintX, near.hintY, near.hintZ, near.hasHint
+                });
             }
         }
-    }
+        const auto& last = cas[cEnd - 1];
+        spine.push_back({last.x, last.y, last.z, last.ss,
+            ctx.colorFor(last.idx), -1.0f,
+            last.hintX, last.hintY, last.hintZ, last.hasHint});
 
-    // Step 4: Generate cross-section rings and emit triangles
-    bool useTriangles = (canvas.scaleX() >= 8);
+        int nPts = static_cast<int>(spine.size());
+        if (nPts < 2) { cStart = cEnd; continue; }
+
+        // Step 2: tangents
+        std::vector<float> tx(nPts), ty(nPts), tz(nPts);
+        for (int j = 0; j < nPts; ++j) {
+            int prev = std::max(0, j - 1), next = std::min(nPts - 1, j + 1);
+            tx[j] = spine[next].x - spine[prev].x;
+            ty[j] = spine[next].y - spine[prev].y;
+            tz[j] = spine[next].z - spine[prev].z;
+            normalize3(tx[j], ty[j], tz[j]);
+        }
+
+        // Step 3: parallel-transport frame
+        std::vector<float> nx(nPts), ny(nPts), nz(nPts);
+        std::vector<float> bx(nPts), by(nPts), bz(nPts);
+        if (std::abs(tx[0]) < 0.9f) {
+            cross3(tx[0], ty[0], tz[0], 1, 0, 0, nx[0], ny[0], nz[0]);
+        } else {
+            cross3(tx[0], ty[0], tz[0], 0, 1, 0, nx[0], ny[0], nz[0]);
+        }
+        normalize3(nx[0], ny[0], nz[0]);
+        cross3(tx[0], ty[0], tz[0], nx[0], ny[0], nz[0], bx[0], by[0], bz[0]);
+        normalize3(bx[0], by[0], bz[0]);
+
+        for (int j = 1; j < nPts; ++j) {
+            float dot = nx[j-1]*tx[j] + ny[j-1]*ty[j] + nz[j-1]*tz[j];
+            nx[j] = nx[j-1] - dot * tx[j];
+            ny[j] = ny[j-1] - dot * ty[j];
+            nz[j] = nz[j-1] - dot * tz[j];
+            float l = len3(nx[j], ny[j], nz[j]);
+            if (l < 1e-6f) { nx[j] = nx[j-1]; ny[j] = ny[j-1]; nz[j] = nz[j-1]; }
+            else { nx[j] /= l; ny[j] /= l; nz[j] /= l; }
+            cross3(tx[j], ty[j], tz[j], nx[j], ny[j], nz[j], bx[j], by[j], bz[j]);
+            normalize3(bx[j], by[j], bz[j]);
+        }
+
+        // Step 3b: sheet hint blend (carbonyl C→O guides parallel strands)
+        {
+            int k = 0;
+            while (k < nPts) {
+                if (spine[k].ss != SSType::Sheet) { ++k; continue; }
+                int rs2 = k;
+                while (k < nPts && spine[k].ss == SSType::Sheet) ++k;
+                int re2 = k;
+
+                float prevPx = 0.0f, prevPy = 0.0f, prevPz = 0.0f;
+                bool hasPrev = false;
+                for (int j = rs2; j < re2; ++j) {
+                    if (!spine[j].hasHint) continue;
+                    float hxh = spine[j].hintX, hyh = spine[j].hintY, hzh = spine[j].hintZ;
+
+                    float d = hxh * tx[j] + hyh * ty[j] + hzh * tz[j];
+                    float px = hxh - d * tx[j];
+                    float py = hyh - d * ty[j];
+                    float pz = hzh - d * tz[j];
+                    if (normalize3(px, py, pz) < 1e-6f) continue;
+
+                    if (hasPrev && (px * prevPx + py * prevPy + pz * prevPz) < 0.0f) {
+                        px = -px; py = -py; pz = -pz;
+                    }
+                    prevPx = px; prevPy = py; prevPz = pz;
+                    hasPrev = true;
+
+                    float bbx = 0.65f * px + 0.35f * bx[j];
+                    float bby = 0.65f * py + 0.35f * by[j];
+                    float bbz = 0.65f * pz + 0.35f * bz[j];
+                    if (normalize3(bbx, bby, bbz) < 1e-6f) continue;
+
+                    float newNx, newNy, newNz;
+                    cross3(bbx, bby, bbz, tx[j], ty[j], tz[j], newNx, newNy, newNz);
+                    if (normalize3(newNx, newNy, newNz) < 1e-6f) continue;
+
+                    bx[j] = bbx; by[j] = bby; bz[j] = bbz;
+                    nx[j] = newNx; ny[j] = newNy; nz[j] = newNz;
+                }
+            }
+        }
+
+        // Append flattened arrays to cache and record the chain span.
+        int spineStart = static_cast<int>(C.x.size());
+        for (int j = 0; j < nPts; ++j) {
+            C.x.push_back(spine[j].x);
+            C.y.push_back(spine[j].y);
+            C.z.push_back(spine[j].z);
+            C.ss.push_back(spine[j].ss);
+            C.color.push_back(spine[j].color);
+            C.arrowFrac.push_back(spine[j].arrowFrac);
+            C.tx.push_back(tx[j]); C.ty.push_back(ty[j]); C.tz.push_back(tz[j]);
+            C.nx.push_back(nx[j]); C.ny.push_back(ny[j]); C.nz.push_back(nz[j]);
+            C.bx.push_back(bx[j]); C.by.push_back(by[j]); C.bz.push_back(bz[j]);
+        }
+        int spineEnd = static_cast<int>(C.x.size());
+        cachedChains_.push_back({cas[cStart].chain, spineStart, spineEnd});
+
+        cStart = cEnd;
+    }
+}
+
+// ─── Per-chain rendering from cache ──────────────────────────────────────────
+
+void CartoonRepr::drawChainCached(int chainStart, int chainEnd, int coilSegments,
+                                  const Camera& cam, Canvas& canvas,
+                                  std::vector<TriangleSpan>* triBatch) const {
+    int nPts = chainEnd - chainStart;
+    if (nPts < 2) return;
+    const auto& C = cachedSpine_;
 
     auto ssHalfW = [&](SSType ss) -> float {
         switch (ss) {
@@ -265,8 +348,6 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
         }
     };
     auto ssHalfH = [&](SSType ss) -> float {
-        // Slab thickness for ribbon cross-sections (rectangle "depth").
-        // Loop falls through to the circular tube radius.
         switch (ss) {
             case SSType::Helix: return 0.40f;
             case SSType::Sheet: return 0.20f;
@@ -274,21 +355,16 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
         }
     };
 
-    if (useTriangles) {
+    if (triBatch) {
         struct Vert { float x, y, z; };
-        auto makeRing = [&](int i) -> std::vector<Vert> {
-            float hw = ssHalfW(spine[i].ss);
-            float hh = ssHalfH(spine[i].ss);
-            bool isCoil = (spine[i].ss == SSType::Loop);
+        auto makeRing = [&](int gi) -> std::vector<Vert> {
+            float hw = ssHalfW(C.ss[gi]);
+            float hh = ssHalfH(C.ss[gi]);
+            bool isCoil = (C.ss[gi] == SSType::Loop);
 
-            if (spine[i].arrowFrac >= 0.0f) {
-                // ProteinView-style "fish-tail" arrowhead: linearly widen
-                // the strand toward its tip (no taper-to-point). The
-                // following non-sheet residue starts as a coil, and the
-                // SS-transition resample + end caps close the open face
-                // so the broad end reads as a flared arrowhead.
+            if (C.arrowFrac[gi] >= 0.0f) {
                 constexpr float kArrowTipScale = 2.20f / 1.50f;
-                float af = spine[i].arrowFrac;
+                float af = C.arrowFrac[gi];
                 hw *= 1.0f + (kArrowTipScale - 1.0f) * af;
             }
 
@@ -298,46 +374,41 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
                     float angle = 2.0f * 3.14159265f * s / coilSegments;
                     float c = std::cos(angle), si = std::sin(angle);
                     ring.push_back({
-                        spine[i].x + hw * (c * nx[i] + si * bx[i]),
-                        spine[i].y + hw * (c * ny[i] + si * by[i]),
-                        spine[i].z + hw * (c * nz[i] + si * bz[i])
+                        C.x[gi] + hw * (c * C.nx[gi] + si * C.bx[gi]),
+                        C.y[gi] + hw * (c * C.ny[gi] + si * C.by[gi]),
+                        C.z[gi] + hw * (c * C.nz[gi] + si * C.bz[gi])
                     });
                 }
             } else {
-                ring.push_back({spine[i].x + hw*bx[i] + hh*nx[i],
-                                spine[i].y + hw*by[i] + hh*ny[i],
-                                spine[i].z + hw*bz[i] + hh*nz[i]});
-                ring.push_back({spine[i].x - hw*bx[i] + hh*nx[i],
-                                spine[i].y - hw*by[i] + hh*ny[i],
-                                spine[i].z - hw*bz[i] + hh*nz[i]});
-                ring.push_back({spine[i].x - hw*bx[i] - hh*nx[i],
-                                spine[i].y - hw*by[i] - hh*ny[i],
-                                spine[i].z - hw*bz[i] - hh*nz[i]});
-                ring.push_back({spine[i].x + hw*bx[i] - hh*nx[i],
-                                spine[i].y + hw*by[i] - hh*ny[i],
-                                spine[i].z + hw*bz[i] - hh*nz[i]});
+                ring.push_back({C.x[gi] + hw*C.bx[gi] + hh*C.nx[gi],
+                                C.y[gi] + hw*C.by[gi] + hh*C.ny[gi],
+                                C.z[gi] + hw*C.bz[gi] + hh*C.nz[gi]});
+                ring.push_back({C.x[gi] - hw*C.bx[gi] + hh*C.nx[gi],
+                                C.y[gi] - hw*C.by[gi] + hh*C.ny[gi],
+                                C.z[gi] - hw*C.bz[gi] + hh*C.nz[gi]});
+                ring.push_back({C.x[gi] - hw*C.bx[gi] - hh*C.nx[gi],
+                                C.y[gi] - hw*C.by[gi] - hh*C.ny[gi],
+                                C.z[gi] - hw*C.bz[gi] - hh*C.nz[gi]});
+                ring.push_back({C.x[gi] + hw*C.bx[gi] - hh*C.nx[gi],
+                                C.y[gi] + hw*C.by[gi] - hh*C.ny[gi],
+                                C.z[gi] + hw*C.bz[gi] - hh*C.nz[gi]});
             }
             return ring;
         };
 
-        // Linearly interpolate `src` around its perimeter to produce a ring
-        // with `target` vertices. Used at SS transitions where helix/sheet
-        // (4 verts) meets coil (coilSegments verts) — without this, the
-        // strip would only stitch the first min(N, M) corners and leave a
-        // gash on one side.
         auto resampleRing = [](const std::vector<Vert>& src, int target)
             -> std::vector<Vert> {
-            int n = static_cast<int>(src.size());
+            int sn = static_cast<int>(src.size());
             std::vector<Vert> out;
-            if (n == 0 || target <= 0 || n == target) return src;
+            if (sn == 0 || target <= 0 || sn == target) return src;
             out.reserve(target);
-            for (int i = 0; i < target; ++i) {
-                float frac = static_cast<float>(i) / static_cast<float>(target)
-                             * static_cast<float>(n);
+            for (int j = 0; j < target; ++j) {
+                float frac = static_cast<float>(j) / static_cast<float>(target)
+                             * static_cast<float>(sn);
                 int idx = static_cast<int>(frac);
                 float t = frac - static_cast<float>(idx);
-                const Vert& a = src[idx % n];
-                const Vert& b = src[(idx + 1) % n];
+                const Vert& a = src[idx % sn];
+                const Vert& b = src[(idx + 1) % sn];
                 out.push_back({a.x + t * (b.x - a.x),
                                a.y + t * (b.y - a.y),
                                a.z + t * (b.z - a.z)});
@@ -347,9 +418,9 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
 
         auto emitStrip = [&](const std::vector<Vert>& ringA,
                              const std::vector<Vert>& ringB, int color) {
-            int n = static_cast<int>(std::min(ringA.size(), ringB.size()));
-            for (int j = 0; j < n; ++j) {
-                int j1 = (j + 1) % n;
+            int rn = static_cast<int>(std::min(ringA.size(), ringB.size()));
+            for (int j = 0; j < rn; ++j) {
+                int j1 = (j + 1) % rn;
                 const auto& a = ringA[j]; const auto& b = ringA[j1];
                 const auto& c = ringB[j1]; const auto& d = ringB[j];
 
@@ -366,17 +437,14 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
             }
         };
 
-        // Fan from the spline-point center to each edge of the ring; closes
-        // the open end of a chain so the cartoon doesn't show a hollow tube
-        // mouth at the N- and C-termini.
         auto emitCap = [&](const std::vector<Vert>& ring, float cx, float cy,
                            float cz, int color) {
-            int n = static_cast<int>(ring.size());
-            if (n < 3) return;
+            int rn = static_cast<int>(ring.size());
+            if (rn < 3) return;
             float ccsx, ccsy, ccsd;
             cam.projectCached(cx, cy, cz, ccsx, ccsy, ccsd);
-            for (int j = 0; j < n; ++j) {
-                int j1 = (j + 1) % n;
+            for (int j = 0; j < rn; ++j) {
+                int j1 = (j + 1) % rn;
                 const auto& a = ring[j]; const auto& b = ring[j1];
                 float asx, asy, ad, bsx, bsy, bd;
                 cam.projectCached(a.x, a.y, a.z, asx, asy, ad);
@@ -387,12 +455,13 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
             }
         };
 
-        auto prevRing = makeRing(0);
-        emitCap(prevRing, spine[0].x, spine[0].y, spine[0].z, spine[0].color);
+        auto prevRing = makeRing(chainStart);
+        emitCap(prevRing, C.x[chainStart], C.y[chainStart], C.z[chainStart],
+                C.color[chainStart]);
 
-        for (int i = 1; i < nPts; ++i) {
+        for (int i = chainStart + 1; i < chainEnd; ++i) {
             auto ring = makeRing(i);
-            int color = spine[i].color;
+            int color = C.color[i];
 
             if (prevRing.size() == ring.size()) {
                 emitStrip(prevRing, ring, color);
@@ -408,20 +477,20 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
             prevRing = std::move(ring);
         }
 
-        emitCap(prevRing, spine[nPts - 1].x, spine[nPts - 1].y,
-                spine[nPts - 1].z, spine[nPts - 1].color);
+        emitCap(prevRing, C.x[chainEnd-1], C.y[chainEnd-1], C.z[chainEnd-1],
+                C.color[chainEnd-1]);
     } else {
         // Braille/block/ascii: thick circle-stamped spline lines
         float scaleF = static_cast<float>(canvas.scaleX());
         const auto& rot = cam.rotation();
         float camZx = rot[6], camZy = rot[7], camZz = rot[8];
 
-        for (int i = 1; i < nPts; ++i) {
+        for (int i = chainStart + 1; i < chainEnd; ++i) {
             float sx0, sy0, d0, sx1, sy1, d1;
-            cam.projectCached(spine[i-1].x, spine[i-1].y, spine[i-1].z, sx0, sy0, d0);
-            cam.projectCached(spine[i].x, spine[i].y, spine[i].z, sx1, sy1, d1);
+            cam.projectCached(C.x[i-1], C.y[i-1], C.z[i-1], sx0, sy0, d0);
+            cam.projectCached(C.x[i],   C.y[i],   C.z[i],   sx1, sy1, d1);
 
-            SSType ss = spine[i-1].ss;
+            SSType ss = C.ss[i-1];
             float baseR;
             switch (ss) {
                 case SSType::Helix: baseR = 1.2f; break;
@@ -429,7 +498,7 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
                 default:            baseR = 0.4f; break;
             }
 
-            float af = spine[i-1].arrowFrac;
+            float af = C.arrowFrac[i-1];
             if (af >= 0.0f) {
                 if (af < 0.4f)
                     baseR *= (1.0f + af * 1.5f);
@@ -439,9 +508,9 @@ void CartoonRepr::renderChain(const std::vector<CaAtom>& cas, size_t start,
 
             float hw = baseR * scaleF * cam.zoom();
             int r = std::max(2, static_cast<int>(hw + 0.5f));
-            int color = spine[i-1].color;
+            int color = C.color[i-1];
 
-            float dotVal = std::abs(tx[i-1]*camZx + ty[i-1]*camZy + tz[i-1]*camZz);
+            float dotVal = std::abs(C.tx[i-1]*camZx + C.ty[i-1]*camZy + C.tz[i-1]*camZz);
             float brightness = 1.0f - dotVal * 0.35f;
             int shadedR = std::max(2, static_cast<int>(r * brightness));
 
