@@ -56,6 +56,31 @@ make -j$(nproc)
 ./molterm --version               # prints version + git hash
 ```
 
+### Headless screenshot example
+
+A small script that fetches a PDB, orients the camera, switches to
+cartoon, and writes a 1920×1080 PNG without ever opening a visible
+viewport:
+
+```text
+# render.mt
+fetch 1crn
+orient
+show cartoon
+screenshot 1crn.png 1920 1080
+quit
+```
+
+```bash
+TERM=xterm-256color ./molterm --script render.mt < /dev/null
+# → writes 1crn.png (1920×1080) into the cwd
+```
+
+`:screenshot file.png [width height]` works from any renderer; the
+optional pixel dimensions default to the live viewport (small under
+no-TTY) and are clamped to 64..8192 px. Drop the size to grab whatever
+the active terminal is rendering.
+
 ### Dependencies
 
 | Dependency | Version | Source |
@@ -192,7 +217,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :run [--strict] <script.mt>     " Execute command script (# comments supported; --strict aborts on first error)
 :save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
-:screenshot [file.png]          " Save viewport as PNG (works in any renderer)
+:screenshot [file.png] [W H]    " Save PNG; pass W H (px) to force off-screen size
 :interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set fog <0-1>                  " Depth fog strength (default: 0.35)

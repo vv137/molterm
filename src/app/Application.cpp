@@ -2569,18 +2569,41 @@ void Application::registerCommands() {
     // :screenshot <file.png>
     cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         std::string path;
-        if (cmd.args.empty()) {
+        // Optional explicit pixel dimensions: `:screenshot file.png 1920 1080`.
+        // Useful when running from a script with no real terminal — the
+        // active viewport may otherwise default to a small fallback size.
+        int reqPixW = 0, reqPixH = 0;
+        std::vector<std::string> positional;
+        for (const auto& a : cmd.args) positional.push_back(a);
+
+        if (positional.size() >= 3) {
+            try {
+                reqPixW = std::stoi(positional[positional.size() - 2]);
+                reqPixH = std::stoi(positional[positional.size() - 1]);
+                positional.pop_back();
+                positional.pop_back();
+            } catch (...) {
+                return {false, "Usage: :screenshot [file.png] [width height]"};
+            }
+            if (reqPixW < 64 || reqPixH < 64 ||
+                reqPixW > 8192 || reqPixH > 8192) {
+                return {false, "Screenshot size out of range (64..8192 px)"};
+            }
+        }
+
+        if (positional.empty()) {
             auto now = std::chrono::system_clock::now();
             auto t = std::chrono::system_clock::to_time_t(now);
             char fname[64];
             std::strftime(fname, sizeof(fname), "molterm_%Y%m%d_%H%M%S.png", std::localtime(&t));
             path = fname;
         } else {
-            path = cmd.args[0];
+            path = positional[0];
         }
 
-        // If already in pixel mode, use the existing canvas
-        if (app.rendererType() == RendererType::Pixel) {
+        // If already in pixel mode and no explicit size was requested,
+        // grab the live framebuffer.
+        if (app.rendererType() == RendererType::Pixel && reqPixW == 0) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
             if (pc && pc->savePNG(path))
                 return {true, "Saved " + std::to_string(pc->pixelWidth()) + "x" +
@@ -2598,8 +2621,18 @@ void Application::registerCommands() {
         if (!encoder) return {false, "Cannot create offscreen renderer"};
 
         PixelCanvas offscreen(std::move(encoder));
-        int w = app.layout().viewportWidth();
-        int h = app.layout().viewportHeight();
+        int w, h;
+        if (reqPixW > 0) {
+            // PixelCanvas::resize takes terminal cells; back-compute from
+            // pixels using the canvas's current cell-pixel size.
+            int cellW = std::max(2, offscreen.scaleX());
+            int cellH = std::max(4, offscreen.scaleY());
+            w = std::max(1, reqPixW / cellW);
+            h = std::max(1, reqPixH / cellH);
+        } else {
+            w = app.layout().viewportWidth();
+            h = app.layout().viewportHeight();
+        }
         offscreen.resize(w, h);
         offscreen.clear();
 
