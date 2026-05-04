@@ -664,7 +664,7 @@ static void pngWriteChunk(std::ofstream& f, const char* type,
     f.write(reinterpret_cast<const char*>(buf.data()), buf.size());
 }
 
-bool PixelCanvas::savePNG(const std::string& path) const {
+bool PixelCanvas::savePNG(const std::string& path, int dpi) const {
     if (pixW_ <= 0 || pixH_ <= 0) return false;
 
     // Use pre-fog image for brighter PNG export.
@@ -690,6 +690,19 @@ bool PixelCanvas::savePNG(const std::string& path) const {
     ihdr.push_back(0);  // filter
     ihdr.push_back(0);  // interlace
     pngWriteChunk(f, "IHDR", ihdr.data(), ihdr.size());
+
+    // pHYs: physical pixel dimensions. Tells LaTeX / Word / browsers the
+    // intended print size; pixel count is unchanged. 1 inch = 0.0254 m,
+    // so pixels-per-meter ≈ dpi × 39.3701.
+    if (dpi > 0) {
+        std::vector<uint8_t> phys;
+        uint32_t ppm = static_cast<uint32_t>(
+            static_cast<double>(dpi) / 0.0254 + 0.5);
+        pngPut32(phys, ppm);
+        pngPut32(phys, ppm);
+        phys.push_back(1);  // unit: meter
+        pngWriteChunk(f, "pHYs", phys.data(), phys.size());
+    }
 
     // IDAT: filter byte (0=None) + RGBA row data, zlib compressed
     size_t rawSize = static_cast<size_t>(pixH_) * (1 + pixW_ * 4);

@@ -140,16 +140,22 @@ live renderer, so quality is controlled by these knobs (all settable
 from a script):
 
 ```text
-:screenshot out.png 2048 2048   # up to 8192×8192
-:set csd 24                     # cartoon spline subdivisions  (def 14)
-:set ch  1.6                    # helix half-width  Å           (def 1.30)
-:set csh 1.8                    # sheet half-width  Å           (def 1.50)
-:set cl  0.55                   # loop  tube radius Å           (def 0.40)
-:set outline on                 # silhouette outlines (pixel)
-:set ot 0.2                     # outline depth threshold       (def 0.3)
-:set od 0.2                     # outline darken (0=black)      (def 0.3)
-:set fog 0.4                    # atmospheric depth fog 0-1     (def 0.35)
+:screenshot out.png 2048 2048       # up to 8192×8192
+:screenshot out.png 1800 1200 300   # 6×4 in @ 300 DPI for journals
+:set csd 24                         # cartoon spline subdivisions  (def 14)
+:set ch  1.6                        # helix half-width  Å           (def 1.30)
+:set csh 1.8                        # sheet half-width  Å           (def 1.50)
+:set cl  0.55                       # loop  tube radius Å           (def 0.40)
+:set outline on                     # silhouette outlines (pixel)
+:set ot 0.2                         # outline depth threshold       (def 0.3)
+:set od 0.2                         # outline darken (0=black)      (def 0.3)
+:set fog 0.4                        # atmospheric depth fog 0-1     (def 0.35)
 ```
+
+The optional 4th `screenshot` arg stamps a PNG `pHYs` chunk so LaTeX,
+Word, and image viewers know the intended physical print size — pixel
+count is unchanged, only metadata. Pick pixels = inches × DPI: a
+6×4-inch journal figure at 300 DPI is `1800 1200 300`.
 
 For a hero figure: 2048², `csd 24`, outline on, `fog 0.4`. For an
 animation, drop to 800-1024² and lower `csd` if frame time matters.
@@ -292,7 +298,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :run [--strict] <script.mt>     " Execute command script (# comments supported; --strict aborts on first error)
 :save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
-:screenshot [file.png] [W H]    " Save PNG; pass W H (px) to force off-screen size
+:screenshot [file.png] [W H [DPI]] " Save PNG; W H force off-screen size, optional DPI stamps pHYs metadata
 :interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set fog <0-1>                  " Depth fog strength (default: 0.35)

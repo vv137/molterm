@@ -63,8 +63,11 @@ public:
     void applyDepthFog(float strength = 0.35f,
                        uint8_t fogR = 30, uint8_t fogG = 35, uint8_t fogB = 50);
 
-    // Save current framebuffer as PNG (captures pre-fog on next frame)
-    bool savePNG(const std::string& path) const;
+    // Save current framebuffer as PNG (captures pre-fog on next frame).
+    // If dpi > 0, embed a pHYs chunk so LaTeX / Word / image viewers know
+    // the intended physical size. Pixel count is unchanged; this is
+    // metadata only.
+    bool savePNG(const std::string& path, int dpi = 0) const;
 
     // Swap encoder at runtime
     void setEncoder(std::unique_ptr<GraphicsEncoder> enc);

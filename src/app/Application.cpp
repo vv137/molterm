@@ -2785,13 +2785,26 @@ void Application::registerCommands() {
     // :screenshot <file.png>
     cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         std::string path;
-        // Optional explicit pixel dimensions: `:screenshot file.png 1920 1080`.
+        // Optional pixel dimensions: `:screenshot file.png 1920 1080`.
+        // Optional DPI for PNG pHYs metadata: `:screenshot file.png 1800 1200 300`.
         // Useful when running from a script with no real terminal — the
         // active viewport may otherwise default to a small fallback size.
-        int reqPixW = 0, reqPixH = 0;
+        int reqPixW = 0, reqPixH = 0, reqDpi = 0;
         std::vector<std::string> positional;
         for (const auto& a : cmd.args) positional.push_back(a);
 
+        // Last token is DPI iff we have ≥4 args; W H are then args[-3..-2].
+        if (positional.size() >= 4) {
+            try {
+                reqDpi = std::stoi(positional.back());
+                positional.pop_back();
+            } catch (...) {
+                return {false, "Usage: :screenshot [file.png] [W H [DPI]]"};
+            }
+            if (reqDpi < 1 || reqDpi > 4800) {
+                return {false, "DPI out of range (1..4800)"};
+            }
+        }
         if (positional.size() >= 3) {
             try {
                 reqPixW = std::stoi(positional[positional.size() - 2]);
@@ -2799,7 +2812,7 @@ void Application::registerCommands() {
                 positional.pop_back();
                 positional.pop_back();
             } catch (...) {
-                return {false, "Usage: :screenshot [file.png] [width height]"};
+                return {false, "Usage: :screenshot [file.png] [W H [DPI]]"};
             }
             if (reqPixW < 64 || reqPixH < 64 ||
                 reqPixW > 8192 || reqPixH > 8192) {
@@ -2821,9 +2834,13 @@ void Application::registerCommands() {
         // grab the live framebuffer.
         if (app.rendererType() == RendererType::Pixel && reqPixW == 0) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
-            if (pc && pc->savePNG(path))
-                return {true, "Saved " + std::to_string(pc->pixelWidth()) + "x" +
-                       std::to_string(pc->pixelHeight()) + " to " + path};
+            if (pc && pc->savePNG(path, reqDpi)) {
+                std::string msg = "Saved " + std::to_string(pc->pixelWidth()) + "x" +
+                       std::to_string(pc->pixelHeight());
+                if (reqDpi > 0) msg += " @ " + std::to_string(reqDpi) + " dpi";
+                msg += " to " + path;
+                return {true, msg};
+            }
             return {false, "Failed to save " + path};
         }
 
@@ -2874,11 +2891,15 @@ void Application::registerCommands() {
         if (canvas)
             tab.camera().prepareProjection(canvas->subW(), canvas->subH(), canvas->aspectYX());
 
-        if (offscreen.savePNG(path))
-            return {true, "Saved " + std::to_string(offscreen.pixelWidth()) + "x" +
-                   std::to_string(offscreen.pixelHeight()) + " to " + path};
+        if (offscreen.savePNG(path, reqDpi)) {
+            std::string msg = "Saved " + std::to_string(offscreen.pixelWidth()) + "x" +
+                   std::to_string(offscreen.pixelHeight());
+            if (reqDpi > 0) msg += " @ " + std::to_string(reqDpi) + " dpi";
+            msg += " to " + path;
+            return {true, msg};
+        }
         return {false, "Failed to save " + path};
-    }, ":screenshot [file.png]", "Save viewport as PNG (works in any renderer)");
+    }, ":screenshot [file.png] [W H [DPI]]", "Save PNG; optional pixel size + DPI metadata for figure prep");
 
     // :preset — apply smart default representation
     cmdRegistry_.registerCmd("preset", [](Application& app, const ParsedCommand&) -> ExecResult {
