@@ -69,7 +69,7 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 - **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
 - **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode); dashed lines respect z-buffer so atoms in front occlude them
 - **Mol*-style focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
-- **DSSP secondary structure** — internal Kabsch-Sander assignment (3-10/α/π helix + parallel/antiparallel β-bridges) collapsed to molterm's 3-class SS. Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`
+- **DSSP secondary structure (partial)** — internal Kabsch-Sander H-bond model: 3-10 / α / π n-turn helix detection + parallel / antiparallel β-bridges, collapsed to molterm's 3-class SS. On 4HHB vs the canonical `mkdssp`: helix calls match 100%, sheet ~86% (ladder propagation not yet ported). Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`
 - **Full customization** — keybindings, color themes, and settings via TOML configs in `~/.molterm/`
 - **Structured logging** — session log to `~/.molterm/molterm.log`
 
@@ -770,7 +770,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **PyMOL viewport size** — `:export` now includes `viewport 1280, 960` for standard figure dimensions
 - [x] **Contact map** (hidden) — `:contactmap [cutoff]` Cα-Cα distance heatmap panel (available via command)
 - [x] **Geometric SS fallback** — φ/ψ Ramachandran classifier with 3+/4+ run smoothing, runs when a file has no HELIX/SHEET records (CASP TS, AlphaFold, raw coords)
-- [ ] **DSSP-quality SS** — replace the φ/ψ heuristic with full Kabsch & Sander hydrogen-bond classification (3₁₀ / π helices, β-bridges)
+- [~] **DSSP-quality SS** (partial) — Kabsch & Sander H-bond model with n-turn helix (α / 3₁₀ / π) + bridge β-sheet detection landed (`:dssp`, per-state cached for trajectories). Helix calls match `mkdssp` at 100% on 4HHB; sheet at ~86%. Remaining: ladder propagation for full sheet match, optional 8-class output
 - [ ] **Pixel-mode label rendering** — built-in bitmap font for labels rendered directly into RGB framebuffer
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
