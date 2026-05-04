@@ -2433,9 +2433,16 @@ void Application::registerCommands() {
             filename = lower + ".cif";
         }
 
-        // Download to /tmp
-        std::string tmpPath = "/tmp/molterm_" + filename;
-        std::string curlCmd = "curl -sL -o " + tmpPath + " -w '%{http_code}' '" + url + "'";
+        // Write to current working directory, but never overwrite an existing file
+        std::filesystem::path outPath = std::filesystem::current_path() / filename;
+        std::string src = isAF ? "AlphaFold DB" : "RCSB PDB";
+
+        if (std::filesystem::exists(outPath)) {
+            std::string result = app.loadFile(outPath.string());
+            return "Loaded existing " + outPath.string() + " (skipped fetch from " + src + ") | " + result;
+        }
+
+        std::string curlCmd = "curl -sL -o '" + outPath.string() + "' -w '%{http_code}' '" + url + "'";
         FILE* pipe = popen(curlCmd.c_str(), "r");
         if (!pipe) return "Failed to run curl";
 
@@ -2445,14 +2452,13 @@ void Application::registerCommands() {
         int ret = pclose(pipe);
 
         if (ret != 0 || httpCode.find("200") == std::string::npos) {
-            std::string src = isAF ? "AlphaFold DB" : "RCSB PDB";
+            std::error_code ec;
+            std::filesystem::remove(outPath, ec);
             return "Failed to fetch " + id + " from " + src + " (HTTP " + httpCode + ")";
         }
 
-        std::string result = app.loadFile(tmpPath);
-        std::remove(tmpPath.c_str());
-        std::string src = isAF ? "AlphaFold DB" : "RCSB PDB";
-        return "Fetched " + id + " from " + src + " | " + result;
+        std::string result = app.loadFile(outPath.string());
+        return "Fetched " + id + " from " + src + " -> " + outPath.string() + " | " + result;
     }, ":fetch <pdb_id|afdb:uniprot_id>", "Download structure from RCSB PDB or AlphaFold DB");
 
     // :assembly [id|list] — generate biological assembly
