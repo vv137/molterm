@@ -163,21 +163,25 @@ matrix is updated. Combine with `ffmpeg -i frames/f%03d.png out.mp4`.
 ### High-quality rendering
 
 PNGs from `:screenshot` are produced by `PixelCanvas` regardless of the
-live renderer, so quality is controlled by these knobs (all settable
-from a script):
+live renderer, so quality is controlled by these knobs. Inside a `.mt`
+script file, drop the leading `:` — the colon is interactive command-mode
+syntax only; scripts pass each line straight to the command registry:
 
 ```text
-:screenshot out.png 2048 2048       # up to 8192×8192
-:screenshot out.png 1800 1200 300   # 6×4 in @ 300 DPI for journals
-:set csd 24                         # cartoon spline subdivisions  (def 14)
-:set ch  1.6                        # helix half-width  Å           (def 1.30)
-:set csh 1.8                        # sheet half-width  Å           (def 1.50)
-:set cl  0.55                       # loop  tube radius Å           (def 0.40)
-:set outline on                     # silhouette outlines (pixel)
-:set ot 0.2                         # outline depth threshold       (def 0.3)
-:set od 0.2                         # outline darken (0=black)      (def 0.3)
-:set fog 0.4                        # atmospheric depth fog 0-1     (def 0.35)
+# render.mt — example settings file
+screenshot out.png 2048 2048       # up to 8192×8192
+screenshot out.png 1800 1200 300   # 6×4 in @ 300 DPI for journals
+set csd 24                         # cartoon spline subdivisions  (def 14)
+set ch  1.6                        # helix half-width  Å           (def 1.30)
+set csh 1.8                        # sheet half-width  Å           (def 1.50)
+set cl  0.30                       # loop  tube radius Å           (def 0.20)
+set outline on                     # silhouette outlines (pixel)
+set ot 0.2                         # outline depth threshold       (def 0.3)
+set od 0.2                         # outline darken (0=black)      (def 0.3)
+set fog 0.4                        # atmospheric depth fog 0-1     (def 0.35)
 ```
+
+(Same commands as `:screenshot …`, `:set …` typed interactively.)
 
 The optional 4th `screenshot` arg stamps a PNG `pHYs` chunk so LaTeX,
 Word, and image viewers know the intended physical print size — pixel
@@ -352,8 +356,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set seqbar on|off               " Sequence bar visibility
 :set seqwrap on|off              " Sequence bar wrap mode
 :set ic|interface_color <name>   " Interface overlay color (default: yellow)
-:set it|interface_thickness <n>  " Interface line thickness in pixel mode (1-4, default: 2)
-:set bt|wt|br <n>               " Backbone/wireframe thickness, ball radius
+:set it|interface_thickness <n>  " Interface dashed-line thickness, pixel mode (1-6, default: 4)
+:set bt <n>                     " Backbone trace thickness, cells (default: 0.5)
+:set wt <n>                     " Wireframe line thickness, cells (default: 0.35)
+:set br <int>                   " BallStick legacy sub-pixel radius (default: 1, only when bs_units=cell)
 :set ff|focus_fill <0.05-1.0>    " Focus fill fraction — fraction of screen the subject occupies (default: 0.6)
 :set fe|focus_extra <Å>          " Focus extra radius padding around the subject (default: 4.0)
 :set fmr|focus_min_radius <Å>    " Focus minimum radius clamp (default: 2.0)
@@ -460,11 +466,11 @@ Configuration files in `~/.molterm/`:
 
 If `~/.molterm/init.mt` exists, MolTerm runs it on startup right after commands are registered, before any positional file args, `--script`, or `--resume`. Use it for preferred defaults so they apply to every session. Failures are logged to `molterm.log` but never abort startup (CLI `--strict` only applies to `--script`, not `init.mt`).
 
-```
-# ~/.molterm/init.mt
-:set renderer pixel
-:set fog 0.4
-:set outline on
+```text
+# ~/.molterm/init.mt — no leading `:` in script files
+set renderer pixel
+set fog 0.4
+set outline on
 ```
 
 </details>
