@@ -10,6 +10,11 @@ class MolObject;
 class Camera;
 class Canvas;
 
+// Color pair ID for an interface interaction type — same mapping the
+// dashed line renderer uses, exposed so the legend overlay stays in
+// sync with the viewport palette.
+int interactionColor(InteractionType t);
+
 // Overlay renderer for interface analysis. Not a Representation subclass —
 // its inputs (per-atom interface mask + classified inter-chain contact
 // list) come from Application, not from MolObject, so it sits outside

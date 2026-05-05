@@ -12,10 +12,10 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     const auto& atoms = ctx.atoms;
     const auto& bonds = mol.bonds();
 
-    // Resolve atom color. In heteroatomCarbonScheme mode, carbons keep
-    // the scheme color (so they match their residue's CA) and every
-    // other element gets its CPK color so N/O/S/P read as donors/
-    // acceptors against the carbon backbone.
+    // In heteroatomCarbonScheme mode (engaged by :interface / focus),
+    // every carbon keeps the active scheme color and N/O/S/P break out
+    // as CPK so donors/acceptors stay legible. This matches PyMOL
+    // util.cbc, ChimeraX color-by-chain, and Mol*.
     auto colorOf = [&](int i) {
         if (heteroatomCarbonScheme_ && atoms[i].element != "C")
             return ColorMapper::colorForElement(atoms[i].element);

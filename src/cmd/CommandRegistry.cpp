@@ -7,8 +7,11 @@ namespace molterm {
 
 void CommandRegistry::registerCmd(const std::string& name, CommandHandler handler,
                                    const std::string& usage,
-                                   const std::string& description) {
-    commands_[name] = {name, std::move(handler), usage, description};
+                                   const std::string& description,
+                                   std::vector<std::string> examples,
+                                   const std::string& category) {
+    commands_[name] = {name, std::move(handler), usage, description,
+                       std::move(examples), category};
 }
 
 ExecResult CommandRegistry::execute(Application& app, const std::string& input) {
@@ -36,6 +39,12 @@ std::vector<std::string> CommandRegistry::complete(const std::string& prefix) co
 
 bool CommandRegistry::hasCommand(const std::string& name) const {
     return commands_.count(name) > 0;
+}
+
+const CommandInfo* CommandRegistry::lookup(const std::string& name) const {
+    auto it = commands_.find(name);
+    if (it == commands_.end()) return nullptr;
+    return &it->second;
 }
 
 } // namespace molterm

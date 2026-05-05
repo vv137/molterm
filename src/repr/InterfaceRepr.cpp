@@ -6,16 +6,10 @@
 #include "molterm/render/Camera.h"
 #include "molterm/render/Canvas.h"
 #include "molterm/render/ColorMapper.h"
+#include "molterm/repr/Representation.h"  // for RenderContext::colorFor
 
 namespace molterm {
 
-namespace {
-
-bool isBackboneName(const std::string& name) {
-    return name == "N" || name == "CA" || name == "C" || name == "O";
-}
-
-// Map interaction type → palette color (mirrors ProteinView's HD overlay).
 int interactionColor(InteractionType t) {
     switch (t) {
         case InteractionType::HBond:       return kColorCyan;
@@ -24,6 +18,12 @@ int interactionColor(InteractionType t) {
         case InteractionType::Other:       return kColorGray;
     }
     return kColorGray;
+}
+
+namespace {
+
+bool isBackboneName(const std::string& name) {
+    return name == "N" || name == "CA" || name == "C" || name == "O";
 }
 
 } // namespace
@@ -36,6 +36,18 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
     const int   cw    = canvas.subW();
     const int   ch    = canvas.subH();
     const int   margin = 8;
+
+    // Standard PyMOL/ChimeraX/Mol* convention for chain/SS-colored views:
+    // all carbons take the active scheme color, N/O/S/P pop out as CPK.
+    const ColorScheme scheme = mol.colorScheme();
+    const std::vector<float>* rbw =
+        (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
+    RenderContext ctx{mol, atoms, scheme, rbw, {}};
+    auto colorOf = [&](int i) {
+        if (atoms[i].element != "C")
+            return ColorMapper::colorForElement(atoms[i].element);
+        return ctx.colorFor(i);
+    };
 
     // Same gentle thickness scaling as Wireframe/Backbone — sqrt(zoom)
     // clamped to [0.75, 1.8]. Without this, sidechain bonds and dashed
@@ -139,8 +151,8 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
             int my = (y0 + y1) / 2;
             float md = (p1.depth + p2.depth) * 0.5f;
 
-            int c1 = ColorMapper::colorForElement(a1.element);
-            int c2 = ColorMapper::colorForElement(a2.element);
+            int c1 = colorOf(bond.atom1);
+            int c2 = colorOf(bond.atom2);
 
             canvas.setActiveAtomIndex(bond.atom1);
             drawThickLine(x0, y0, p1.depth, mx, my, md, c1, sidechainThick);

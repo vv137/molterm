@@ -32,20 +32,20 @@ int main(int argc, char* argv[]) {
                 "  -h, --help              Show this help and exit\n"
                 "  -v, --version           Print version and exit\n"
                 "  -r, --resume            Restore the last auto-saved session\n"
-                "  -s, --script FILE       Run a command script after load\n"
+                "  -s, --script FILE       Run a command script after load (use '-' for stdin)\n"
                 "      --strict            With --script: abort on first error (exit 1)\n"
-                "      --no-tui            Run without the terminal UI (no alt-screen, no flicker).\n"
-                "                          Auto-enabled when --script is used and stdout is not a TTY.\n"
-                "      --tui               Force the terminal UI even when auto-detect would skip it.\n"
+                "      --no-tui            Run without the terminal UI (auto-on for non-TTY scripts)\n"
+                "      --tui               Force the terminal UI even when auto-detect would skip it\n"
                 "\n"
                 "In-app help:\n"
-                "  ?                       Keybinding cheat sheet (Normal mode)\n"
-                "  :help                   List available commands\n"
-                "  :help <cmd>             Help for a specific command\n"
+                "  ?                       Keybinding cheat sheet overlay (Normal mode)\n"
+                "  :help                   Command index overlay, grouped by category\n"
+                "  :help <cmd>             Per-command overlay (usage, description, examples)\n"
                 "\n"
                 "Examples:\n"
                 "  molterm protein.pdb\n"
                 "  molterm --resume\n"
+                "  molterm --script demo.mt 1bna.cif        # load + run script\n"
                 "  molterm --script render.mt --no-tui      # silent batch render\n";
             return 0;
         }
@@ -79,7 +79,8 @@ int main(int argc, char* argv[]) {
     // MOLTERM_HEADLESS to skip initscr). Auto-headless when running a script
     // without an interactive stdout, unless --tui forces the UI on.
     bool headless = false;
-    if (forceTui == -1) {
+    if (forceTui == -1 || scriptPath == "-") {
+        // --no-tui, or stdin is the script (TUI can't share stdin with ncurses).
         headless = true;
     } else if (forceTui == 0 && !scriptPath.empty() && !isatty(STDOUT_FILENO)) {
         headless = true;
@@ -102,13 +103,18 @@ int main(int argc, char* argv[]) {
         }
 
         if (!scriptPath.empty()) {
-            std::ifstream file(scriptPath);
-            if (!file) {
-                leaveCurses();
-                std::cerr << "molterm: cannot open script: " << scriptPath << std::endl;
-                return 1;
+            std::ifstream file;
+            std::istream* in = &std::cin;
+            if (scriptPath != "-") {
+                file.open(scriptPath);
+                if (!file) {
+                    leaveCurses();
+                    std::cerr << "molterm: cannot open script: " << scriptPath << std::endl;
+                    return 1;
+                }
+                in = &file;
             }
-            molterm::Application::ScriptRunResult r = app.runScriptStream(file, strict);
+            molterm::Application::ScriptRunResult r = app.runScriptStream(*in, strict);
             if (strict && r.stopped) {
                 leaveCurses();
                 std::cerr << "molterm: script error at line: " << r.failLine

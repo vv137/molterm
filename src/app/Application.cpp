@@ -25,7 +25,10 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iostream>
+#include <map>
 #include <set>
+#include <sstream>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -363,10 +366,66 @@ void Application::processInput() {
         return;
     }
 
-    // Dismiss help overlay on any key
-    if (helpOverlay_) {
-        helpOverlay_ = false;
-        layout_.markDirty(Layout::Component::Viewport);
+    // Info/help overlay: scroll keys page through, explicit close keys
+    // dismiss; everything else (resize, mouse, modifier prefixes, stray
+    // alpha keys) is ignored so the overlay stays put.
+    // lastVisibleRows is updated each frame by the renderer; used for paging.
+    if (infoOverlay_.active) {
+        const int rows = std::max(1, infoOverlay_.lastVisibleRows);
+        // Wrapped line count populated by the renderer — narrow terminals
+        // produce more wrapped lines than `lines.size()` would suggest, so
+        // paging math must use the wrapped total to land on the real bottom.
+        const int total = std::max(infoOverlay_.lastTotalLines,
+                                   static_cast<int>(infoOverlay_.lines.size()));
+        bool dismiss = false;
+        switch (key) {
+            case 'j': case KEY_DOWN:
+                infoOverlay_.scrollOffset += 1;
+                break;
+            case 'k': case KEY_UP:
+                infoOverlay_.scrollOffset -= 1;
+                break;
+            case KEY_NPAGE: case 4: /* Ctrl-D */
+                infoOverlay_.scrollOffset += rows;
+                break;
+            case ' ':
+                // Space: page down while content remains; dismiss at bottom.
+                if (infoOverlay_.scrollOffset + rows >= total) dismiss = true;
+                else infoOverlay_.scrollOffset += rows;
+                break;
+            case KEY_PPAGE: case 21: /* Ctrl-U */
+                infoOverlay_.scrollOffset -= rows;
+                break;
+            case 'g':
+                infoOverlay_.scrollOffset = 0;
+                break;
+            case 'G':
+                infoOverlay_.scrollOffset = std::max(0, total - rows);
+                break;
+            case 'q': case 27: /* Esc */ case '?': case '\n': case KEY_ENTER:
+                dismiss = true;
+                break;
+            default:
+                // Ignore unrecognised keys (KEY_RESIZE, KEY_MOUSE,
+                // bare modifiers, etc.) — closing the overlay on any
+                // resize would be hostile.
+                return;
+        }
+        if (dismiss) {
+            infoOverlay_.active = false;
+            infoOverlay_.scrollOffset = 0;
+            // Overlay text is written via ncurses on top of the viewport
+            // canvas, so the pixel renderer's frame-diff cache doesn't know
+            // those cells changed. Without an explicit invalidate, the next
+            // flush emits no pixels for that region and the area where the
+            // overlay sat reads as a black stripe. markAllDirty also covers
+            // any neighbouring component the overlay may have overlapped.
+            if (canvas_) canvas_->invalidate();
+            layout_.markAllDirty();
+        } else {
+            if (infoOverlay_.scrollOffset < 0) infoOverlay_.scrollOffset = 0;
+            layout_.markDirty(Layout::Component::Viewport);
+        }
         needsRedraw_ = true;
         return;
     }
@@ -1176,7 +1235,7 @@ void Application::handleAction(Action action) {
         }
 
         case Action::ShowHelp:
-            helpOverlay_ = true;
+            showKeybindingHelp();
             dirty({C::Viewport});
             break;
 
@@ -1389,12 +1448,120 @@ void Application::renderViewport() {
         canvas_->flush(win);
     }
 
-    // Help overlay: keybinding cheat sheet
-    if (helpOverlay_) {
-        int ow = std::min(60, w - 4);
-        int oh = std::min(30, h - 2);
+    // Centered modal overlay used by `?`, `:help`, `:help <cmd>`, and
+    // `:interface legend`. Word-wraps to fit the terminal; scrolls when
+    // content overflows. Key handling lives in processInput().
+    if (infoOverlay_.active) {
+        // Box width: clamp(min=20, preferred=60, max=terminal-4). Using
+        // std::clamp(60, 20, w-4) is fine when w-4 >= 20; on tiny terminals
+        // we fall back to whatever fits.
+        int hi = std::max(20, w - 4);
+        int ow = std::clamp(60, 20, hi);
+        if (hi > ow) {
+            int longest = static_cast<int>(infoOverlay_.title.size()) + 4;
+            for (const auto& l : infoOverlay_.lines)
+                longest = std::max(longest, static_cast<int>(l.size()) + 4);
+            ow = std::min(std::max(ow, longest), hi);
+        }
+        int contentWidth = std::max(10, ow - 4);  // inside the box, minus padding
+
+        // UTF-8 display width: count lead bytes (anything that isn't a
+        // continuation byte 10xxxxxx). Treats every codepoint as one
+        // column, which is right for the Latin/symbol/box-drawing chars
+        // used by the help and legend overlays (Å, ↔, ≤, ─). Wide CJK
+        // would over-estimate, but the overlay doesn't use any.
+        auto cols = [](std::string_view s) {
+            int n = 0;
+            for (unsigned char c : s)
+                if ((c & 0xC0) != 0x80) ++n;
+            return n;
+        };
+
+        // Word-wrap a single line to `contentWidth` display columns.
+        // Continuation lines indent to the original lead + 2 so wrapped
+        // table rows stay visually aligned.
+        auto wrapLine = [contentWidth, &cols](const std::string& line)
+                          -> std::vector<std::string> {
+            if (cols(line) <= contentWidth) return {line};
+            size_t leadEnd = line.find_first_not_of(' ');
+            std::string lead = (leadEnd == std::string::npos) ? std::string()
+                                                              : line.substr(0, leadEnd);
+            std::string indent = lead + "  ";
+            std::vector<std::string> out;
+            std::string cur = lead;
+            std::string body = (leadEnd == std::string::npos) ? std::string()
+                                                              : line.substr(leadEnd);
+            std::istringstream iss(body);
+            std::string word;
+            bool first = true;
+            while (iss >> word) {
+                int sep = first ? 0 : 1;
+                if (cols(cur) + sep + cols(word) > contentWidth) {
+                    if (!cur.empty() && cur != lead) {
+                        out.push_back(cur);
+                        cur = indent;
+                    }
+                    // Hard-break a word that's still too long for one line.
+                    while (cols(cur) + cols(word) > contentWidth) {
+                        int avail = contentWidth - cols(cur);
+                        if (avail <= 0) {
+                            out.push_back(cur);
+                            cur = indent;
+                            avail = contentWidth - cols(cur);
+                        }
+                        // Walk codepoints to pick a byte-safe split point.
+                        size_t cut = 0;
+                        int taken = 0;
+                        while (cut < word.size() && taken < avail) {
+                            unsigned char c = static_cast<unsigned char>(word[cut]);
+                            do { ++cut; } while (cut < word.size()
+                                && (static_cast<unsigned char>(word[cut]) & 0xC0) == 0x80);
+                            (void)c;
+                            ++taken;
+                        }
+                        if (cut == 0) break;  // safety: avoid infinite loop
+                        cur += word.substr(0, cut);
+                        out.push_back(cur);
+                        word.erase(0, cut);
+                        cur = indent;
+                    }
+                    cur += word;
+                } else {
+                    if (!first) cur += ' ';
+                    cur += word;
+                }
+                first = false;
+            }
+            if (!cur.empty()) out.push_back(cur);
+            if (out.empty()) out.push_back(line);
+            return out;
+        };
+
+        // Flatten input lines to wrapped lines, propagating per-line colors
+        // (each wrapped fragment inherits the original line's color).
+        std::vector<std::string> wrapped;
+        std::vector<int> wrappedColors;
+        wrapped.reserve(infoOverlay_.lines.size());
+        wrappedColors.reserve(infoOverlay_.lines.size());
+        for (size_t i = 0; i < infoOverlay_.lines.size(); ++i) {
+            int origColor = (i < infoOverlay_.lineColors.size())
+                            ? infoOverlay_.lineColors[i] : -1;
+            for (auto& w : wrapLine(infoOverlay_.lines[i])) {
+                wrapped.push_back(std::move(w));
+                wrappedColors.push_back(origColor);
+            }
+        }
+        int contentLines = static_cast<int>(wrapped.size());
+
+        int oh = std::min(contentLines + 4, h - 2);
         int ox = (w - ow) / 2;
         int oy = (h - oh) / 2;
+
+        int visibleRows = std::max(0, oh - 4);
+        infoOverlay_.lastVisibleRows = visibleRows;
+        infoOverlay_.lastTotalLines = contentLines;
+        int maxScroll = std::max(0, contentLines - visibleRows);
+        infoOverlay_.scrollOffset = std::clamp(infoOverlay_.scrollOffset, 0, maxScroll);
 
         // Background box
         for (int y = oy; y < oy + oh && y < h; ++y) {
@@ -1402,44 +1569,33 @@ void Application::renderViewport() {
                 win.addCharColored(y, x, ' ', kColorStatusBar);
         }
 
-        // Title
-        win.printColored(oy, ox + (ow - 20) / 2, "  MolTerm Keybindings ", kColorTabActive);
+        // Title (centered) — append scroll position when content overflows
+        std::string title = "  " + infoOverlay_.title;
+        if (maxScroll > 0) {
+            int firstVisible = infoOverlay_.scrollOffset + 1;
+            int lastVisible = std::min(infoOverlay_.scrollOffset + visibleRows, contentLines);
+            title += "  (" + std::to_string(firstVisible) + "-" +
+                     std::to_string(lastVisible) + "/" +
+                     std::to_string(contentLines) + ")";
+        }
+        title += "  ";
+        int titleX = ox + std::max(0, (ow - static_cast<int>(title.size())) / 2);
+        win.printColored(oy, titleX, title, kColorTabActive);
 
         int row = oy + 2;
-        auto line = [&](const std::string& text) {
-            if (row < oy + oh - 1)
-                win.printColored(row++, ox + 2, text, kColorStatusBar);
-        };
+        int firstIdx = infoOverlay_.scrollOffset;
+        int lastIdx = std::min(contentLines, firstIdx + visibleRows);
+        for (int i = firstIdx; i < lastIdx; ++i) {
+            if (row >= oy + oh - 1) break;
+            int color = (wrappedColors[i] >= 0) ? wrappedColors[i] : kColorStatusBar;
+            win.printColored(row++, ox + 2, wrapped[i], color);
+        }
 
-        line("NAVIGATION");
-        line(" h/j/k/l   Rotate molecule");
-        line(" W/A/S/D   Pan view");
-        line(" +/-       Zoom in/out");
-        line(" </>       Z-axis rotation");
-        line(" 0         Reset view");
-        line("");
-        line("REPRESENTATIONS (s=show, x=hide)");
-        line(" sw/sb/ss/sc/sr/sk   wire/ball/fill/cartoon/ribbon/bone");
-        line(" xw/xb/xs/xc/xr/xk  hide each    xa  hide all");
-        line("");
-        line("COLORING (c + key)");
-        line(" ce element  cc chain  cs SS  cb B-factor");
-        line(" cp pLDDT    cr rainbow");
-        line("");
-        line("OBJECTS & TABS");
-        line(" Tab/S-Tab  Next/prev object  Space  Toggle visible");
-        line(" gt/gT      Next/prev tab     dd     Delete object");
-        line(" o panel   i inspect   / search   n/N results");
-        line("");
-        line("MULTI-STATE       MACROS         OTHER");
-        line(" [/] prev/next    q record       m  toggle pixel");
-        line("     state        @ play          P  screenshot");
-        line("                                  I  interface");
-        line("");
-        line(":help  :load  :fetch  :align  :measure  :export");
-        line("");
-        win.printColored(std::min(row, oy + oh - 1), ox + (ow - 24) / 2,
-                        "  Press any key to close  ", kColorTabActive);
+        const std::string footer = (maxScroll > 0)
+            ? "  j/k scroll  q close  "
+            : "  Press any key to close  ";
+        int footerX = ox + std::max(0, (ow - static_cast<int>(footer.size())) / 2);
+        win.printColored(std::min(row, oy + oh - 1), footerX, footer, kColorTabActive);
     }
 
     // Show history hint overlay when command line is active and empty
@@ -1895,74 +2051,89 @@ void Application::enterFocus(MolObject& mol,
 
     cam.focusOn(sx, sy, sz, targetZoom);
 
-    // Build neighborhood: atoms within focus_radius of any subject atom.
-    // Reuse the new Selection grammar via a temporary index-based set.
-    const float r2 = focusRadius_ * focusRadius_;
+    // Build subject mask first.
     focusAtomMask_.assign(atoms.size(), false);
     for (int idx : subjectIndices) {
         if (idx >= 0 && idx < (int)atoms.size()) focusAtomMask_[idx] = true;
     }
+
+    // Spatial neighborhood: every atom within focus_radius of any
+    // subject atom. This catches the close-pocket geometry — backbone
+    // + sidechains touching the subject — but it's distance-based, so
+    // a long sidechain reaching the pocket may have its CA outside.
+    const float r2 = focusRadius_ * focusRadius_;
     focusNbhdMask_.assign(atoms.size(), false);
-    std::vector<int> nbhdIndices;
-    nbhdIndices.reserve(atoms.size());
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& ai = atoms[i];
-        bool near = false;
         for (int j : subjectIndices) {
             if (j < 0 || j >= (int)atoms.size()) continue;
             const auto& aj = atoms[j];
             float dx = ai.x - aj.x, dy = ai.y - aj.y, dz = ai.z - aj.z;
-            if (dx*dx + dy*dy + dz*dz <= r2) { near = true; break; }
-        }
-        if (near) {
-            focusNbhdMask_[i] = true;
-            nbhdIndices.push_back((int)i);
+            if (dx*dx + dy*dy + dz*dz <= r2) { focusNbhdMask_[i] = true; break; }
         }
     }
 
-    // Show full neighborhood including backbone — keeps the chain
-    // continuity readable. (Earlier sidechain-only variant left
-    // hairs floating in space.)
+    // Ensure interface contacts are cached. We need them before building
+    // nbhdIndices so the partner-residue expansion below can promote
+    // whole interacting residues into the neighborhood.
+    if (interfaceContacts_.empty()) {
+        contactMapPanel_.update(mol);
+        contactMapPanel_.contactMap().computeInterface(mol, 4.5f);
+        interfaceContacts_ = contactMapPanel_.contactMap().interfaceContacts();
+        focusComputedInterface_ = true;
+    }
 
-    // Hide spline reprs — they're context that obscures the close-up
-    // pocket. The neighborhood wireframe + ball-stick replace them.
+    // Promote any residue that has a contact reaching into the subject:
+    // the user expects to see the whole interacting residue, not the
+    // truncated portion that happens to fall inside focus_radius. Each
+    // partner is identified by (chainId, resSeq, insCode), then every
+    // atom sharing that key is added to the neighborhood mask.
+    std::set<std::tuple<std::string, int, char>> partnerResidues;
+    for (const auto& c : interfaceContacts_) {
+        if (c.atom1 < 0 || c.atom2 < 0) continue;
+        if (c.atom1 >= (int)atoms.size() || c.atom2 >= (int)atoms.size()) continue;
+        bool s1 = focusAtomMask_[c.atom1];
+        bool s2 = focusAtomMask_[c.atom2];
+        if (s1 == s2) continue;     // both in subject, or neither — no partner edge
+        int partner = s1 ? c.atom2 : c.atom1;
+        const auto& a = atoms[partner];
+        partnerResidues.emplace(a.chainId, a.resSeq, a.insCode);
+    }
+    // Fused pass: for each atom, promote it into the mask if its residue
+    // matched a partner, then collect all in-mask atoms into nbhdIndices.
+    std::vector<int> nbhdIndices;
+    nbhdIndices.reserve(atoms.size());
+    for (size_t i = 0; i < atoms.size(); ++i) {
+        const auto& a = atoms[i];
+        if (!focusNbhdMask_[i] && !partnerResidues.empty()
+            && partnerResidues.count({a.chainId, a.resSeq, a.insCode})) {
+            focusNbhdMask_[i] = true;
+        }
+        if (focusNbhdMask_[i]) nbhdIndices.push_back((int)i);
+    }
+
     mol.hideRepr(ReprType::Cartoon);
     mol.hideRepr(ReprType::Ribbon);
     mol.hideRepr(ReprType::Backbone);
 
-    // Bump wireframe thickness modestly during focus — chunkier than
-    // default so the local scaffold reads, but the zoom-scaling in
-    // WireframeRepr::render does the rest.
+    // Bump wireframe thickness modestly so the local scaffold reads;
+    // the zoom-scaling in WireframeRepr::render does the rest.
     if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
         wf->setThickness(std::max(0.5f, focusSnapshot_.wireframeThickness * 1.4f));
     }
     mol.showRepr(ReprType::Wireframe);
     mol.showReprForAtoms(ReprType::Wireframe, nbhdIndices);
 
-    // Ball-stick on top of wireframe so atoms are clearly readable.
     mol.showRepr(ReprType::BallStick);
     mol.showReprForAtoms(ReprType::BallStick, nbhdIndices);
 
-    // Spacefill stays at user's prior preference, just gated to neighborhood.
     if (mol.reprVisible(ReprType::Spacefill)) {
         mol.showReprForAtoms(ReprType::Spacefill, nbhdIndices);
     }
 
-    // Always show the interface ∩ focus subset of interactions so the
-    // user gets H-bond / salt / hydrophobic dotted lines for the
-    // pocket without having to run `:interface` first. If the global
-    // overlay is on we reuse the cached contacts; otherwise compute
-    // them now on demand.
-    if (interfaceContacts_.empty()) {
-        contactMapPanel_.update(mol);
-        contactMapPanel_.contactMap().computeInterface(mol, 4.5f);
-        // Snapshot the computed list into the application's cache so
-        // exit-without-clear keeps the state predictable. We tag this
-        // as "from focus" so exitFocus can drop it.
-        interfaceContacts_ =
-            contactMapPanel_.contactMap().interfaceContacts();
-        focusComputedInterface_ = true;
-    }
+    // Filter contacts to ones whose endpoints are both in the (now
+    // residue-expanded) neighborhood, so the dashed lines render only
+    // for what's visible in the pocket.
     std::vector<InterfaceContact> filtered;
     filtered.reserve(interfaceContacts_.size());
     for (const auto& c : interfaceContacts_) {
@@ -2129,15 +2300,18 @@ void Application::registerCommands() {
     cmdRegistry_.registerCmd("q", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         app.quit(cmd.forced);
         return {true, ""};
-    }, ":q[!]", "Quit MolTerm");
+    }, ":q[!]", "Quit MolTerm (use :q! to skip auto-save)",
+       {":q", ":q!"}, "Help");
     cmdRegistry_.registerCmd("quit", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         app.quit(cmd.forced);
         return {true, ""};
-    }, ":quit[!]", "Quit MolTerm");
+    }, ":quit[!]", "Quit MolTerm (alias for :q)",
+       {":quit"}, "Help");
     cmdRegistry_.registerCmd("qa", [](Application& app, const ParsedCommand&) -> ExecResult {
         app.quit(true);
         return {true, ""};
-    }, ":qa", "Quit all");
+    }, ":qa", "Quit all tabs and exit",
+       {":qa"}, "Help");
 
     // :load <file>
     cmdRegistry_.registerCmd("load", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -2145,13 +2319,15 @@ void Application::registerCommands() {
         std::string msg = app.loadFile(cmd.args[0]);
         bool ok = msg.rfind("Loaded ", 0) == 0;
         return {ok, msg};
-    }, ":load <file>", "Load a structure file");
+    }, ":load <file>", "Load a structure file (.pdb, .cif, .cif.gz, ...)",
+       {":load protein.pdb", ":load 1bna.cif"}, "Files");
     cmdRegistry_.registerCmd("e", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) return {false, "Usage: :e <file>"};
         std::string msg = app.loadFile(cmd.args[0]);
         bool ok = msg.rfind("Loaded ", 0) == 0;
         return {ok, msg};
-    }, ":e <file>", "Load a structure file (alias for :load)");
+    }, ":e <file>", "Load a structure file (alias for :load)",
+       {":e protein.pdb"}, "Files");
 
     // :tabnew
     cmdRegistry_.registerCmd("tabnew", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -2159,14 +2335,16 @@ void Application::registerCommands() {
         app.tabs().addTab(name);
         app.tabs().goToTab(static_cast<int>(app.tabs().count()) - 1);
         return {true, "New tab created"};
-    }, ":tabnew [name]", "Create new tab");
+    }, ":tabnew [name]", "Create a new tab (optionally named)",
+       {":tabnew", ":tabnew analysis"}, "Window");
 
     // :tabclose
     cmdRegistry_.registerCmd("tabclose", [](Application& app, const ParsedCommand&) -> ExecResult {
         if (app.tabs().count() <= 1) return {false, "Cannot close last tab"};
         app.tabs().closeCurrentTab();
         return {true, ""};
-    }, ":tabclose", "Close current tab");
+    }, ":tabclose", "Close the current tab",
+       {":tabclose"}, "Window");
 
     // :objects
     cmdRegistry_.registerCmd("objects", [](Application& app, const ParsedCommand&) -> ExecResult {
@@ -2175,7 +2353,8 @@ void Application::registerCommands() {
         std::string result = "Objects:";
         for (const auto& n : names) result += " " + n;
         return {true, result};
-    }, ":objects", "List loaded objects");
+    }, ":objects", "List objects loaded in the current tab",
+       {":objects"}, "Window");
 
     // Helper: resolve repr name to ReprType. Returns false if unknown.
     auto resolveRepr = [](const std::string& name, ReprType& out) -> bool {
@@ -2210,7 +2389,8 @@ void Application::registerCommands() {
         }
         obj->showRepr(rt);
         return {true, "Showing " + cmd.args[0]};
-    }, ":show <repr> [selection]", "Show representation (optionally for selection)");
+    }, ":show <repr> [selection]", "Show representation (wireframe, ballstick, spacefill, cartoon, ribbon, backbone)",
+       {":show cartoon", ":show ballstick chain A", ":show wire resn HEM"}, "Display");
 
     // :hide [repr|all] [selection]
     cmdRegistry_.registerCmd("hide", [resolveRepr](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -2249,7 +2429,8 @@ void Application::registerCommands() {
         }
         obj->hideRepr(rt);
         return {true, "Hidden " + cmd.args[0]};
-    }, ":hide [repr|all] [selection]", "Hide representation (optionally for selection)");
+    }, ":hide [repr|all] [selection]", "Hide representation, or all representations",
+       {":hide all", ":hide cartoon", ":hide wire chain B"}, "Display");
 
     // :color <scheme>
     cmdRegistry_.registerCmd("color", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -2334,7 +2515,9 @@ void Application::registerCommands() {
         if (sel.empty()) return {false, "No atoms match: " + expr};
         obj->setAtomColors(std::vector<int>(sel.indices().begin(), sel.indices().end()), colorPair);
         return {true, "Colored " + std::to_string(sel.size()) + " atoms " + first};
-    }, ":color <scheme|name> [selection]", "Set coloring scheme or per-atom color");
+    }, ":color <scheme|name> [selection]",
+       "Set coloring scheme (element, chain, ss, bfactor, plddt, rainbow, restype, heteroatom) or named color",
+       {":color ss", ":color chain", ":color red chain A", ":color rainbow"}, "Coloring");
 
     // :zoom
     // Helper: get atom indices from optional selection args
@@ -2388,7 +2571,8 @@ void Application::registerCommands() {
         auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
         return {true, "Centered on " + std::to_string(indices.size()) + " atoms"};
-    }, ":center [selection]", "Center view on selection");
+    }, ":center [selection]", "Center the view on a selection (or whole object)",
+       {":center", ":center chain A", ":center resn HEM"}, "View");
 
     // :zoom [selection]
     cmdRegistry_.registerCmd("zoom", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -2399,7 +2583,8 @@ void Application::registerCommands() {
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
         if (span > 0.0f) app.tabs().currentTab().camera().setZoom(40.0f / span);
         return {true, "Zoomed to " + std::to_string(indices.size()) + " atoms"};
-    }, ":zoom [selection]", "Center and zoom to fit selection");
+    }, ":zoom [selection]", "Center and zoom to fit the selection (or whole object)",
+       {":zoom", ":zoom chain A", ":zoom resi 50-80"}, "View");
 
     // :orient [view <vx>,<vy>,<vz>] [selection] — align PCA axes, optionally view from a
     // direction expressed in the PCA frame (e1=longest, e2=mid, e3=shortest).
@@ -2540,7 +2725,9 @@ void Application::registerCommands() {
         cam.setRotation(rot);
 
         return {true, "Oriented " + std::to_string(indices.size()) + " atoms"};
-    }, ":orient [view <vx> <vy> <vz>] [selection]", "Center, zoom, and align PCA axes (default views down shortest axis)");
+    }, ":orient [view <vx> <vy> <vz>] [selection]",
+       "Center, zoom, and align principal axes (default: view down shortest axis)",
+       {":orient", ":orient chain A", ":orient view 1 0 0"}, "View");
 
     // :turn x|y|z <deg>  — incremental camera rotation around screen axes,
     // no PCA, no recompute. Mirrors PyMOL's `turn` and is the cheap path
@@ -2562,7 +2749,8 @@ void Application::registerCommands() {
         else if (axis == "z" || axis == "Z") cam.rotateZ(deg);
         else return {false, "Axis must be x, y, or z (got '" + axis + "')"};
         return {true, "Turned " + axis + " by " + std::to_string(deg) + " deg"};
-    }, ":turn x|y|z <deg>", "Rotate camera around screen axis (no PCA recompute)");
+    }, ":turn x|y|z <deg>", "Rotate camera around a screen axis (no PCA recompute)",
+       {":turn y 90", ":turn x -45"}, "View");
 
     // :set <option> [value]
     cmdRegistry_.registerCmd("set", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -2941,7 +3129,9 @@ void Application::registerCommands() {
                              : "Interface classification: off (single color)"};
         }
         return {false, "Unknown option: " + opt};
-    }, ":set <option> [value]", "Set option");
+    }, ":set <option> [value]",
+       "Set a runtime option (renderer, fog, outline, cartoon_*, focus_*, panel, seqbar, ...)",
+       {":set renderer pixel", ":set outline on", ":set fog 0.5"}, "Session");
 
     // :get — query current value of a :set option (for scripting)
     cmdRegistry_.registerCmd("get", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3065,13 +3255,24 @@ void Application::registerCommands() {
             return {true, "interface_thickness = " + std::to_string(app.interfaceThickness_)};
 
         return {false, "Unknown option: " + opt};
-    }, ":get <option>", "Get current value of a :set option");
+    }, ":get <option>", "Print the current value of a :set option (handy for scripting)",
+       {":get renderer", ":get fog", ":get focus_radius"}, "Session");
 
-    // :help
-    cmdRegistry_.registerCmd("help", [](Application&, const ParsedCommand&) -> ExecResult {
-        return {true, "Commands: :load :fetch :show :hide :color :zoom :center :orient :select :count "
-               ":align :measure :angle :dihedral :export :set :objects :delete :rename :info | ? for keybindings"};
-    }, ":help", "Show help");
+    // :help [cmd] — overview overlay (no args) or per-command help (one arg).
+    // Per-command help displays usage, description, and registered examples.
+    cmdRegistry_.registerCmd("help", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) {
+            app.showCommandIndex();
+            return {true, ""};
+        }
+        std::string name = cmd.args[0];
+        if (!name.empty() && name.front() == ':') name.erase(0, 1);
+        const CommandInfo* info = app.cmdRegistry().lookup(name);
+        if (!info) return {false, "Unknown command: :" + name};
+        app.showCommandHelp(*info);
+        return {true, ""};
+    }, ":help [cmd]", "Show command index, or detailed help for one command",
+       {":help", ":help fetch", ":help :align"}, "Help");
 
     // :delete
     cmdRegistry_.registerCmd("delete", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3089,7 +3290,8 @@ void Application::registerCommands() {
         std::string name = obj->name();
         app.store().remove(name);
         return {true, "Deleted " + name};
-    }, ":delete [name]", "Delete object");
+    }, ":delete [name]", "Delete an object (defaults to the currently selected one)",
+       {":delete", ":delete 1bna"}, "Window");
 
     // :rename
     cmdRegistry_.registerCmd("rename", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3105,7 +3307,8 @@ void Application::registerCommands() {
         if (app.store().rename(cmd.args[0], cmd.args[1]))
             return {true, "Renamed " + cmd.args[0] + " -> " + cmd.args[1]};
         return {false, "Failed to rename"};
-    }, ":rename [old] <new>", "Rename object");
+    }, ":rename [old] <new>", "Rename an object (single arg renames the current object)",
+       {":rename ref", ":rename 1bna ref"}, "Window");
 
     // :info
     cmdRegistry_.registerCmd("info", [](Application& app, const ParsedCommand&) -> ExecResult {
@@ -3114,7 +3317,8 @@ void Application::registerCommands() {
         return {true, obj->name() + ": " +
                std::to_string(obj->atoms().size()) + " atoms, " +
                std::to_string(obj->bonds().size()) + " bonds"};
-    }, ":info", "Show object info");
+    }, ":info", "Show atom/bond counts and metadata for the current object",
+       {":info"}, "Session");
 
     // :select <expression>
     cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3166,7 +3370,8 @@ void Application::registerCommands() {
 
         if (sel.empty()) return {false, "Selection empty: " + expr};
         return {true, "Selected " + std::to_string(sel.size()) + " atoms: " + expr};
-    }, ":select <expr>", "Select atoms by expression");
+    }, ":select <expr>", "Select atoms (use 'name = expr' for a named selection; 'clear' to drop $sele)",
+       {":select chain A", ":select s1 = resi 50-80", ":select clear"}, "Selection");
 
     // :count <expression> — count atoms matching selection
     cmdRegistry_.registerCmd("count", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3182,7 +3387,8 @@ void Application::registerCommands() {
 
         auto sel = app.parseSelection(expr, *obj);
         return {true, std::to_string(sel.size()) + " atoms match: " + expr};
-    }, ":count <expr>", "Count atoms matching expression");
+    }, ":count <expr>", "Count atoms matching a selection expression",
+       {":count chain A", ":count resn HEM", ":count $sele"}, "Selection");
 
     // :sele — list named selections
     cmdRegistry_.registerCmd("sele", [](Application& app, const ParsedCommand&) -> ExecResult {
@@ -3193,7 +3399,8 @@ void Application::registerCommands() {
             result += " " + name + "(" + std::to_string(sel.size()) + ")";
         }
         return {true, result};
-    }, ":sele", "List named selections");
+    }, ":sele", "List all named selections in the current session",
+       {":sele"}, "Selection");
 
     // :align <mobile> <target> — single-chain TM-align
     // Helper: parse align args with "to" separator
@@ -3280,17 +3487,20 @@ void Application::registerCommands() {
     // :align <obj> [sel] to <obj> [sel] — TM-align
     cmdRegistry_.registerCmd("align", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return doAlign(app, cmd, false);
-    }, ":align <obj> [sel] to <obj> [sel]", "Align structures (TM-align via USalign)");
+    }, ":align <obj> [sel] to <obj> [sel]", "TM-align structures (via USalign); optional selections restrict each side",
+       {":align mob to ref", ":align mob chain A to ref chain A"}, "Analysis");
 
     // :mmalign <obj> [sel] to <obj> [sel] — MM-align (complex/multi-chain)
     cmdRegistry_.registerCmd("mmalign", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return doAlign(app, cmd, true);
-    }, ":mmalign <obj> [sel] to <obj> [sel]", "Align complexes (MM-align via USalign)");
+    }, ":mmalign <obj> [sel] to <obj> [sel]", "MM-align complexes (via USalign); use for multi-chain assemblies",
+       {":mmalign complex1 to complex2"}, "Analysis");
 
     // :super — alias for :align
     cmdRegistry_.registerCmd("super", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return doAlign(app, cmd, false);
-    }, ":super <obj> [sel] to <obj> [sel]", "Superpose structures (alias for align)");
+    }, ":super <obj> [sel] to <obj> [sel]", "Superpose structures (alias for :align)",
+       {":super mob to ref"}, "Analysis");
 
     // :fetch <pdb_id> — download from RCSB PDB or AlphaFold DB
     cmdRegistry_.registerCmd("fetch", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3348,7 +3558,8 @@ void Application::registerCommands() {
         std::string result = app.loadFile(outPath.string());
         bool ok = result.rfind("Loaded ", 0) == 0;
         return {ok, "Fetched " + id + " from " + src + " -> " + outPath.string() + " | " + result};
-    }, ":fetch <pdb_id|afdb:uniprot_id>", "Download structure from RCSB PDB or AlphaFold DB");
+    }, ":fetch <pdb_id|afdb:uniprot_id>", "Download a structure from RCSB PDB (4-letter ID) or AlphaFold DB (afdb: prefix)",
+       {":fetch 1bna", ":fetch afdb:P00533"}, "Files");
 
     // :assembly [id|list] — generate biological assembly
     cmdRegistry_.registerCmd("assembly", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3381,7 +3592,8 @@ void Application::registerCommands() {
         } catch (const std::exception& e) {
             return {false, std::string("Assembly error: ") + e.what()};
         }
-    }, ":assembly [id|list]", "Generate biological assembly (default: assembly 1)");
+    }, ":assembly [id|list]", "Generate a biological assembly (defaults to assembly 1; 'list' shows available IDs)",
+       {":assembly", ":assembly 1", ":assembly list"}, "Files");
 
     // :export <file.pml> — export PyMOL script
     cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3401,7 +3613,8 @@ void Application::registerCommands() {
         bool ok = result.find("Failed") == std::string::npos &&
                   result.find("Error") == std::string::npos;
         return {ok, result};
-    }, ":export <file.pml>", "Export session as PyMOL script");
+    }, ":export <file.pml>", "Export the current session as a PyMOL script",
+       {":export figure.pml"}, "Files");
 
     // :screenshot <file.png>
     cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3534,7 +3747,9 @@ void Application::registerCommands() {
         if (offscreen.savePNG(path, reqDpi))
             return ExecResult{true, savedMsg(offscreen.pixelWidth(), offscreen.pixelHeight())};
         return {false, "Failed to save " + path};
-    }, ":screenshot [file.png] [W H [DPI]]", "Save PNG; optional pixel size + DPI metadata for figure prep");
+    }, ":screenshot [file.png] [W H [DPI]]",
+       "Save a PNG; optional explicit size (W H) and DPI metadata for figure prep",
+       {":screenshot", ":screenshot fig.png", ":screenshot fig.png 1920 1080 300"}, "Files");
 
     // :preset — apply smart default representation
     cmdRegistry_.registerCmd("preset", [](Application& app, const ParsedCommand&) -> ExecResult {
@@ -3542,7 +3757,8 @@ void Application::registerCommands() {
         if (!obj) return {false, "No object selected"};
         obj->applySmartDefaults();
         return {true, "Applied default preset (cartoon + ballstick ligands)"};
-    }, ":preset", "Apply smart default representations");
+    }, ":preset", "Apply smart default representations (cartoon for protein, ballstick for ligands)",
+       {":preset"}, "Display");
 
     // :label [selection] — add labels for atoms matching selection
     cmdRegistry_.registerCmd("label", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3568,13 +3784,15 @@ void Application::registerCommands() {
             if (!found) labels.push_back(idx);
         }
         return {true, "Labeled " + std::to_string(sel.size()) + " atoms"};
-    }, ":label <selection|clear>", "Show labels on viewport");
+    }, ":label <selection|clear>", "Show residue labels on the viewport (or 'clear' to remove)",
+       {":label resi 50-60", ":label $sele", ":label clear"}, "Display");
 
     // :unlabel — remove all labels
     cmdRegistry_.registerCmd("unlabel", [](Application& app, const ParsedCommand&) -> ExecResult {
         app.labelAtoms().clear();
         return {true, "Labels cleared"};
-    }, ":unlabel", "Remove all labels");
+    }, ":unlabel", "Remove all viewport labels (alias for :label clear)",
+       {":unlabel"}, "Display");
 
     // :overlay on|off | :overlay clear
     cmdRegistry_.registerCmd("overlay", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3593,7 +3811,8 @@ void Application::registerCommands() {
         if (!v) return {false, "Usage: :overlay on|off | :overlay clear"};
         app.overlayVisible_ = *v;
         return {true, *v ? "Overlays visible" : "Overlays hidden"};
-    }, ":overlay on|off | clear", "Show/hide overlays or clear labels+measurements");
+    }, ":overlay on|off | clear", "Toggle overlay visibility (labels, measurements, $sele) or clear them",
+       {":overlay on", ":overlay off", ":overlay clear"}, "Display");
 
     // :run [--strict] <script.mt> — execute a command script
     cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3618,13 +3837,16 @@ void Application::registerCommands() {
                     " (" + std::to_string(r.failures) + " failed; first: " + r.firstFail + ")"};
         }
         return {true, "Ran " + std::to_string(r.count) + " commands from " + path};
-    }, ":run [--strict] <file>", "Execute command script");
+    }, ":run [--strict] <file>",
+       "Execute a command script (# comments supported; --strict aborts on first error)",
+       {":run render.mt", ":run --strict ci.mt"}, "Files");
 
     cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> ExecResult {
         if (SessionSaver::saveSession(app))
             return {true, "Session saved to " + SessionSaver::sessionPath()};
         return {false, "Failed to save session"};
-    }, ":save", "Save session to ~/.molterm/autosave.toml");
+    }, ":save", "Save the current session to ~/.molterm/autosave.toml",
+       {":save"}, "Session");
 
     cmdRegistry_.registerCmd("resume", [](Application& app, const ParsedCommand&) -> ExecResult {
         std::string msg = SessionSaver::restoreSession(app);
@@ -3632,7 +3854,8 @@ void Application::registerCommands() {
                   msg.find("Cannot") == std::string::npos &&
                   msg.find("not found") == std::string::npos;
         return {ok, msg};
-    }, ":resume", "Restore session from ~/.molterm/autosave.toml");
+    }, ":resume", "Restore the last session from ~/.molterm/autosave.toml",
+       {":resume"}, "Session");
 
     // Helper: resolve atom index from serial number string or pick register
     auto resolveAtomIdx = [](Application& app, const std::string& s) -> int {
@@ -3699,7 +3922,9 @@ void Application::registerCommands() {
         app.measurements().push_back({{i1, i2}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":measure [s1 s2]", "Distance (no args = pk1↔pk2)");
+    }, ":measure [s1 s2]",
+       "Measure a distance between two atoms (no args = use pk1, pk2 from last clicks)",
+       {":measure", ":measure pk1 pk2", ":measure 12 47"}, "Measurement");
 
     // :angle [s1 s2 s3] — angle at vertex s2 (no args = pk1-pk2-pk3)
     cmdRegistry_.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3741,7 +3966,9 @@ void Application::registerCommands() {
         app.measurements().push_back({{i1, i2, i3}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":angle [s1 s2 s3]", "Angle at s2 (no args = pk1-pk2-pk3)");
+    }, ":angle [s1 s2 s3]",
+       "Measure the angle at s2 between (s1, s2, s3) (no args = pk1-pk2-pk3)",
+       {":angle", ":angle pk1 pk2 pk3"}, "Measurement");
 
     // :dihedral [s1 s2 s3 s4] — dihedral (no args = pk1-pk4)
     cmdRegistry_.registerCmd("dihedral", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3785,7 +4012,9 @@ void Application::registerCommands() {
         app.measurements().push_back({{i1, i2, i3, i4}, shortLabel});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":dihedral [s1 s2 s3 s4]", "Dihedral (no args = pk1-pk4)");
+    }, ":dihedral [s1 s2 s3 s4]",
+       "Measure a dihedral angle between four atoms (no args = pk1-pk4)",
+       {":dihedral", ":dihedral pk1 pk2 pk3 pk4"}, "Measurement");
 
     // :contactmap [cutoff] — toggle contact map panel
     cmdRegistry_.registerCmd("contactmap", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -3807,17 +4036,25 @@ void Application::registerCommands() {
         }
         if (app.canvas()) app.canvas()->invalidate();
         return {true, "Contact map hidden"};
-    }, ":contactmap [cutoff]", "Toggle residue contact map panel");
+    }, ":contactmap [cutoff]", "Toggle the residue contact map panel (default cutoff: 8 \xC3\x85)",
+       {":contactmap", ":contactmap 6"}, "Analysis");
 
     // :cmap — alias for :contactmap
     cmdRegistry_.registerCmd("cmap", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         return app.cmdRegistry().execute(app, cmd.args.empty() ? "contactmap" :
             "contactmap " + cmd.args[0]);
-    }, ":cmap [cutoff]", "Alias for :contactmap");
+    }, ":cmap [cutoff]", "Toggle contact map panel (alias for :contactmap)",
+       {":cmap", ":cmap 6"}, "Analysis");
 
     cmdRegistry_.registerCmd("interface", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) {
-            return {false, "Usage: :interface on|off [cutoff]"};
+            return {false, "Usage: :interface on|off|legend [cutoff]"};
+        }
+        // `:interface legend` opens an overlay showing the dash-color
+        // legend and per-type contact statistics for the cached overlay.
+        if (cmd.args[0] == "legend") {
+            app.showInterfaceLegend();
+            return {true, ""};
         }
         // First arg is on|off, second arg (optional) is cutoff in Å.
         // Numeric-only first arg keeps the original `:interface 4.5`
@@ -3831,7 +4068,7 @@ void Application::registerCommands() {
         } else {
             // Try as numeric cutoff → "on" with that cutoff.
             try { cutoff = std::stof(cmd.args[0]); wantOn = true; cutoffArgIdx = 99; }
-            catch (...) { return {false, "Usage: :interface on|off [cutoff]"}; }
+            catch (...) { return {false, "Usage: :interface on|off|legend [cutoff]"}; }
         }
         if (cmd.args.size() > cutoffArgIdx) {
             try { cutoff = std::stof(cmd.args[cutoffArgIdx]); }
@@ -3908,7 +4145,9 @@ void Application::registerCommands() {
         app.interfaceRepr_.clear();
         app.interfaceFromZoom_ = false;
         return {true, "Interface overlay hidden"};
-    }, ":interface on|off [cutoff]", "Show/hide classified inter-chain contact overlay");
+    }, ":interface on|off|legend [cutoff]",
+       "Show/hide classified inter-chain contact overlay; 'legend' opens a color/stats overlay (default cutoff: 4.5 \xC3\x85)",
+       {":interface on", ":interface off", ":interface on 5.0", ":interface legend"}, "Analysis");
 
     // :focus <selection>  → Mol*-style focus on selection
     //                        (camera + hide non-neighborhood + show
@@ -3937,7 +4176,13 @@ void Application::registerCommands() {
         return {true, "Focus: " + std::to_string(sel.size()) +
                       " atoms (" + expr + ")"};
     }, ":focus <selection>|off",
-       "Mol*-style click-to-focus: zoom + hide occluders + show sidechains");
+       "Mol*-style click-to-focus: zoom in, hide occluders, show sidechains (use 'off' to exit)",
+       {":focus chain A and resi 80",
+        ":focus $sele",
+        ":focus same residue as $sele",
+        ":focus same chain as resn HEM",
+        ":focus within 5 of resn HEM",
+        ":focus off"}, "View");
 
     // :dssp — Re-run DSSP secondary-structure assignment on the current
     // state. Useful for trajectory frames where the loader's initial SS
@@ -3962,7 +4207,256 @@ void Application::registerCommands() {
         return {true, "DSSP recomputed: " + std::to_string(nH) +
                       " H, " + std::to_string(nE) + " E (state " +
                       std::to_string(obj->activeState() + 1) + ")"};
-    }, ":dssp", "Recompute secondary structure (Kabsch-Sander) for current state");
+    }, ":dssp", "Recompute secondary structure (Kabsch-Sander) for the current state",
+       {":dssp"}, "Analysis");
+}
+
+// ----------------------------------------------------------------------
+// Help overlay population
+// ----------------------------------------------------------------------
+
+void Application::activateOverlay(std::string title,
+                                  std::vector<std::string> lines,
+                                  std::vector<int> colors,
+                                  std::string headlessTitle) {
+    if (isHeadless() && !headlessTitle.empty()) {
+        std::cout << headlessTitle << "\n\n";
+        for (const auto& l : lines) std::cout << l << "\n";
+        return;
+    }
+    infoOverlay_.title = std::move(title);
+    infoOverlay_.lines = std::move(lines);
+    infoOverlay_.lineColors = std::move(colors);
+    infoOverlay_.scrollOffset = 0;
+    infoOverlay_.active = true;
+}
+
+void Application::showKeybindingHelp() {
+    activateOverlay("MolTerm Keybindings", {
+        "NAVIGATION",
+        " h/j/k/l   Rotate molecule",
+        " W/A/S/D   Pan view",
+        " +/-       Zoom in/out",
+        " </>       Z-axis rotation",
+        " 0         Reset view",
+        "",
+        "REPRESENTATIONS (s=show, x=hide)",
+        " sw/sb/ss/sc/sr/sk   wire/ball/fill/cartoon/ribbon/bone",
+        " xw/xb/xs/xc/xr/xk   hide each      xa  hide all",
+        "",
+        "COLORING (c + key)",
+        " ce element  cc chain  cs SS  cb B-factor",
+        " cp pLDDT    cr rainbow",
+        "",
+        "OBJECTS & TABS",
+        " Tab/S-Tab  Next/prev object   Space  Toggle visible",
+        " gt/gT      Next/prev tab      dd     Delete object",
+        " o panel   i inspect   / search   n/N results",
+        " gs/gS/gC  Atom/residue/chain pick   gf  Focus pick",
+        "",
+        "ANALYSIS & STATE",
+        " I  toggle :interface overlay     F  focus picked residue",
+        " [/] prev/next state              b  toggle sequence bar",
+        " {/} seqbar prev/next chain",
+        "",
+        "MACROS / OTHER",
+        " q+a-z record   @+a-z play    m  toggle pixel renderer",
+        " P  screenshot  u/Ctrl-r undo/redo  .  repeat last action",
+        "",
+        ":help [cmd]   :load   :fetch   :align   :measure",
+        ":focus   :dssp   :interface   :export   :screenshot",
+    });
+}
+
+void Application::showCommandIndex() {
+    // Group commands by category. Aliases (commands sharing usage with a
+    // canonical entry, like :e for :load) appear in the same group; we
+    // keep them all so the index shows every dispatchable name.
+    std::map<std::string, std::vector<const CommandInfo*>> groups;
+    for (const auto& [name, info] : cmdRegistry_.all()) {
+        const std::string& cat = info.category.empty() ? "Misc" : info.category;
+        groups[cat].push_back(&info);
+    }
+    // Stable category ordering: most user-facing first, then alphabetical.
+    static const std::vector<std::string> ordered = {
+        "Files", "Display", "Coloring", "View", "Selection",
+        "Measurement", "Analysis", "Session", "Window", "Help"
+    };
+
+    std::vector<std::string> lines;
+    auto emitGroup = [&](const std::string& cat,
+                         std::vector<const CommandInfo*>& cmds) {
+        std::sort(cmds.begin(), cmds.end(),
+                  [](const CommandInfo* a, const CommandInfo* b) {
+                      return a->name < b->name;
+                  });
+        lines.push_back(cat);
+        for (const auto* info : cmds) {
+            std::string usage = info->usage.empty() ? (":" + info->name) : info->usage;
+            std::string row = " " + usage;
+            const int kPad = 36;
+            if (static_cast<int>(row.size()) < kPad)
+                row.append(kPad - row.size(), ' ');
+            else
+                row += "  ";
+            row += info->description;
+            lines.push_back(row);
+        }
+        lines.push_back("");
+    };
+
+    for (const auto& cat : ordered) {
+        auto it = groups.find(cat);
+        if (it == groups.end()) continue;
+        emitGroup(cat, it->second);
+        groups.erase(it);
+    }
+    // Anything uncategorized falls through alphabetically.
+    for (auto& [cat, cmds] : groups) emitGroup(cat, cmds);
+
+    if (!lines.empty() && lines.back().empty()) lines.pop_back();
+    lines.push_back(":help <cmd>  for usage, description, and examples");
+
+    activateOverlay("MolTerm Commands", std::move(lines), {}, "MolTerm Commands");
+}
+
+void Application::showCommandHelp(const CommandInfo& info) {
+    std::vector<std::string> lines;
+    lines.push_back("Usage:");
+    lines.push_back("  " + (info.usage.empty() ? (":" + info.name) : info.usage));
+    lines.push_back("");
+    if (!info.description.empty()) {
+        lines.push_back("Description:");
+        lines.push_back("  " + info.description);
+        lines.push_back("");
+    }
+    if (!info.category.empty()) {
+        lines.push_back("Category: " + info.category);
+        lines.push_back("");
+    }
+    if (!info.examples.empty()) {
+        lines.push_back("Examples:");
+        for (const auto& ex : info.examples) lines.push_back("  " + ex);
+    }
+    if (!lines.empty() && lines.back().empty()) lines.pop_back();
+
+    activateOverlay(":" + info.name, std::move(lines), {}, ":" + info.name);
+}
+
+void Application::showInterfaceLegend() {
+    // Color each legend swatch row in the interaction-type's render color so
+    // the modal directly mirrors what the viewport draws.
+    static constexpr const char* kSwatch = "\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80 "
+                                            "\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80 "
+                                            "\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80";  // ─── ─── ───
+    static constexpr const char* kAng = "\xC3\x85";  // Å
+
+    std::vector<std::string> lines;
+    std::vector<int> colors;
+    auto add = [&](std::string text, int color = -1) {
+        lines.push_back(std::move(text));
+        colors.push_back(color);
+    };
+
+    add("Interaction types (dashed inter-chain lines):");
+    add("");
+    add(std::string("  ") + kSwatch + "  H-bond        N/O \xE2\x86\x94 N/O,           \xE2\x89\xA4 3.5 " + kAng,
+        interactionColor(InteractionType::HBond));
+    add(std::string("  ") + kSwatch + "  Salt bridge   charged,             \xE2\x89\xA4 4.0 " + kAng,
+        interactionColor(InteractionType::SaltBridge));
+    add(std::string("  ") + kSwatch + "  Hydrophobic   C \xE2\x86\x94 C,               \xE2\x89\xA4 4.5 " + kAng,
+        interactionColor(InteractionType::Hydrophobic));
+    add(std::string("  ") + kSwatch + "  Other         heavy-atom pair below cutoff",
+        interactionColor(InteractionType::Other));
+    add("");
+
+    if (interfaceContacts_.empty()) {
+        add("Statistics:");
+        add("  No interface overlay active.");
+        add("  Run :interface on  to compute and display contacts.");
+    } else {
+        // When focus mode is active, restrict statistics to contacts that
+        // touch the focus subject — the user is looking at one binding site,
+        // so the legend should reflect that site, not the whole structure.
+        const bool focusFiltered = focusSnapshot_.active && !focusAtomMask_.empty();
+        auto inFocus = [&](int atomIdx) {
+            return atomIdx >= 0 && atomIdx < (int)focusAtomMask_.size()
+                   && focusAtomMask_[atomIdx];
+        };
+
+        struct TypeStats {
+            int n = 0;
+            float dMin = std::numeric_limits<float>::infinity();
+            float dMax = -std::numeric_limits<float>::infinity();
+            float dSum = 0.0f;
+        };
+        std::array<TypeStats, 4> ts{};
+        std::set<std::tuple<std::string, int, char>> residues;
+        auto obj = tabMgr_.currentTab().currentObject();
+        const std::vector<AtomData> empty;
+        const std::vector<AtomData>& atoms = obj ? obj->atoms() : empty;
+        for (const auto& c : interfaceContacts_) {
+            if (focusFiltered && !inFocus(c.atom1) && !inFocus(c.atom2)) continue;
+            int idx = static_cast<int>(c.type);
+            if (idx >= 0 && idx < 4) {
+                ts[idx].n++;
+                ts[idx].dMin = std::min(ts[idx].dMin, c.distance);
+                ts[idx].dMax = std::max(ts[idx].dMax, c.distance);
+                ts[idx].dSum += c.distance;
+            }
+            if (c.atom1 >= 0 && c.atom1 < (int)atoms.size()) {
+                const auto& a = atoms[c.atom1];
+                residues.emplace(a.chainId, a.resSeq, a.insCode);
+            }
+            if (c.atom2 >= 0 && c.atom2 < (int)atoms.size()) {
+                const auto& a = atoms[c.atom2];
+                residues.emplace(a.chainId, a.resSeq, a.insCode);
+            }
+        }
+        int total = 0;
+        for (const auto& s : ts) total += s.n;
+
+        add("Statistics:");
+        char buf[200];
+        if (focusFiltered) {
+            const std::string& expr = focusExpr_.empty() ? std::string("focus subject") : focusExpr_;
+            std::snprintf(buf, sizeof(buf), "  Scope: focus subject  (%.*s)",
+                          static_cast<int>(std::min<size_t>(expr.size(), 80)), expr.c_str());
+            add(buf);
+        } else {
+            add("  Scope: whole structure");
+        }
+        std::snprintf(buf, sizeof(buf), "  Total contacts:        %d", total);
+        add(buf);
+        std::snprintf(buf, sizeof(buf), "  Residues at interface: %zu", residues.size());
+        add(buf);
+        add("");
+        add("By type:");
+        struct Row { const char* name; InteractionType type; };
+        const Row rows[4] = {
+            {"H-bond",      InteractionType::HBond},
+            {"Salt bridge", InteractionType::SaltBridge},
+            {"Hydrophobic", InteractionType::Hydrophobic},
+            {"Other",       InteractionType::Other},
+        };
+        for (const auto& r : rows) {
+            const auto& s = ts[static_cast<int>(r.type)];
+            if (s.n == 0) {
+                std::snprintf(buf, sizeof(buf),
+                              "  %-12s %4d", r.name, 0);
+            } else {
+                float pct = total ? (100.0f * s.n / total) : 0.0f;
+                float avg = s.dSum / s.n;
+                std::snprintf(buf, sizeof(buf),
+                              "  %-12s %4d  (%4.1f%%)  avg %.2f %s   (%.2f - %.2f)",
+                              r.name, s.n, pct, avg, kAng, s.dMin, s.dMax);
+            }
+            add(buf, interactionColor(r.type));
+        }
+    }
+
+    activateOverlay("Interface Overlay", std::move(lines),
+                    std::move(colors), "Interface Overlay");
 }
 
 } // namespace molterm

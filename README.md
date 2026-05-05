@@ -78,7 +78,7 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 ```bash
 # Install latest release (macOS arm64, Linux x86_64/aarch64)
 curl -fsSL https://raw.githubusercontent.com/vv137/molterm/main/scripts/update.sh | bash
-# → installs to ~/.local/bin/molterm. Override:
+# installs to ~/.local/bin/molterm. Override:
 #   ./scripts/update.sh /usr/local/bin/molterm
 #   MOLTERM_BIN=./build/molterm ./scripts/update.sh
 
@@ -306,6 +306,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 ### Commands
 
 ```vim
+:help                           " Command index overlay (grouped by category)
+:help <cmd>                     " Per-command overlay: usage, description, examples
 :load <file>                    " Load mmCIF/PDB/gzipped file
 :fetch <pdb_id>                 " Download from RCSB PDB (e.g. fetch 1abc)
 :fetch afdb:<uniprot_id>        " Download from AlphaFold DB (e.g. fetch afdb:P12345)
@@ -339,7 +341,9 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png] [W H [DPI]] " Save PNG; W H force off-screen size, optional DPI stamps pHYs metadata
 :interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
+:interface legend               " Overlay with interaction-color legend + per-type stats (focus-aware scope)
 :focus <selection>              " Mol*-style click-to-focus: zoom + isolate sidechains
+                                "   Whole interacting residues are auto-promoted into the neighborhood
 :focus off                      " Exit focus session, restore camera + reprs
 :dssp                           " Recompute DSSP secondary structure for current state (per-state cached)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
@@ -714,7 +718,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 
 ### Phase 5: Polish — DONE
 
-- [x] **Help system** — `?` shows keybinding cheat sheet overlay (press any key to dismiss)
+- [x] **Help system** — `?` keybinding cheat sheet overlay; `:help` command index (grouped by category, auto-built from the registry); `:help <cmd>` shows usage, description, and examples for a single command
 - [x] **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pick registers (pk1-pk4) or serial numbers
 - [x] **Multi-state animation** — `[`/`]` state cycling for NMR ensembles; state shown in status bar
 - [x] **Ribbon geometry** — Catmull-Rom spline ribbon with C→O guide vectors, sheet arrowheads, cross-fill

@@ -22,13 +22,17 @@ struct CommandInfo {
     CommandHandler handler;
     std::string usage;
     std::string description;
+    std::vector<std::string> examples;
+    std::string category;
 };
 
 class CommandRegistry {
 public:
     void registerCmd(const std::string& name, CommandHandler handler,
                      const std::string& usage = "",
-                     const std::string& description = "");
+                     const std::string& description = "",
+                     std::vector<std::string> examples = {},
+                     const std::string& category = "");
 
     // Execute a command string, returns structured result
     ExecResult execute(Application& app, const std::string& input);
@@ -37,6 +41,11 @@ public:
     std::vector<std::string> complete(const std::string& prefix) const;
 
     bool hasCommand(const std::string& name) const;
+
+    const CommandInfo* lookup(const std::string& name) const;
+
+    // Iterate all registered commands (for :help index)
+    const std::unordered_map<std::string, CommandInfo>& all() const { return commands_; }
 
 private:
     std::unordered_map<std::string, CommandInfo> commands_;

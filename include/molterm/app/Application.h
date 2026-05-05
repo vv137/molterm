@@ -70,6 +70,40 @@ public:
     UndoStack& undoStack() { return undoStack_; }
     CommandRegistry& cmdRegistry() { return cmdRegistry_; }
 
+    // Centered modal overlay for `?`, `:help`, `:help <cmd>`, and
+    // `:interface legend`. Title + lines feed the renderer in
+    // renderViewport(); scroll/dismiss keys are handled in processInput().
+    struct InfoOverlay {
+        std::string title;
+        std::vector<std::string> lines;
+        // Optional per-line color override (legend swatches). When
+        // lineColors[i] >= 0 that line renders in that color; otherwise
+        // the default status-bar color is used. May be shorter than lines.
+        std::vector<int> lineColors;
+        bool active = false;
+        int scrollOffset = 0;     // first visible line in *wrapped* line space
+        int lastVisibleRows = 0;  // last frame's content height
+        int lastTotalLines = 0;   // last frame's wrapped-line count (paging math)
+    };
+    InfoOverlay& infoOverlay() { return infoOverlay_; }
+    const InfoOverlay& infoOverlay() const { return infoOverlay_; }
+    void showKeybindingHelp();
+    void showCommandIndex();
+    void showCommandHelp(const CommandInfo& info);
+    void showInterfaceLegend();
+
+private:
+    // Activate the centered overlay with the given content. In headless
+    // mode (no TUI), `headlessTitle` is non-empty and the lines are
+    // printed to stdout instead — set it empty to skip the headless
+    // branch (e.g. `?` cheat sheet, which is interactive-only).
+    void activateOverlay(std::string title,
+                         std::vector<std::string> lines,
+                         std::vector<int> colors = {},
+                         std::string headlessTitle = "");
+
+public:
+
     // Load a file into the current tab
     std::string loadFile(const std::string& path);
 
@@ -162,8 +196,7 @@ private:
     // Named selections
     std::unordered_map<std::string, Selection> namedSelections_;
 
-    // Help overlay state
-    bool helpOverlay_ = false;
+    InfoOverlay infoOverlay_;
 
     // Contact map + interface overlay state
     ContactMapPanel contactMapPanel_;
