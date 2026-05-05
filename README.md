@@ -69,7 +69,7 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 - **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
 - **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode); dashed lines respect z-buffer so atoms in front occlude them
 - **Mol*-style focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
-- **DSSP secondary structure (partial)** — internal Kabsch-Sander H-bond model: 3-10 / α / π n-turn helix detection + parallel / antiparallel β-bridges, collapsed to molterm's 3-class SS. On 4HHB vs the canonical `mkdssp`: helix calls match 100%, sheet ~86% (ladder propagation not yet ported). Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`
+- **DSSP secondary structure** — full Kabsch-Sander pipeline: turns ▶ helices (3₁₀ / α / π) ▶ bridges (parallel / antiparallel) ▶ ladders with bulge propagation ▶ sheets, collapsed to molterm's 3-class SS. Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`. Validated against `mkdssp 4.5`: 13/15 PDB test structures match at 100% (4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ, 1MBN, 1HHO, 1LMB, 2HHB, 2NLS, 2GB1, 1L2Y, 1CRN); 1AKE/7TIM at 99% (residual mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff, where float precision flips the boundary)
 - **Full customization** — keybindings, color themes, and settings via TOML configs in `~/.molterm/`
 - **Structured logging** — session log to `~/.molterm/molterm.log`
 
@@ -786,7 +786,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **PyMOL viewport size** — `:export` now includes `viewport 1280, 960` for standard figure dimensions
 - [x] **Contact map** (hidden) — `:contactmap [cutoff]` Cα-Cα distance heatmap panel (available via command)
 - [x] **Geometric SS fallback** — φ/ψ Ramachandran classifier with 3+/4+ run smoothing, runs when a file has no HELIX/SHEET records (CASP TS, AlphaFold, raw coords)
-- [~] **DSSP-quality SS** (partial) — Kabsch & Sander H-bond model with n-turn helix (α / 3₁₀ / π) + bridge β-sheet detection landed (`:dssp`, per-state cached for trajectories). Helix calls match `mkdssp` at 100% on 4HHB; sheet at ~86%. Remaining: ladder propagation for full sheet match, optional 8-class output
+- [x] **DSSP-quality SS** — Kabsch & Sander H-bond model with n-turn helix (α / 3₁₀ / π) + bridge β-sheet detection + ladder propagation with bulge connection (`:dssp`, per-state cached for trajectories). Validated against `mkdssp 4.5` on 15 PDB structures: 13 match at 100% (incl. 4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ); 1AKE / 7TIM at 99% — remaining mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff. Optional 8-class output not yet exposed
 - [ ] **Pixel-mode label rendering** — built-in bitmap font for labels rendered directly into RGB framebuffer
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)

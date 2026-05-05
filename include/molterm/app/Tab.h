@@ -20,6 +20,7 @@ public:
     // Object management
     void addObject(std::shared_ptr<MolObject> obj);
     void removeObject(int idx);
+    void clear();   // remove every object; selectedIdx_ → -1
     std::shared_ptr<MolObject> currentObject() const;
     const std::vector<std::shared_ptr<MolObject>>& objects() const { return objects_; }
 

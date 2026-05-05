@@ -885,7 +885,8 @@ void Application::handleAction(Action action) {
                         }
                     } catch (...) {}
                 } else if (cmdName == "delete" || cmdName == "rename" ||
-                           cmdName == "align" || cmdName == "mmalign" || cmdName == "super") {
+                           cmdName == "align" || cmdName == "mmalign" || cmdName == "super" ||
+                           cmdName == "alignto" || cmdName == "mmalignto") {
                     // Object name completion
                     for (const auto& n : store_.names()) {
                         if (n.find(partial) == 0) candidates.push_back(n);
@@ -3291,6 +3292,39 @@ void Application::registerCommands() {
     }, ":help [cmd]", "Show command index, or detailed help for one command",
        {":help", ":help fetch", ":help :align"}, "Help");
 
+    // :clear — wipe the current tab (or every tab + the global store with 'all')
+    cmdRegistry_.registerCmd("clear", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.size() > 1 ||
+            (cmd.args.size() == 1 && cmd.args[0] != "all")) {
+            return {false, "Usage: :clear [all]"};
+        }
+        bool wipeEverything = !cmd.args.empty();
+
+        if (wipeEverything) {
+            int total = 0;
+            for (size_t i = 0; i < app.tabs().count(); ++i) {
+                total += static_cast<int>(app.tabs().tab(i).objects().size());
+                app.tabs().tab(i).clear();
+            }
+            // Drop every entry in the global store too — :clear-with-tabs
+            // is only useful as a hermetic reset, and leaving orphans in
+            // the store would defeat that.
+            for (const auto& n : app.store().names()) app.store().remove(n);
+            if (total == 0) return {true, "Already empty"};
+            return {true, "Cleared all objects (" + std::to_string(total) + " total)"};
+        }
+
+        auto& tab = app.tabs().currentTab();
+        int n = static_cast<int>(tab.objects().size());
+        if (n == 0) return {true, "Tab is already empty"};
+        tab.clear();
+        return {true, "Cleared " + std::to_string(n) + " object(s)"};
+    },
+    ":clear [all]",
+    "Wipe the current tab; ':clear all' empties every tab and the global object store",
+    {":clear", ":clear all"},
+    "Window");
+
     // :delete
     cmdRegistry_.registerCmd("delete", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto& tab = app.tabs().currentTab();
@@ -3419,63 +3453,66 @@ void Application::registerCommands() {
     }, ":sele", "List all named selections in the current session",
        {":sele"}, "Selection");
 
-    // :align <mobile> <target> — single-chain TM-align
-    // Helper: parse align args with "to" separator
-    // Syntax: :align <obj> [sel] to <obj> [sel]
-    //   :align 1abc to 2def                      — all atoms
-    //   :align 1abc chain A to 2def chain A       — chain A of each
-    //   :align 1abc backbone to 2def backbone     — backbone only
-    //   :align 1abc to 2def                       — simple
-    // Legacy: :align 1abc 2def [shared_sel]       — if no "to" found
-    auto doAlign = [](Application& app, const ParsedCommand& cmd, bool complex) -> ExecResult {
-        if (cmd.args.size() < 2) {
-            std::string name = complex ? "mmalign" : "align";
-            return {false, "Usage: :" + name + " <obj> [sel] to <obj> [sel]"};
+    // ── :align / :mmalign / :alignto ───────────────────────────────────────
+    //
+    // Syntax (canonical):
+    //   :align    <mob> [sel] to <ref> [sel] [tm|mm]
+    //   :alignto  <ref> [sel]                                — mob = current obj
+    //   :alignto  <mob_sel> to <ref> [sel] [tm|mm]
+    // Legacy (no "to"):  :align <mob> <ref> [shared_sel]
+    //
+    // Algorithm picker:
+    //   - tm trailing token  → force TM-align (single-chain)
+    //   - mm trailing token  → force MM-align (multi-chain complex)
+    //   - otherwise          → MM if either side spans >1 chain after
+    //                          selection, else TM. Tie-break = TM.
+    //
+    // :mmalign / :mmalignto are hidden back-compat aliases that hard-force
+    // MM. :super = TM-only alias.
+    enum class AlignMode { Auto, ForceTM, ForceMM };
+
+    // Pop a trailing tm/mm token from a token vector (returns the mode
+    // and removes the token in place). The check is exact-match only —
+    // selections containing "tm" inside an expression aren't affected
+    // because we only pop the LAST token.
+    auto popModeToken = [](std::vector<std::string>& toks) -> AlignMode {
+        AlignMode m = AlignMode::Auto;
+        while (!toks.empty()) {
+            const std::string& last = toks.back();
+            if (last == "tm")      { m = AlignMode::ForceTM; toks.pop_back(); }
+            else if (last == "mm") { m = AlignMode::ForceMM; toks.pop_back(); }
+            else break;
         }
+        return m;
+    };
 
-        // Find "to" separator
-        int toIdx = -1;
-        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
-            if (cmd.args[i] == "to") { toIdx = i; break; }
-        }
-
-        std::string mobileName, targetName;
-        std::string mobileExpr, targetExpr;
-
-        if (toIdx > 0) {
-            // "to" found: left side = mobile obj + sel, right side = target obj + sel
-            mobileName = cmd.args[0];
-            for (int i = 1; i < toIdx; ++i) {
-                if (!mobileExpr.empty()) mobileExpr += " ";
-                mobileExpr += cmd.args[i];
-            }
-            if (toIdx + 1 < static_cast<int>(cmd.args.size())) {
-                targetName = cmd.args[toIdx + 1];
-                for (int i = toIdx + 2; i < static_cast<int>(cmd.args.size()); ++i) {
-                    if (!targetExpr.empty()) targetExpr += " ";
-                    targetExpr += cmd.args[i];
-                }
-            } else {
-                return {false, "Missing target after 'to'"};
-            }
+    auto chainCount = [](const MolObject& obj, const std::vector<int>& atoms) -> int {
+        std::set<std::string> chains;
+        if (atoms.empty()) {
+            for (const auto& a : obj.atoms()) chains.insert(a.chainId);
         } else {
-            // Legacy: first two args are obj names, rest is shared selection
-            mobileName = cmd.args[0];
-            targetName = cmd.args[1];
-            for (size_t i = 2; i < cmd.args.size(); ++i) {
-                if (!mobileExpr.empty()) mobileExpr += " ";
-                mobileExpr += cmd.args[i];
+            const auto& all = obj.atoms();
+            for (int idx : atoms) {
+                if (idx >= 0 && idx < static_cast<int>(all.size()))
+                    chains.insert(all[idx].chainId);
             }
-            targetExpr = mobileExpr;
         }
+        return static_cast<int>(chains.size());
+    };
 
-        auto mobile = app.store().get(mobileName);
-        auto target = app.store().get(targetName);
-        if (!mobile) return {false, "Object not found: " + mobileName};
-        if (!target) return {false, "Object not found: " + targetName};
-
+    // Shared dispatcher. mobile/target are pre-resolved shared_ptrs (the
+    // caller decides whether the mobile name comes from cmd.args[0] or
+    // from currentObject()). mobileLabel is the name to print in the
+    // result message.
+    auto runAlign = [chainCount](Application& app,
+                                  std::shared_ptr<MolObject> mobile,
+                                  std::shared_ptr<MolObject> target,
+                                  const std::string& mobileLabel,
+                                  const std::string& targetLabel,
+                                  const std::string& mobileExpr,
+                                  const std::string& targetExpr,
+                                  AlignMode mode) -> ExecResult {
         std::vector<int> mobileAtoms, targetAtoms;
-
         if (!mobileExpr.empty()) {
             auto mSel = app.parseSelection(mobileExpr, *mobile);
             mobileAtoms = std::vector<int>(mSel.indices().begin(), mSel.indices().end());
@@ -3489,35 +3526,184 @@ void Application::registerCommands() {
                 return {false, "Target selection empty: " + targetExpr};
         }
 
+        bool complex;
+        switch (mode) {
+            case AlignMode::ForceTM: complex = false; break;
+            case AlignMode::ForceMM: complex = true;  break;
+            default:
+                complex = chainCount(*mobile, mobileAtoms) > 1
+                       || chainCount(*target, targetAtoms) > 1;
+        }
+
         auto result = complex
             ? Aligner::alignComplex(*mobile, *target, mobileAtoms, targetAtoms)
             : Aligner::align(*mobile, *target, mobileAtoms, targetAtoms);
         if (!result.success) return {false, "Align failed: " + result.message};
 
-        // Transform ALL atoms of mobile
         Aligner::applyTransform(*mobile, result);
-
-        std::string mode = complex ? "MM-" : "TM-";
-        return {true, mode + "aligned " + mobileName + " → " + targetName + " | " + result.message};
+        std::string prefix = complex ? "MM-" : "TM-";
+        return {true, prefix + "aligned " + mobileLabel + " → " + targetLabel +
+                      " | " + result.message};
     };
 
-    // :align <obj> [sel] to <obj> [sel] — TM-align
-    cmdRegistry_.registerCmd("align", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        return doAlign(app, cmd, false);
-    }, ":align <obj> [sel] to <obj> [sel]", "TM-align structures (via USalign); optional selections restrict each side",
-       {":align mob to ref", ":align mob chain A to ref chain A"}, "Analysis");
+    // Parse :align-style args into (mobileName, mobileExpr, targetName,
+    // targetExpr, mode). Mobile is taken from cmd.args[0] when
+    // mobileFromCurrent==false; otherwise the entire arg list represents
+    // ref-side syntax (a target name + optional selection, with an
+    // optional `to` to introduce mobile-side selection on the current
+    // object).
+    auto joinTokens = [](const std::vector<std::string>& toks,
+                         size_t begin = 0,
+                         size_t end = std::string::npos) -> std::string {
+        if (end == std::string::npos) end = toks.size();
+        std::string s;
+        for (size_t i = begin; i < end; ++i) {
+            if (!s.empty()) s += ' ';
+            s += toks[i];
+        }
+        return s;
+    };
 
-    // :mmalign <obj> [sel] to <obj> [sel] — MM-align (complex/multi-chain)
-    cmdRegistry_.registerCmd("mmalign", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        return doAlign(app, cmd, true);
-    }, ":mmalign <obj> [sel] to <obj> [sel]", "MM-align complexes (via USalign); use for multi-chain assemblies",
-       {":mmalign complex1 to complex2"}, "Analysis");
+    auto parseAlignArgs = [popModeToken, joinTokens](
+        const ParsedCommand& cmd, bool mobileFromCurrent,
+        std::string& mobileName, std::string& mobileExpr,
+        std::string& targetName, std::string& targetExpr,
+        AlignMode& mode, std::string& err) -> bool {
 
-    // :super — alias for :align
-    cmdRegistry_.registerCmd("super", [doAlign](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        return doAlign(app, cmd, false);
-    }, ":super <obj> [sel] to <obj> [sel]", "Superpose structures (alias for :align)",
-       {":super mob to ref"}, "Analysis");
+        std::vector<std::string> args = cmd.args;
+        const char* usage = mobileFromCurrent
+            ? "Usage: :alignto <target> [sel] | <mobile_sel> to <target> [target_sel]"
+            : "Usage: :align <obj> [sel] to <obj> [sel] [tm|mm]";
+
+        int toIdx = -1;
+        for (int i = 0; i < static_cast<int>(args.size()); ++i) {
+            if (args[i] == "to") { toIdx = i; break; }
+        }
+
+        if (toIdx >= 0) {
+            std::vector<std::string> left(args.begin(), args.begin() + toIdx);
+            std::vector<std::string> right(args.begin() + toIdx + 1, args.end());
+            mode = popModeToken(right);
+            if (right.empty()) { err = "Missing target after 'to'"; return false; }
+            targetName = right[0];
+            targetExpr = joinTokens(right, 1);
+            if (mobileFromCurrent) {
+                mobileExpr = joinTokens(left);
+            } else {
+                if (left.empty()) { err = usage; return false; }
+                mobileName = left[0];
+                mobileExpr = joinTokens(left, 1);
+            }
+            return true;
+        }
+
+        // No 'to' separator.
+        mode = popModeToken(args);
+        if (mobileFromCurrent) {
+            if (args.empty()) { err = usage; return false; }
+            targetName = args[0];
+            targetExpr = joinTokens(args, 1);
+            return true;
+        }
+        // Legacy two-name form: :align <mob> <ref> [shared_sel] [tm|mm]
+        if (args.size() < 2) { err = usage; return false; }
+        mobileName = args[0];
+        targetName = args[1];
+        mobileExpr = joinTokens(args, 2);
+        targetExpr = mobileExpr;
+        return true;
+    };
+
+    // :align — auto-detect TM vs MM by chain count
+    auto doAlignByName = [parseAlignArgs, runAlign]
+        (Application& app, const ParsedCommand& cmd, AlignMode forced)
+        -> ExecResult {
+        std::string mobileName, mobileExpr, targetName, targetExpr, err;
+        AlignMode mode = AlignMode::Auto;
+        if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/false,
+                            mobileName, mobileExpr, targetName, targetExpr,
+                            mode, err)) return {false, err};
+        if (forced != AlignMode::Auto) mode = forced;
+        auto mobile = app.store().get(mobileName);
+        auto target = app.store().get(targetName);
+        if (!mobile) return {false, "Object not found: " + mobileName};
+        if (!target) return {false, "Object not found: " + targetName};
+        return runAlign(app, mobile, target, mobileName, targetName,
+                        mobileExpr, targetExpr, mode);
+    };
+
+    // :alignto — mobile = current object in current tab
+    auto doAlignTo = [parseAlignArgs, runAlign]
+        (Application& app, const ParsedCommand& cmd, AlignMode forced)
+        -> ExecResult {
+        auto mobile = app.tabs().currentTab().currentObject();
+        if (!mobile) return {false, "No object selected"};
+        std::string mobileName, mobileExpr, targetName, targetExpr, err;
+        AlignMode mode = AlignMode::Auto;
+        if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/true,
+                            mobileName, mobileExpr, targetName, targetExpr,
+                            mode, err)) return {false, err};
+        if (forced != AlignMode::Auto) mode = forced;
+        auto target = app.store().get(targetName);
+        if (!target) return {false, "Object not found: " + targetName};
+        if (target.get() == mobile.get())
+            return {false, "Cannot align object to itself"};
+        return runAlign(app, mobile, target, mobile->name(), targetName,
+                        mobileExpr, targetExpr, mode);
+    };
+
+    cmdRegistry_.registerCmd("align",
+        [doAlignByName](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return doAlignByName(app, cmd, AlignMode::Auto);
+        },
+        ":align <obj> [sel] to <obj> [sel] [tm|mm]",
+        "Superpose structures (auto-pick TM vs MM by chain count; trailing tm/mm forces)",
+        {":align mob to ref",
+         ":align mob chain A to ref chain A",
+         ":align complex1 to complex2 mm"},
+        "Analysis");
+
+    cmdRegistry_.registerCmd("alignto",
+        [doAlignTo](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return doAlignTo(app, cmd, AlignMode::Auto);
+        },
+        ":alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm]",
+        "Superpose the current object onto target (auto TM/MM; trailing tm/mm forces)",
+        {":alignto ref",
+         ":alignto chain A to ref chain A",
+         ":alignto ref mm"},
+        "Analysis");
+
+    // :super — TM-only alias for :align (kept for back-compat with existing
+    // scripts; auto-mode would surprise users who expect :super to never
+    // run MM, so this stays explicitly TM-forced).
+    cmdRegistry_.registerCmd("super",
+        [doAlignByName](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return doAlignByName(app, cmd, AlignMode::ForceTM);
+        },
+        ":super <obj> [sel] to <obj> [sel]",
+        "Superpose structures (alias for :align tm)",
+        {":super mob to ref"},
+        "Analysis");
+
+    // Hidden back-compat aliases that hard-force MM mode.
+    cmdRegistry_.registerCmd("mmalign",
+        [doAlignByName](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return doAlignByName(app, cmd, AlignMode::ForceMM);
+        },
+        ":mmalign <obj> [sel] to <obj> [sel]",
+        "Deprecated alias for ':align ... mm'",
+        {":mmalign complex1 to complex2"},
+        "Hidden");
+
+    cmdRegistry_.registerCmd("mmalignto",
+        [doAlignTo](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return doAlignTo(app, cmd, AlignMode::ForceMM);
+        },
+        ":mmalignto <target> [sel]",
+        "Deprecated alias for ':alignto ... mm'",
+        {":mmalignto complex2"},
+        "Hidden");
 
     // :fetch <pdb_id> — download from RCSB PDB or AlphaFold DB
     cmdRegistry_.registerCmd("fetch", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -4289,8 +4475,12 @@ void Application::showCommandIndex() {
     // Group commands by category. Aliases (commands sharing usage with a
     // canonical entry, like :e for :load) appear in the same group; we
     // keep them all so the index shows every dispatchable name.
+    // Category "Hidden" is reserved for back-compat aliases that are
+    // dispatchable but should not surface in the index (still reachable
+    // via :help :<name>).
     std::map<std::string, std::vector<const CommandInfo*>> groups;
     for (const auto& [name, info] : cmdRegistry_.all()) {
+        if (info.category == "Hidden") continue;
         const std::string& cat = info.category.empty() ? "Misc" : info.category;
         groups[cat].push_back(&info);
     }

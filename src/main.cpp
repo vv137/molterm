@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
                 "  molterm --resume\n"
                 "  molterm --script demo.mt 1bna.cif        # load + run script\n"
                 "  molterm --script render.mt --no-tui      # silent batch render\n"
-                "  printf 'load f.pdb; orient; screenshot f.png\\nquit\\n' \\\n"
+                "  printf 'load f.pdb; orient; screenshot f.png; quit\\n' \\\n"
                 "    | molterm -s - --no-tui                # one process, ';' separates commands\n";
             return 0;
         }

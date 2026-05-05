@@ -21,6 +21,11 @@ void Tab::removeObject(int idx) {
     }
 }
 
+void Tab::clear() {
+    objects_.clear();
+    selectedIdx_ = -1;
+}
+
 std::shared_ptr<MolObject> Tab::currentObject() const {
     if (selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size()))
         return objects_[selectedIdx_];
