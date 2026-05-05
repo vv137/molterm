@@ -169,6 +169,7 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
     // near depth ("always on top") which flattened the scene.
     if (!contacts_.empty()) {
         for (const auto& c : contacts_) {
+            if (!(showMask_ & interactionBit(c.type))) continue;
             if (c.atom1 < 0 || c.atom1 >= static_cast<int>(atoms.size())) continue;
             if (c.atom2 < 0 || c.atom2 >= static_cast<int>(atoms.size())) continue;
 

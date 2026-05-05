@@ -28,7 +28,11 @@ void SpacefillRepr::render(const MolObject& mol, const Camera& cam,
         cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);
 
         float vdw = vdwRadius(a.element);
-        int r = static_cast<int>(vdw * scale_ * static_cast<float>(canvas.scaleX()) * cam.zoom() + 0.5f);
+        // Å → sub-pixels via projScale (= zoom × min(W,H)/50); matches
+        // exactly the factor projectCached uses on positions, so the
+        // sphere/separation ratio is canvas-size invariant. The previous
+        // `vdw × scaleX × zoom` form drifted with terminal cell size.
+        int r = static_cast<int>(vdw * scale_ * cam.projScale() + 0.5f);
         if (!inFrustum(fsx, fsy, cw, ch, r)) continue;
         if (r < 1) r = 1;
 

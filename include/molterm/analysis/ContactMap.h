@@ -18,6 +18,28 @@ enum class InteractionType : std::uint8_t {
     Other,            // any heavy-atom pair below the search cutoff
 };
 
+// Bitmask helpers for `interface_show` filtering. Each interaction type
+// owns one bit; the InterfaceRepr draws a contact's dash only when its
+// bit is set in the active mask. Legend stats are unfiltered.
+constexpr std::uint8_t kInterfaceShowAll      = 0b1111;
+constexpr std::uint8_t kInterfaceShowSpecific = 0b0011;   // HBond | SaltBridge
+constexpr std::uint8_t kInterfaceShowNone     = 0b0000;
+
+constexpr std::uint8_t interactionBit(InteractionType t) {
+    return static_cast<std::uint8_t>(1u << static_cast<int>(t));
+}
+
+// Parse one of {"all","specific","none"} or a comma-separated list of
+// type names ("hbond","salt"/"saltbridge","hydrophobic"/"hydro","other").
+// Returns the mask on success, -1 on any parse error so callers can
+// surface a usage message.
+int parseInterfaceShowSpec(const std::string& spec);
+
+// Inverse of parseInterfaceShowSpec for round-tripping in :get.
+std::string formatInterfaceShowSpec(std::uint8_t mask);
+
+const char* interactionName(InteractionType t);
+
 struct InterfaceContact {
     int atom1;
     int atom2;

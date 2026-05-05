@@ -639,7 +639,14 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
                     baseR *= std::max(0.2f, 2.0f * (1.0f - af));
             }
 
-            float hw = baseR * scaleF * cam.zoom();
+            // baseR is in Å; projScale (= zoom × min(W,H)/50) converts to
+            // sub-pixels in the same units projectCached produces, so the
+            // ribbon thickness scales consistently with the structure
+            // across canvas sizes. Falls back through scaleF so braille
+            // canvases (where projScale already includes the cell aspect)
+            // stay calibrated.
+            (void)scaleF;
+            float hw = baseR * cam.projScale();
             int r = std::max(2, static_cast<int>(hw + 0.5f));
             int color = C.color[i-1];
 

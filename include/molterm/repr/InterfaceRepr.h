@@ -57,6 +57,10 @@ public:
     // step, so the overlay reads at typical zoom.
     void setLineThickness(int v)        { lineThickness_     = v; }
     void setInteractionThickness(int v) { interactionThickness_ = v; }
+    // Bitmask of InteractionType bits — only contacts whose type bit is
+    // set get a dashed line. Sidechain wireframe is unaffected so the
+    // viewer still sees which residues form the interface.
+    void setShowMask(std::uint8_t mask) { showMask_ = mask; }
 
 private:
     std::vector<bool>             mask_;
@@ -69,6 +73,7 @@ private:
     int  lineThickness_        = 2;     // sidechain bonds
     int  interactionThickness_ = 4;     // dashed interaction lines (chunky overlay)
     bool drawSidechains_       = true;
+    std::uint8_t showMask_     = kInterfaceShowAll;
 };
 
 } // namespace molterm

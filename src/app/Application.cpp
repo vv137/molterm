@@ -929,7 +929,8 @@ void Application::handleAction(Action action) {
                                            "seqbar", "seqwrap",
                                            "interface_color", "ic",
                                            "interface_thickness", "it",
-                                           "interface_classify", "iclass"}) {
+                                           "interface_classify", "iclass",
+                                           "interface_show", "is"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
                     }
@@ -2164,6 +2165,7 @@ void Application::enterFocus(MolObject& mol,
     interfaceRepr_.setData(focusNbhdMask_, std::move(filtered));
     interfaceRepr_.setDrawSidechains(false);   // wireframe already covers it
     interfaceRepr_.setInteractionThickness(interfaceThickness_);
+    interfaceRepr_.setShowMask(interfaceShowMask_);
 
     focusExpr_ = exprDesc.empty() ? std::string("focus") : exprDesc;
     char msg[160];
@@ -2235,6 +2237,7 @@ void Application::exitFocus() {
     } else if (interfaceOverlay_ && !interfaceContacts_.empty()) {
         interfaceRepr_.setData(interfaceAtomMask_, interfaceContacts_);
         interfaceRepr_.setDrawSidechains(interfaceSidechains_);
+        interfaceRepr_.setShowMask(interfaceShowMask_);
     } else {
         interfaceRepr_.clear();
     }
@@ -3147,6 +3150,22 @@ void Application::registerCommands() {
                                "red salt, yellow hydrophobic, gray other)"
                              : "Interface classification: off (single color)"};
         }
+        if (opt == "interface_show" || opt == "is") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set interface_show all|specific|none|<list>"};
+            // Reassemble: the parser splits on both spaces and commas,
+            // so `set is salt,hbond` and `set is salt hbond` both arrive
+            // as separate args. parseInterfaceShowSpec re-tokenizes by
+            // comma, so we just rejoin with commas.
+            std::string spec = cmd.args[1];
+            for (size_t i = 2; i < cmd.args.size(); ++i) spec += "," + cmd.args[i];
+            int parsed = parseInterfaceShowSpec(spec);
+            if (parsed < 0)
+                return {false, "Usage: :set interface_show all|specific|none|<list of hbond,salt,hydrophobic,other>"};
+            app.interfaceShowMask_ = static_cast<std::uint8_t>(parsed);
+            app.interfaceRepr_.setShowMask(app.interfaceShowMask_);
+            return {true, "Interface show: " + formatInterfaceShowSpec(app.interfaceShowMask_)};
+        }
         return {false, "Unknown option: " + opt};
     }, ":set <option> [value]",
        "Set a runtime option (renderer, fog, outline, cartoon_*, focus_*, panel, seqbar, ...)",
@@ -3165,6 +3184,9 @@ void Application::registerCommands() {
         if (opt == "seqwrap")      return {true, "seqwrap = " + onoff(app.layout().seqBarWrap())};
         if (opt == "interface_classify" || opt == "iclass")
             return {true, "interface_classify = " + onoff(app.interfaceClassify_)};
+        if (opt == "interface_show" || opt == "is")
+            return {true, "interface_show = " +
+                          formatInterfaceShowSpec(app.interfaceShowMask_)};
 
         if (opt == "renderer" || opt == "render") {
             const char* n = "?";
@@ -4430,6 +4452,7 @@ void Application::registerCommands() {
             app.interfaceRepr_.setDrawSidechains(app.interfaceSidechains_);
             app.interfaceRepr_.setInteractionThickness(app.interfaceThickness_);
             app.interfaceRepr_.setLineThickness(std::max(1, app.interfaceThickness_ - 1));
+            app.interfaceRepr_.setShowMask(app.interfaceShowMask_);
 
             int nHB = 0, nSalt = 0, nHyd = 0, nOther = 0;
             for (const auto& c : app.interfaceContacts_) {
@@ -4440,12 +4463,22 @@ void Application::registerCommands() {
                     case InteractionType::Other:       ++nOther; break;
                 }
             }
-            char buf[160];
+            auto tag = [&](InteractionType t) {
+                return (app.interfaceShowMask_ & interactionBit(t))
+                       ? "" : "*";
+            };
+            char buf[200];
             std::snprintf(buf, sizeof(buf),
                 "Interface: %zu residue pairs (cutoff=%.1fA) — "
-                "salt %d, H-bond %d, hydrophobic %d, other %d",
+                "salt %d%s, H-bond %d%s, hydrophobic %d%s, other %d%s"
+                "%s",
                 app.interfaceContacts_.size(), cutoff,
-                nSalt, nHB, nHyd, nOther);
+                nSalt,  tag(InteractionType::SaltBridge),
+                nHB,    tag(InteractionType::HBond),
+                nHyd,   tag(InteractionType::Hydrophobic),
+                nOther, tag(InteractionType::Other),
+                app.interfaceShowMask_ == kInterfaceShowAll
+                    ? "" : "  [* hidden — :set interface_show all]");
             return {true, buf};
         }
         app.interfaceContacts_.clear();
@@ -4753,17 +4786,23 @@ void Application::showInterfaceLegend() {
         };
         for (const auto& r : rows) {
             const auto& s = ts[static_cast<int>(r.type)];
+            const bool drawn = interfaceShowMask_ & interactionBit(r.type);
+            const char* hidden = drawn ? "" : "  [hidden]";
             if (s.n == 0) {
                 std::snprintf(buf, sizeof(buf),
-                              "  %-12s %4d", r.name, 0);
+                              "  %-12s %4d%s", r.name, 0, hidden);
             } else {
                 float pct = total ? (100.0f * s.n / total) : 0.0f;
                 float avg = s.dSum / s.n;
                 std::snprintf(buf, sizeof(buf),
-                              "  %-12s %4d  (%4.1f%%)  avg %.2f %s   (%.2f - %.2f)",
-                              r.name, s.n, pct, avg, kAng, s.dMin, s.dMax);
+                              "  %-12s %4d  (%4.1f%%)  avg %.2f %s   (%.2f - %.2f)%s",
+                              r.name, s.n, pct, avg, kAng, s.dMin, s.dMax, hidden);
             }
             add(buf, interactionColor(r.type));
+        }
+        if (interfaceShowMask_ != kInterfaceShowAll) {
+            add("");
+            add("  :set interface_show all  to draw every type");
         }
     }
 

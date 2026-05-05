@@ -51,6 +51,12 @@ public:
 
     float zoom() const { return zoom_; }
     void setZoom(float z) { zoom_ = z; markDirty(); }
+    // Sub-pixels per Å under the current viewport — i.e. the same factor
+    // projectCached() applies to world coordinates. Reprs that draw shapes
+    // sized in Å (vdW spheres, cartoon ribbon half-widths) should multiply
+    // by this so they track positions consistently across canvas sizes.
+    // Stale until prepareProjection() runs for the frame.
+    float projScale() const { return projScale_; }
     void setRotation(const std::array<float, 9>& r) { rot_ = r; markDirty(); }
     void setPan(float x, float y) { panX_ = x; panY_ = y; markDirty(); }
     float rotationSpeed() const { return rotSpeed_; }

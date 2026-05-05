@@ -1,11 +1,75 @@
 #include "molterm/analysis/ContactMap.h"
 #include "molterm/core/SpatialHash.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
 
 namespace molterm {
+
+const char* interactionName(InteractionType t) {
+    switch (t) {
+        case InteractionType::HBond:       return "hbond";
+        case InteractionType::SaltBridge:  return "salt";
+        case InteractionType::Hydrophobic: return "hydrophobic";
+        case InteractionType::Other:       return "other";
+    }
+    return "other";
+}
+
+int parseInterfaceShowSpec(const std::string& spec) {
+    auto trim = [](std::string s) {
+        auto issp = [](unsigned char c) { return std::isspace(c) != 0; };
+        while (!s.empty() && issp(s.front())) s.erase(s.begin());
+        while (!s.empty() && issp(s.back()))  s.pop_back();
+        for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    std::string lower = trim(spec);
+    if (lower.empty())         return -1;
+    if (lower == "all")        return kInterfaceShowAll;
+    if (lower == "specific")   return kInterfaceShowSpecific;
+    if (lower == "none")       return kInterfaceShowNone;
+
+    int mask = 0;
+    size_t i = 0;
+    while (i < lower.size()) {
+        size_t comma = lower.find(',', i);
+        std::string tok = trim(lower.substr(i, comma - i));
+        if (tok == "hbond" || tok == "h")
+            mask |= interactionBit(InteractionType::HBond);
+        else if (tok == "salt" || tok == "saltbridge")
+            mask |= interactionBit(InteractionType::SaltBridge);
+        else if (tok == "hydrophobic" || tok == "hydro")
+            mask |= interactionBit(InteractionType::Hydrophobic);
+        else if (tok == "other")
+            mask |= interactionBit(InteractionType::Other);
+        else
+            return -1;
+        if (comma == std::string::npos) break;
+        i = comma + 1;
+    }
+    return mask;
+}
+
+std::string formatInterfaceShowSpec(std::uint8_t mask) {
+    if (mask == kInterfaceShowAll)      return "all";
+    if (mask == kInterfaceShowSpecific) return "specific";
+    if (mask == kInterfaceShowNone)     return "none";
+    std::string out;
+    auto add = [&](InteractionType t) {
+        if (!(mask & interactionBit(t))) return;
+        if (!out.empty()) out += ',';
+        out += interactionName(t);
+    };
+    add(InteractionType::HBond);
+    add(InteractionType::SaltBridge);
+    add(InteractionType::Hydrophobic);
+    add(InteractionType::Other);
+    return out;
+}
 
 namespace {
 

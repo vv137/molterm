@@ -273,6 +273,11 @@ private:
     bool interfaceClassify_ = true;
     // Toggle: draw element-colored sidechain bonds for interface residues.
     bool interfaceSidechains_ = true;
+    // Bitmask of InteractionType bits — only contacts with their bit set
+    // get a dashed line drawn. Default hides Hydrophobic + Other (the
+    // dense, low-information categories) so a typical complex is
+    // readable without losing the legend's full per-type breakdown.
+    std::uint8_t interfaceShowMask_ = kInterfaceShowSpecific;
 
     // Inspect / pick state (mouse-only)
     InspectLevel inspectLevel_ = InspectLevel::Atom;

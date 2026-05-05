@@ -11,26 +11,32 @@ void BallStickRepr::render(const MolObject& mol, const Camera& cam,
     auto ctx = makeContext(mol, ReprType::BallStick);
     const auto& atoms = ctx.atoms;
     const auto& bonds = mol.bonds();
-    // Two sphere-sizing modes — see BallStickRepr.h. Both scale linearly
-    // with cam.zoom() so spheres track bond length on screen (otherwise
-    // they shrink visually relative to bonds at high focus-mode zoom).
-    float zoom = cam.zoom();
-    if (zoom < 0.5f) zoom = 0.5f;
+    // Atom radii share projection's Å→sub-pixel scale so spheres track
+    // bond length consistently across canvas sizes. The legacy mode
+    // measures ballRadius_ in sub-pixels rather than Å, so it stays on
+    // the older zoom×scaleX path.
+    const float projScale = cam.projScale();
     const int scaleX = canvas.scaleX();
+    float zoomLegacy = cam.zoom();
+    if (zoomLegacy < 0.5f) zoomLegacy = 0.5f;
 
-    // Per-element radius helper (Å mode) or fixed legacy fallback.
     auto radiusForAtom = [&](int idx) -> int {
         if (useVdwSize_) {
             float r_A = sizeFactor_ * vdwRadius(atoms[idx].element);
-            return toSubPixels(r_A * zoom, scaleX);
+            return toSubPixels(r_A * projScale, /*scale=*/1);
         }
-        return toSubPixels(static_cast<float>(ballRadius_) * zoom, scaleX);
+        return toSubPixels(static_cast<float>(ballRadius_) * zoomLegacy, scaleX);
     };
 
-    // Conservative frustum margin uses the largest possible radius (S, ~1.80 Å).
     int marginRadius = useVdwSize_
-        ? toSubPixels(sizeFactor_ * 2.0f * zoom, scaleX)
-        : toSubPixels(static_cast<float>(ballRadius_) * zoom, scaleX);
+        ? toSubPixels(sizeFactor_ * 2.0f * projScale, /*scale=*/1)
+        : toSubPixels(static_cast<float>(ballRadius_) * zoomLegacy, scaleX);
+
+    // Bond thickness scales with sqrt(zoom) so sticks read at high zoom
+    // without becoming sausages. ~0.10 Å radius matches Mol*'s default
+    // bond cylinder; we floor at 1 sub-pixel so bonds never disappear.
+    int bondR = std::max(1, static_cast<int>(0.10f * projScale + 0.5f));
+    bool thickBonds = bondR > 1;
 
     int sw = canvas.subW(), sh = canvas.subH();
     struct Projected { float sx, sy, depth; bool valid; };
@@ -62,9 +68,23 @@ void BallStickRepr::render(const MolObject& mol, const Camera& cam,
         int c1 = ctx.colorFor(bond.atom1);
         int c2 = ctx.colorFor(bond.atom2);
         canvas.setActiveAtomIndex(bond.atom1);
-        canvas.drawLine(x0, y0, p1.depth, mx, my, md, c1);
+        if (thickBonds) {
+            Canvas::bresenham(x0, y0, p1.depth, mx, my, md,
+                [&](int x, int y, float d) {
+                    canvas.drawCircle(x, y, d, bondR, c1, true);
+                });
+        } else {
+            canvas.drawLine(x0, y0, p1.depth, mx, my, md, c1);
+        }
         canvas.setActiveAtomIndex(bond.atom2);
-        canvas.drawLine(mx, my, md, x1, y1, p2.depth, c2);
+        if (thickBonds) {
+            Canvas::bresenham(mx, my, md, x1, y1, p2.depth,
+                [&](int x, int y, float d) {
+                    canvas.drawCircle(x, y, d, bondR, c2, true);
+                });
+        } else {
+            canvas.drawLine(mx, my, md, x1, y1, p2.depth, c2);
+        }
     }
 
     // Draw atoms as filled circles (on top)

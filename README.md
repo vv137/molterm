@@ -38,6 +38,25 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
   <em>Every frame is a separate <code>:orient view</code> call — no rotate command, just a sweep of the view vector through the PCA frame.</em>
 </p>
 
+### Representation gallery
+
+Each protein-rendering mode on `1ubq` (76-residue ubiquitin), 800×800 @
+300 DPI, hero preset (`csd 24`, outline on, fog 0.4). Switch live with
+the `s<key>` / `x<key>` keymaps or `:show <repr>`.
+
+<table>
+  <tr>
+    <td align="center"><img src="assets/repr_wireframe.png" width="240"><br><sub><code>show wireframe</code> · <code>color element</code></sub></td>
+    <td align="center"><img src="assets/repr_ballstick.png" width="240"><br><sub><code>show ballstick</code> · <code>color element</code></sub></td>
+    <td align="center"><img src="assets/repr_spacefill.png" width="240"><br><sub><code>show spacefill</code> · <code>color chain</code></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/repr_cartoon.png" width="240"><br><sub><code>show cartoon</code> · <code>color secondary</code></sub></td>
+    <td align="center"><img src="assets/repr_ribbon.png" width="240"><br><sub><code>show ribbon</code> · <code>color secondary</code></sub></td>
+    <td align="center"><img src="assets/repr_backbone.png" width="240"><br><sub><code>show backbone</code> · <code>color rainbow</code></sub></td>
+  </tr>
+</table>
+
 ### DNA and nucleic acids
 
 <p align="center">
@@ -368,6 +387,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set seqwrap on|off              " Sequence bar wrap mode
 :set ic|interface_color <name>   " Interface overlay color (default: yellow)
 :set it|interface_thickness <n>  " Interface dashed-line thickness, pixel mode (1-6, default: 4)
+:set is|interface_show <spec>    " Which interaction types draw dashes:
+                                "   all | specific | none | <list of hbond,salt,hydrophobic,other>
+                                "   Default 'specific' = hbond + salt only.
+                                "   The legend stats remain complete regardless.
 :set bt <n>                     " Backbone trace thickness, cells (default: 0.5)
 :set wt <n>                     " Wireframe line thickness, cells (default: 0.35)
 :set br <int>                   " BallStick legacy sub-pixel radius (default: 1, only when bs_units=cell)
