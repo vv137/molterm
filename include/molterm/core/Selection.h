@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "molterm/core/AtomData.h"
@@ -64,6 +65,13 @@ public:
     // here rather than letting the molterm-internal form leak into PML.
     static Selection parse(const std::string& expr, const MolObject& mol,
                            NameResolver resolver = nullptr);
+
+    // True if `word` (ASCII, case-insensitive) is a token that begins a
+    // primary selector (chain, resi, helix, within, ...). Used by callers
+    // that need to find the boundary between non-selection tokens and an
+    // unbracketed selection expression on the same line — e.g. ":loadalign
+    // model_*.cif chain A+B". Mirrors the keywords accepted by parse().
+    static bool isPrimaryKeyword(std::string_view word);
 
     // Predicate-based selection factory
     static Selection fromPredicate(const MolObject& mol,

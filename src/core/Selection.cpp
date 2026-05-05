@@ -88,6 +88,37 @@ Selection Selection::all(int totalAtoms) {
     return Selection(std::move(indices), "all");
 }
 
+bool Selection::isPrimaryKeyword(std::string_view word) {
+    // Mirrors the kwLower branches in parsePrimary() below. Any keyword
+    // that introduces a primary selector belongs here. Operators (and,
+    // or, not, of, as) and value tokens (chain ids, residue numbers) do
+    // not — only words that can stand at the start of a selection.
+    static constexpr std::string_view kKeywords[] = {
+        "all", "vis", "visible",
+        "chain", "resn", "resi", "name",
+        "element", "elem",
+        "helix", "sheet", "loop",
+        "backbone", "bb", "sidechain", "sc", "hydro",
+        "water", "hoh", "sol",
+        "het", "hetatm", "ligand",
+        "protein", "nucleic", "dna", "rna", "polymer",
+        "obj", "within", "exwithin", "same",
+        "pepseq", "seq", "sequence",
+        "not",  // unary operator can lead an expression
+    };
+    for (auto kw : kKeywords) {
+        if (word.size() != kw.size()) continue;
+        bool match = true;
+        for (size_t i = 0; i < kw.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(word[i])) != kw[i]) {
+                match = false; break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
 Selection Selection::fromPredicate(const MolObject& mol,
                                     const std::function<bool(int, const AtomData&)>& pred,
                                     const std::string& expr) {

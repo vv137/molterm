@@ -19,6 +19,7 @@
 #include "molterm/config/ConfigParser.h"
 #include "molterm/core/Geometry.h"
 #include "molterm/core/Logger.h"
+#include "molterm/core/Selection.h"
 #include "molterm/io/SessionSaver.h"
 
 #include <chrono>
@@ -3703,8 +3704,6 @@ void Application::registerCommands() {
         if (hasToKeyword) {
             auto mobile = app.tabs().currentTab().currentObject();
             if (!mobile) return {false, "No object selected"};
-            if (target.get() == mobile.get())
-                return {false, "Cannot align object to itself"};
             return runAlign(app, mobile, target, mobile->name(), targetName,
                             mobileExpr, targetExpr, mode);
         }
@@ -3748,6 +3747,7 @@ void Application::registerCommands() {
         "Superpose every other object in the tab onto target; with 'to', superpose only the current object (auto TM/MM; trailing tm/mm forces)",
         {":alignto ref",
          ":alignto chain A to ref chain A",
+         ":alignto chain A+B to model chain A+B",
          ":alignto ref mm"},
         "Analysis");
 
@@ -3783,14 +3783,31 @@ void Application::registerCommands() {
         "Hidden");
 
     cmdRegistry_.registerCmd("loadalign",
-        [runAlign, popModeToken](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        [runAlign, popModeToken, joinTokens](Application& app, const ParsedCommand& cmd) -> ExecResult {
             if (cmd.args.empty())
-                return {false, "Usage: :loadalign <pattern> [tm|mm]"};
+                return {false, "Usage: :loadalign <pattern> [sel] [tm|mm]"};
 
+            constexpr const char* kUsage =
+                "Usage: :loadalign <pattern> [sel] [tm|mm]";
             std::vector<std::string> args = cmd.args;
             AlignMode mode = popModeToken(args);
-            if (args.empty())
-                return {false, "Usage: :loadalign <pattern> [tm|mm]"};
+            if (args.empty()) return {false, kUsage};
+
+            // Selection grammar has no terminator, so without invoking
+            // the lexer we split heuristically: the first token that can
+            // begin a primary selector marks the boundary between file
+            // patterns and the (shared) selection expression. Selection
+            // owns the keyword list so adding a keyword there can't
+            // silently break this split.
+            std::string sharedExpr;
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (Selection::isPrimaryKeyword(args[i])) {
+                    sharedExpr = joinTokens(args, i);
+                    args.resize(i);
+                    break;
+                }
+            }
+            if (args.empty()) return {false, kUsage};
 
             // First brace only; nested / list-form braces unsupported.
             auto expandBrace = [](const std::string& p) -> std::vector<std::string> {
@@ -3870,19 +3887,21 @@ void Application::registerCommands() {
             for (size_t i = 1; i < loaded.size(); ++i) {
                 auto r = runAlign(app, loaded[i], loaded.front(),
                                   loaded[i]->name(), targetName,
-                                  std::string{}, std::string{}, mode);
+                                  sharedExpr, sharedExpr, mode);
                 if (r.ok) { ++aligned; detail += "\n  " + r.msg; }
                 else { ++alignFailed; detail += "\n  " + loaded[i]->name() + ": " + r.msg; }
             }
             summary += " from '" + cmd.args[0] + "'; aligned " +
                        std::to_string(aligned) + " to " + targetName;
+            if (!sharedExpr.empty()) summary += " on '" + sharedExpr + "'";
             if (alignFailed) summary += " (" + std::to_string(alignFailed) + " failed)";
             return {true, summary + detail};
         },
-        ":loadalign <pattern> [tm|mm]",
-        "Load every file matching the glob/brace pattern; align models 2..N onto the first",
+        ":loadalign <pattern> [sel] [tm|mm]",
+        "Load every file matching the glob/brace pattern; align models 2..N onto the first (optional shared selection, e.g. confident domain)",
         {":loadalign relaxed_model_*.pdb",
          ":loadalign relaxed_model_{1..5}.pdb",
+         ":loadalign model_?.cif chain A+B",
          ":loadalign models/*.cif mm"},
         "Files");
 

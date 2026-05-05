@@ -185,6 +185,42 @@ screenshot frames/f002.png 800 800
 `:turn` skips the eigendecomposition entirely; only the camera rotation
 matrix is updated. Combine with `ffmpeg -i frames/f%03d.png out.mp4`.
 
+### Multi-model alignment: `:loadalign`
+
+For comparing many models of the same molecule (AlphaFold ensembles,
+CASP submissions, MD snapshots, NMR states), `:loadalign` glob-loads
+files and superposes models 2..N onto the first in one step:
+
+```text
+:loadalign relaxed_model_*.pdb              " all *.pdb in cwd
+:loadalign relaxed_model_{1..5}.pdb         " brace expansion
+:loadalign models/*.cif mm                  " force MM-align (multi-chain)
+```
+
+A trailing **selection** is applied to *both* sides of every alignment —
+useful for superposing on the confident core of an AlphaFold ensemble
+while letting flexible loops or low-pLDDT regions float:
+
+```text
+:loadalign model_?.cif chain A+B            " align on chains A and B only
+:loadalign af2_*.pdb resi 50-200            " align on the structured domain
+:loadalign nmr_*.cif backbone               " backbone-only superposition
+```
+
+The split between file patterns and selection is the first token that
+begins a Selection keyword (`chain`, `resi`, `pepseq`, `not`, …) —
+see the **Selection Algebra** section. Selection comes after the
+patterns, before any optional `tm`/`mm` mode.
+
+`:alignto` gives you per-call control once everything is loaded:
+
+```text
+:alignto ref                                " every other obj → ref
+:alignto chain A to ref chain A             " current obj's chain A → ref's chain A
+:alignto chain A+B to model chain A+B       " same object on both sides is OK
+                                            " (intra-object selection alignment)
+```
+
 ### High-quality rendering
 
 PNGs from `:screenshot` are produced by `PixelCanvas` regardless of the
@@ -345,6 +381,11 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :turn x|y|z <deg>               " Rotate camera around screen axis (no PCA, cheap)
 :align <obj> [sel] to <obj>     " TM-align via USalign
 :mmalign <obj> [sel] to <obj>   " MM-align for complexes
+:alignto <ref> [sel]            " Align every other object in tab onto <ref>
+:alignto <sel> to <ref> [sel]   " Align current object onto <ref> (intra-object selection alignment allowed)
+:loadalign <pattern> [sel] [tm|mm] " Glob/brace-load files; align all to the first
+                                "   sel applies to both sides — e.g. confident domain only:
+                                "   :loadalign model_?.cif chain A+B
 :assembly [id|list]             " Generate biological assembly (default: 1)
 :measure [s1 s2]                " Distance (no args = pk1↔pk2 from last clicks)
 :angle [s1 s2 s3]               " Angle at s2 (no args = pk1-pk2-pk3)
