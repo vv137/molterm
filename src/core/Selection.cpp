@@ -614,6 +614,17 @@ private:
             Selection sub = parseAtom();
             return sameAs(sub, keywordLower);
         }
+        if (kwLower == "pepseq" || kwLower == "seq" || kwLower == "sequence") {
+            // pepseq <pattern> — match contiguous runs of residues whose
+            // one-letter codes spell the pattern. `.` and `?` are
+            // single-residue wildcards. Match never crosses chain breaks.
+            if (current_.type != Token::Word) {
+                return Selection({}, kwLower);
+            }
+            std::string seq = current_.value;
+            advance();
+            return matchPepSeq(seq);
+        }
 
         // Unknown keyword — treat as empty selection
         return Selection({}, kw);
@@ -693,6 +704,74 @@ private:
             return Selection({}, exprDescr);  // unknown keyword → empty
         }
         return Selection(std::move(result), exprDescr);
+    }
+
+    // 3-letter → 1-letter residue code. Returns '?' for unknown residues
+    // (HETATM, ligand, water) so they can never match a wildcard either —
+    // the surrounding pattern walk treats '?' in residue position as a
+    // chain-break-equivalent.
+    static char residueOneLetter(const std::string& resName) {
+        static const std::unordered_map<std::string, char> table = {
+            {"ALA",'A'},{"VAL",'V'},{"LEU",'L'},{"ILE",'I'},{"PRO",'P'},
+            {"PHE",'F'},{"TRP",'W'},{"MET",'M'},{"GLY",'G'},{"SER",'S'},
+            {"THR",'T'},{"CYS",'C'},{"TYR",'Y'},{"ASN",'N'},{"GLN",'Q'},
+            {"ASP",'D'},{"GLU",'E'},{"LYS",'K'},{"ARG",'R'},{"HIS",'H'},
+            {"MSE",'M'},{"SEC",'U'},{"PYL",'O'},
+        };
+        auto it = table.find(resName);
+        return (it != table.end()) ? it->second : '?';
+    }
+
+    Selection matchPepSeq(const std::string& pattern) {
+        if (pattern.empty()) return Selection({}, "pepseq ");
+        std::string pat = pattern;
+        for (auto& c : pat) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+        const auto& atoms = mol_.atoms();
+        const int N = static_cast<int>(atoms.size());
+
+        struct Res {
+            int firstAtom, lastAtom;
+            char letter;
+            std::string chainId;
+        };
+        std::vector<Res> residues;
+        int i = 0;
+        while (i < N) {
+            int rs = i;
+            while (i < N &&
+                   atoms[i].chainId == atoms[rs].chainId &&
+                   atoms[i].resSeq == atoms[rs].resSeq &&
+                   atoms[i].insCode == atoms[rs].insCode) ++i;
+            residues.push_back({rs, i - 1,
+                                residueOneLetter(atoms[rs].resName),
+                                atoms[rs].chainId});
+        }
+
+        const size_t L = pat.size();
+        std::vector<int> result;
+        for (size_t p = 0; p + L <= residues.size(); ++p) {
+            const std::string& chain = residues[p].chainId;
+            bool ok = true;
+            for (size_t k = 0; k < L && ok; ++k) {
+                if (residues[p + k].chainId != chain) { ok = false; break; }
+                char want = pat[k];
+                char have = residues[p + k].letter;
+                if (have == '?') { ok = false; break; }   // non-AA breaks the run
+                if (want == '.' || want == '?') continue;
+                if (want != have) ok = false;
+            }
+            if (!ok) continue;
+            for (size_t k = 0; k < L; ++k) {
+                for (int j = residues[p + k].firstAtom;
+                     j <= residues[p + k].lastAtom; ++j) {
+                    result.push_back(j);
+                }
+            }
+        }
+        std::sort(result.begin(), result.end());
+        result.erase(std::unique(result.begin(), result.end()), result.end());
+        return Selection(std::move(result), "pepseq " + pattern);
     }
 };
 

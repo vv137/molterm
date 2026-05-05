@@ -443,6 +443,18 @@ same type. Common with `within`, which returns individual atoms:
 :select same resname as resn HIS                " all histidines in the structure
 ```
 
+**Peptide-sequence search** — `pepseq <one-letter-codes>` (alias `seq`,
+`sequence`) matches contiguous residue runs whose one-letter codes spell
+the pattern. `.` and `?` are single-residue wildcards; matches never
+cross chain breaks. Works with the rest of the algebra:
+
+```vim
+:select pepseq KVL                  " every Lys-Val-Leu run (β-globin motif)
+:select pepseq H.L                  " His-anything-Leu (3-residue wildcard pattern)
+:select chain B and pepseq KVL      " same motif but only in chain B
+:show sticks pepseq GXG and chain A " glycine kinks
+```
+
 **Mouse selection workflow:**
 
 1. `gs` (atom), `gS` (residue), or `gc` (chain) to enter select mode
@@ -470,6 +482,8 @@ same type. Common with `within`, which returns individual atoms:
 **Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `hydro`, `water`, `het`/`ligand`, `protein`, `nucleic`, `dna`, `rna`, `polymer`, `obj`, `$name`
 
 **Spatial / expansion:** `within N of <expr>`, `exwithin N of <expr>`, `same residue as <expr>`, `same chain as <expr>`, `same resname as <expr>` (alias `resn`)
+
+**Sequence search:** `pepseq <one-letter-codes>` (aliases: `seq`, `sequence`); `.` / `?` = single-residue wildcard
 
 **Operators:** `and`, `or`, `not`, `( )`, `+` (OR shorthand: `chain A+B`, `resi 10+20+30-40`)
 
