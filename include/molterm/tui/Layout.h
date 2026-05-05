@@ -96,7 +96,7 @@ private:
     bool panelVisible_ = false;
     bool analysisPanelVisible_ = false;
     int panelWidth_ = 22;
-    bool seqBarVisible_ = true;
+    bool seqBarVisible_ = false;
     bool seqBarWrap_ = true;
     int seqBarHeight_ = 1;
 

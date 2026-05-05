@@ -283,7 +283,7 @@ private:
     float fogStrength_ = 0.35f;
     bool outlineEnabled_ = true;
     float outlineThreshold_ = 0.3f;
-    float outlineDarken_ = 0.3f;
+    float outlineDarken_ = 0.15f;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
 

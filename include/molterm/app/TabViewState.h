@@ -19,8 +19,9 @@ struct TabViewState {
     bool analysisPanelVisible = false;
 
     // SeqBar display — always wrap (show all sequences); the visible/hidden
-    // toggle is the only user-facing knob.
-    bool seqBarVisible = true;
+    // toggle is the only user-facing knob. Off by default so the viewport
+    // gets the full screen on first open; press `b` to bring it up.
+    bool seqBarVisible = false;
     bool seqBarWrap = true;
     int seqBarHeight = 1;
 };

@@ -69,7 +69,7 @@ public:
     const DepthBuffer& depthBuffer() const { return zbuf_; }
 
     // Apply silhouette outline: darken pixels at depth discontinuities
-    void applyOutline(float threshold = 0.3f, float darken = 0.3f);
+    void applyOutline(float threshold = 0.3f, float darken = 0.15f);
 
     // Apply depth fog: blend pixels toward fogColor based on depth.
     void applyDepthFog(float strength = 0.35f,

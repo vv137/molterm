@@ -177,7 +177,7 @@ set csh 1.8                        # sheet half-width  Å           (def 1.50)
 set cl  0.30                       # loop  tube radius Å           (def 0.20)
 set outline on                     # silhouette outlines (pixel)
 set ot 0.2                         # outline depth threshold       (def 0.3)
-set od 0.2                         # outline darken (0=black)      (def 0.3)
+set od 0.2                         # outline darken (0=black)      (def 0.15)
 set fog 0.4                        # atmospheric depth fog 0-1     (def 0.35)
 ```
 
@@ -340,7 +340,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set fog <0-1>                  " Depth fog strength (default: 0.35)
 :set outline on|off             " Silhouette outlines
 :set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
-:set od|outline_darken <n>      " Outline darkness (default: 0.3, 0=black)
+:set od|outline_darken <n>      " Outline darkness (default: 0.15, 0=black)
 :set ch|cartoon_helix <n>       " Cartoon helix half-width Å (default: 1.30)
 :set csh|cartoon_sheet <n>      " Cartoon sheet half-width Å (default: 1.50)
 :set cl|cartoon_loop <n>        " Cartoon loop radius Å (default: 0.20, Mol*-aligned)
@@ -746,7 +746,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 
 ### Phase 6.5: Sequence Bar — DONE
 
-- [x] **Sequence bar** — all chains shown across multiple wrapped rows; visible by default
+- [x] **Sequence bar** — all chains shown across multiple wrapped rows; hidden by default (press `b`)
 - [x] **`b` to toggle** — two-state: visible (full sequences) ↔ hidden
 - [x] **Auto-scroll** — centers on inspected/clicked residue (legacy single-line mode)
 - [x] **Chain switcher** — `{`/`}` to cycle active chain (legacy single-line mode)
