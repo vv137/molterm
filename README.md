@@ -387,8 +387,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 Recursive descent parser with boolean operators. Used by `:select`, `:count`, `:color`, and `/` search.
 
 ```vim
-:select chain A and helix               " helix residues in chain A
-:select resi 50-60 or name CA           " residue range or all Cα atoms
+:select chain A and helix                " helix residues in chain A
+:select resi 50-60 or name CA            " residue range or all Cα atoms
 :select not water and not hydro          " heavy atoms, no water
 :select backbone and chain B             " backbone of chain B
 :select active = resi 100-120 and chain A
@@ -396,6 +396,28 @@ Recursive descent parser with boolean operators. Used by `:select`, `:count`, `:
 :color red $active                       " use named selection with $
 :show cartoon chain A                    " show cartoon only for chain A
 /helix and chain A                       " search with n/N navigation
+```
+
+**Spatial proximity** — `within N of <expr>` selects atoms ≤ N Å from any
+atom matching the inner expression; `exwithin` is the same minus the
+inner set itself (useful for finding "neighbors not including self"):
+
+```vim
+:select within 4.5 of resn HEM           " every atom near a heme
+:select exwithin 4.5 of chain A           " contacts of chain A on other chains
+:select within 6 of $sele                 " expand mouse selection to neighbors
+:show sticks within 5 of resi 100         " sidechains in the binding pocket
+```
+
+**Whole-residue / whole-chain expansion** — `same KW as <expr>` (where
+`KW` is `residue`, `chain`, or `resname`/`resn`) promotes a per-atom
+selection up to the enclosing residue, chain, or all residues of the
+same type. Common with `within`, which returns individual atoms:
+
+```vim
+:select same residue as within 5 of resn HEM   " entire residues touching a heme
+:select same chain as resn ATP                  " every chain that binds ATP
+:select same resname as resn HIS                " all histidines in the structure
 ```
 
 **Mouse selection workflow:**
@@ -423,6 +445,8 @@ Recursive descent parser with boolean operators. Used by `:select`, `:count`, `:
 ```
 
 **Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `hydro`, `water`, `het`/`ligand`, `protein`, `nucleic`, `dna`, `rna`, `polymer`, `obj`, `$name`
+
+**Spatial / expansion:** `within N of <expr>`, `exwithin N of <expr>`, `same residue as <expr>`, `same chain as <expr>`, `same resname as <expr>` (alias `resn`)
 
 **Operators:** `and`, `or`, `not`, `( )`, `+` (OR shorthand: `chain A+B`, `resi 10+20+30-40`)
 

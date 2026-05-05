@@ -34,6 +34,7 @@
 #include <limits>
 #include <optional>
 #include <signal.h>
+#include <glob.h>
 
 namespace molterm {
 
@@ -3704,6 +3705,110 @@ void Application::registerCommands() {
         "Deprecated alias for ':alignto ... mm'",
         {":mmalignto complex2"},
         "Hidden");
+
+    cmdRegistry_.registerCmd("loadalign",
+        [runAlign, popModeToken](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            if (cmd.args.empty())
+                return {false, "Usage: :loadalign <pattern> [tm|mm]"};
+
+            std::vector<std::string> args = cmd.args;
+            AlignMode mode = popModeToken(args);
+            if (args.empty())
+                return {false, "Usage: :loadalign <pattern> [tm|mm]"};
+
+            // First brace only; nested / list-form braces unsupported.
+            auto expandBrace = [](const std::string& p) -> std::vector<std::string> {
+                auto lb = p.find('{');
+                if (lb == std::string::npos) return {p};
+                auto rb = p.find('}', lb);
+                if (rb == std::string::npos) return {p};
+                auto inner = p.substr(lb + 1, rb - lb - 1);
+                auto dots = inner.find("..");
+                if (dots == std::string::npos) return {p};
+                try {
+                    int lo = std::stoi(inner.substr(0, dots));
+                    int hi = std::stoi(inner.substr(dots + 2));
+                    if (hi < lo) std::swap(lo, hi);
+                    std::vector<std::string> out;
+                    for (int i = lo; i <= hi; ++i) {
+                        out.push_back(p.substr(0, lb) + std::to_string(i) +
+                                      p.substr(rb + 1));
+                    }
+                    return out;
+                } catch (...) {
+                    return {p};
+                }
+            };
+
+            std::vector<std::string> matches;
+            for (const auto& raw : args) {
+                for (const auto& pat : expandBrace(raw)) {
+                    glob_t g{};
+                    int rc = glob(pat.c_str(), GLOB_NOSORT, nullptr, &g);
+                    if (rc == 0) {
+                        for (size_t i = 0; i < g.gl_pathc; ++i)
+                            matches.emplace_back(g.gl_pathv[i]);
+                    } else if (rc == GLOB_NOMATCH && std::filesystem::exists(pat)) {
+                        // glob() returns NOMATCH for brace-expanded
+                        // literals like "model_3.pdb"; accept those.
+                        matches.push_back(pat);
+                    }
+                    globfree(&g);
+                }
+            }
+            std::sort(matches.begin(), matches.end());
+            matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+
+            if (matches.empty())
+                return {false, "No files matched pattern(s): " +
+                               cmd.args[0] + (cmd.args.size() > 1 ? " ..." : "")};
+
+            // Detect successful loads via tab-size delta — robust to
+            // future changes in loadFile's status-string format.
+            auto& tab = app.tabs().currentTab();
+            std::vector<std::shared_ptr<MolObject>> loaded;
+            std::vector<std::string> errors;
+            for (const auto& path : matches) {
+                size_t before = tab.objects().size();
+                std::string msg = app.loadFile(path);
+                if (tab.objects().size() > before) {
+                    loaded.push_back(tab.objects().back());
+                } else {
+                    errors.push_back(path + ": " + msg);
+                }
+            }
+            if (loaded.empty())
+                return {false, "All loads failed; first error: " +
+                               (errors.empty() ? std::string("(none)") : errors[0])};
+
+            std::string summary = "Loaded " + std::to_string(loaded.size()) +
+                                  " structure(s)";
+            if (loaded.size() < 2) {
+                if (!errors.empty()) summary += " (" + std::to_string(errors.size()) + " failed)";
+                return {true, summary + ": " + loaded.front()->name()};
+            }
+
+            const std::string& targetName = loaded.front()->name();
+            int aligned = 0, alignFailed = 0;
+            std::string detail;
+            for (size_t i = 1; i < loaded.size(); ++i) {
+                auto r = runAlign(app, loaded[i], loaded.front(),
+                                  loaded[i]->name(), targetName,
+                                  std::string{}, std::string{}, mode);
+                if (r.ok) { ++aligned; detail += "\n  " + r.msg; }
+                else { ++alignFailed; detail += "\n  " + loaded[i]->name() + ": " + r.msg; }
+            }
+            summary += " from '" + cmd.args[0] + "'; aligned " +
+                       std::to_string(aligned) + " to " + targetName;
+            if (alignFailed) summary += " (" + std::to_string(alignFailed) + " failed)";
+            return {true, summary + detail};
+        },
+        ":loadalign <pattern> [tm|mm]",
+        "Load every file matching the glob/brace pattern; align models 2..N onto the first",
+        {":loadalign relaxed_model_*.pdb",
+         ":loadalign relaxed_model_{1..5}.pdb",
+         ":loadalign models/*.cif mm"},
+        "Files");
 
     // :fetch <pdb_id> — download from RCSB PDB or AlphaFold DB
     cmdRegistry_.registerCmd("fetch", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
