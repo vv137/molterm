@@ -1310,6 +1310,13 @@ void Application::renderViewport() {
     // Prepare projection once per frame (not per-repr per-object)
     tab.camera().prepareProjection(canvas_->subW(), canvas_->subH(), canvas_->aspectYX());
 
+    // Wireframe paints heteroatoms by element while keeping carbons on
+    // the scheme color whenever the user is looking at an interface
+    // (overlay or focus) — N/O/S/P need to pop as donors/acceptors there.
+    if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
+        wf->setHeteroatomCarbonScheme(interfaceOverlay_ || focusSnapshot_.active);
+    }
+
     for (const auto& obj : tab.objects()) {
         if (!obj->visible()) continue;
         for (auto& [reprType, repr] : representations_) {
@@ -3484,6 +3491,10 @@ void Application::registerCommands() {
         auto& tab = app.tabs().currentTab();
         // Re-prepare projection for the offscreen pixel coordinate space
         tab.camera().prepareProjection(offscreen.subW(), offscreen.subH(), offscreen.aspectYX());
+
+        if (auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe))) {
+            wf->setHeteroatomCarbonScheme(app.interfaceOverlay_ || app.focusSnapshot_.active);
+        }
 
         for (const auto& obj : tab.objects()) {
             if (!obj->visible()) continue;

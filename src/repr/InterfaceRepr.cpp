@@ -40,7 +40,11 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
     // Same gentle thickness scaling as Wireframe/Backbone — sqrt(zoom)
     // clamped to [0.75, 1.8]. Without this, sidechain bonds and dashed
     // interaction lines stay hairline at high (focus-mode) zoom while
-    // everything else around them grows.
+    // everything else around them grows. Dash length and gap scale by
+    // the same factor so the dash *aspect* — fat blobs vs thin segments
+    // — stays consistent across zoom levels (otherwise the thickening
+    // line outpaces the fixed dash length and the dashes start reading
+    // as dots).
     float zoomScale = std::sqrt(std::max(cam.zoom(), 0.0f));
     if (zoomScale < 0.75f) zoomScale = 0.75f;
     if (zoomScale > 1.8f)  zoomScale = 1.8f;
@@ -48,6 +52,8 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
         (int)std::lround(lineThickness_ * zoomScale));
     const int interactionThick = std::max(1,
         (int)std::lround(interactionThickness_ * zoomScale));
+    const int dashLen = std::max(2, (int)std::lround(dashLen_ * zoomScale));
+    const int gapLen  = std::max(2, (int)std::lround(gapLen_  * zoomScale));
 
     auto inFrustum = [&](float sx, float sy) {
         return sx >= -margin && sx < cw + margin &&
@@ -168,7 +174,7 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
             // Stamp atom1 so focus-dim won't dim this overlay.
             canvas.setActiveAtomIndex(c.atom1);
             drawThickDashed(x0, y0, p1.depth, x1, y1, p2.depth,
-                            color, interactionThick, dashLen_, gapLen_);
+                            color, interactionThick, dashLen, gapLen);
         }
         canvas.setActiveAtomIndex(-1);
     }

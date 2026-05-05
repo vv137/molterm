@@ -194,7 +194,7 @@ animation, drop to 800-1024² and lower `csd` if frame time matters.
 ### Dependencies
 
 | Dependency | Version | Source |
-|-----------|---------|--------|
+|------------|---------|--------|
 | **gemmi** | v0.7.0 | FetchContent (automatic) |
 | **USalign** | latest | FetchContent (automatic) |
 | **toml++** | v3.4.0 | FetchContent (automatic) |
@@ -320,8 +320,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :mmalign <obj> [sel] to <obj>   " MM-align for complexes
 :assembly [id|list]             " Generate biological assembly (default: 1)
 :measure [s1 s2]                " Distance (no args = pk1↔pk2 from last clicks)
-:angle [s1 s2 s3]              " Angle at s2 (no args = pk1-pk2-pk3)
-:dihedral [s1 s2 s3 s4]        " Dihedral (no args = pk1-pk4)
+:angle [s1 s2 s3]               " Angle at s2 (no args = pk1-pk2-pk3)
+:dihedral [s1 s2 s3 s4]         " Dihedral (no args = pk1-pk4)
                                 " Args: serial number, pk1-pk4, or $selection
 :label <selection>              " Show residue labels on viewport
 :label clear                    " Remove all labels (also :unlabel)
@@ -423,7 +423,7 @@ Recursive descent parser with boolean operators. Used by `:select`, `:count`, `:
 ### Canvas Backends
 
 | Backend | Resolution | Characters | Best for |
-|---------|-----------|------------|----------|
+|---------|------------|------------|----------|
 | **BrailleCanvas** (default) | 8× (2×4 sub-pixels) | Unicode Braille `⠀`–`⣿` | SSH, most terminals |
 | **BlockCanvas** | 2× (1×2 sub-pixels) | Half-blocks `▀▄█` | Wide compatibility |
 | **AsciiCanvas** | 1× | `* @ - \| /` | Legacy terminals |

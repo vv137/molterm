@@ -16,12 +16,21 @@ public:
     float thickness() const { return thickness_; }
     void setThickness(float t) { thickness_ = (t < 0.1f) ? 0.1f : t; }
 
+    // Interface/focus mode coloring: carbons keep the scheme color
+    // (chain / SS / etc.), non-carbons get element color so donors,
+    // acceptors and heteroatoms read at a glance against the carbon
+    // backbone. Off by default; toggled by Application around renders
+    // when interface overlay or focus is active.
+    bool heteroatomCarbonScheme() const { return heteroatomCarbonScheme_; }
+    void setHeteroatomCarbonScheme(bool on) { heteroatomCarbonScheme_ = on; }
+
 private:
     // 0.35 ≈ 3.5 px on a 1920-wide pixel canvas (cellPixW≈10), 1 px on
     // braille (scaleX=2). Tunable live via `:set wf_thickness <float>`;
     // also scales gently with camera zoom in render() so close-ups
     // stay readable without the default looking chunky.
     float thickness_ = 0.35f;  // sub-pixels per cell
+    bool heteroatomCarbonScheme_ = false;
 };
 
 } // namespace molterm

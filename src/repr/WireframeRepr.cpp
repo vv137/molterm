@@ -12,6 +12,16 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
     const auto& atoms = ctx.atoms;
     const auto& bonds = mol.bonds();
 
+    // Resolve atom color. In heteroatomCarbonScheme mode, carbons keep
+    // the scheme color (so they match their residue's CA) and every
+    // other element gets its CPK color so N/O/S/P read as donors/
+    // acceptors against the carbon backbone.
+    auto colorOf = [&](int i) {
+        if (heteroatomCarbonScheme_ && atoms[i].element != "C")
+            return ColorMapper::colorForElement(atoms[i].element);
+        return ctx.colorFor(i);
+    };
+
     // Thickness scales gently with camera zoom so lines stay readable
     // without bloating at close-up. Square-root tames the response so
     // 4× zoom is only 2× thicker; clamped to [0.75×, 1.8×] of the base.
@@ -61,8 +71,8 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         int mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
         float md = (p1.depth + p2.depth) / 2.0f;
 
-        int c1 = ctx.colorFor(bond.atom1);
-        int c2 = ctx.colorFor(bond.atom2);
+        int c1 = colorOf(bond.atom1);
+        int c2 = colorOf(bond.atom2);
         canvas.setActiveAtomIndex(bond.atom1);
         drawSeg(x0, y0, p1.depth, mx, my, md, c1);
         canvas.setActiveAtomIndex(bond.atom2);
@@ -77,7 +87,7 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         if (!ctx.visible(static_cast<int>(i))) continue;
         int sx = static_cast<int>(std::round(proj[i].sx));
         int sy = static_cast<int>(std::round(proj[i].sy));
-        int color = ctx.colorFor(static_cast<int>(i));
+        int color = colorOf(static_cast<int>(i));
         canvas.setActiveAtomIndex(static_cast<int>(i));
         if (thick) {
             canvas.drawCircle(sx, sy, proj[i].depth, r, color, true);
