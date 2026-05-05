@@ -76,7 +76,13 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
 ## Quick Start
 
 ```bash
-# Build
+# Install latest release (macOS arm64, Linux x86_64/aarch64)
+curl -fsSL https://raw.githubusercontent.com/vv137/molterm/main/scripts/update.sh | bash
+# → installs to ~/.local/bin/molterm. Override:
+#   ./scripts/update.sh /usr/local/bin/molterm
+#   MOLTERM_BIN=./build/molterm ./scripts/update.sh
+
+# Or build from source
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
