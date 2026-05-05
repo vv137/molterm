@@ -35,8 +35,35 @@
 #include <optional>
 #include <signal.h>
 #include <glob.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
 
 namespace molterm {
+
+static std::string resolveUSalignPath() {
+    namespace fs = std::filesystem;
+    constexpr const char* kName = "USalign";
+    char buf[4096] = {};
+#if defined(__APPLE__)
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) buf[0] = '\0';
+#elif defined(__linux__)
+    ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0) buf[n] = '\0'; else buf[0] = '\0';
+#endif
+    std::error_code ec;
+    if (buf[0]) {
+        fs::path sibling = fs::path(buf).parent_path() / kName;
+        if (fs::exists(sibling, ec)) return sibling.string();
+    }
+#ifdef USALIGN_PATH
+    if (fs::exists(USALIGN_PATH, ec)) return USALIGN_PATH;
+#endif
+    return kName;
+}
 
 static int applyHeteroatomColors(MolObject& obj) {
     const auto& atoms = obj.atoms();
@@ -102,10 +129,7 @@ void Application::init(int argc, char* argv[]) {
 
     ColorMapper::initColors();
 
-    // Set USalign path (compiled alongside molterm)
-#ifdef USALIGN_PATH
-    Aligner::setUSalignPath(USALIGN_PATH);
-#endif
+    Aligner::setUSalignPath(resolveUSalignPath());
     layout_.init(screen_.height(), screen_.width());
 
     keymapMgr_.loadDefaults();
@@ -3655,12 +3679,18 @@ void Application::registerCommands() {
                         mobileExpr, targetExpr, mode);
     };
 
-    // :alignto — mobile = current object in current tab
+    // :alignto — simple form (no `to`) aligns every non-target object in
+    // the current tab onto target, so it works regardless of which object
+    // is currently selected. Explicit `to` form (`:alignto <sel> to <ref>
+    // [sel]`) keeps single-mobile semantics with mobile = current object.
     auto doAlignTo = [parseAlignArgs, runAlign]
         (Application& app, const ParsedCommand& cmd, AlignMode forced)
         -> ExecResult {
-        auto mobile = app.tabs().currentTab().currentObject();
-        if (!mobile) return {false, "No object selected"};
+        bool hasToKeyword = false;
+        for (const auto& a : cmd.args) {
+            if (a == "to") { hasToKeyword = true; break; }
+        }
+
         std::string mobileName, mobileExpr, targetName, targetExpr, err;
         AlignMode mode = AlignMode::Auto;
         if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/true,
@@ -3669,10 +3699,34 @@ void Application::registerCommands() {
         if (forced != AlignMode::Auto) mode = forced;
         auto target = app.store().get(targetName);
         if (!target) return {false, "Object not found: " + targetName};
-        if (target.get() == mobile.get())
-            return {false, "Cannot align object to itself"};
-        return runAlign(app, mobile, target, mobile->name(), targetName,
-                        mobileExpr, targetExpr, mode);
+
+        if (hasToKeyword) {
+            auto mobile = app.tabs().currentTab().currentObject();
+            if (!mobile) return {false, "No object selected"};
+            if (target.get() == mobile.get())
+                return {false, "Cannot align object to itself"};
+            return runAlign(app, mobile, target, mobile->name(), targetName,
+                            mobileExpr, targetExpr, mode);
+        }
+
+        const auto& objs = app.tabs().currentTab().objects();
+        std::vector<std::shared_ptr<MolObject>> mobiles;
+        for (const auto& o : objs) {
+            if (o && o.get() != target.get()) mobiles.push_back(o);
+        }
+        if (mobiles.empty())
+            return {false, "No other objects in current tab to align onto " + targetName};
+
+        int okCount = 0;
+        std::string combined;
+        for (auto& m : mobiles) {
+            auto r = runAlign(app, m, target, m->name(), targetName,
+                              mobileExpr, targetExpr, mode);
+            if (r.ok) ++okCount;
+            if (!combined.empty()) combined += "; ";
+            combined += r.msg;
+        }
+        return {okCount > 0, combined};
     };
 
     cmdRegistry_.registerCmd("align",
@@ -3691,7 +3745,7 @@ void Application::registerCommands() {
             return doAlignTo(app, cmd, AlignMode::Auto);
         },
         ":alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm]",
-        "Superpose the current object onto target (auto TM/MM; trailing tm/mm forces)",
+        "Superpose every other object in the tab onto target; with 'to', superpose only the current object (auto TM/MM; trailing tm/mm forces)",
         {":alignto ref",
          ":alignto chain A to ref chain A",
          ":alignto ref mm"},
