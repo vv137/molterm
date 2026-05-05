@@ -46,7 +46,9 @@ int main(int argc, char* argv[]) {
                 "  molterm protein.pdb\n"
                 "  molterm --resume\n"
                 "  molterm --script demo.mt 1bna.cif        # load + run script\n"
-                "  molterm --script render.mt --no-tui      # silent batch render\n";
+                "  molterm --script render.mt --no-tui      # silent batch render\n"
+                "  printf 'load f.pdb; orient; screenshot f.png\\nquit\\n' \\\n"
+                "    | molterm -s - --no-tui                # one process, ';' separates commands\n";
             return 0;
         }
         if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--version") == 0) {

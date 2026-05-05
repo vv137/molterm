@@ -177,25 +177,42 @@ void Application::init(int argc, char* argv[]) {
 
 Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool strict) {
     ScriptRunResult result;
-    std::string line;
-    while (std::getline(in, line)) {
-        size_t start = line.find_first_not_of(" \t");
-        if (start == std::string::npos || line[start] == '#') continue;
-        line = line.substr(start);
-        if (line.empty()) continue;
-        ExecResult r = cmdRegistry_.execute(*this, line);
+    auto runOne = [&](std::string cmd) -> bool {
+        size_t start = cmd.find_first_not_of(" \t");
+        if (start == std::string::npos || cmd[start] == '#') return true;
+        cmd.erase(0, start);
+        // Accept optional leading ':' so interactive-mode habits work in scripts.
+        if (!cmd.empty() && cmd[0] == ':') {
+            cmd.erase(0, 1);
+            size_t s2 = cmd.find_first_not_of(" \t");
+            if (s2 == std::string::npos) return true;
+            cmd.erase(0, s2);
+        }
+        size_t end = cmd.find_last_not_of(" \t");
+        if (end == std::string::npos) return true;
+        cmd.resize(end + 1);
+        ExecResult r = cmdRegistry_.execute(*this, cmd);
         ++result.count;
         if (!r.msg.empty()) result.lastMsg = r.msg;
         if (!r.ok) {
             ++result.failures;
             if (result.firstFail.empty()) {
                 result.firstFail = r.msg;
-                result.failLine = line;
+                result.failLine = cmd;
             }
-            if (strict) {
-                result.stopped = true;
-                return result;
-            }
+            if (strict) { result.stopped = true; return false; }
+        }
+        return true;
+    };
+    std::string line;
+    while (std::getline(in, line)) {
+        // Split on ';' so multiple commands fit on one line (shell-style).
+        size_t pos = 0;
+        while (pos <= line.size()) {
+            size_t next = line.find(';', pos);
+            if (next == std::string::npos) next = line.size();
+            if (!runOne(line.substr(pos, next - pos))) return result;
+            pos = next + 1;
         }
     }
     return result;
