@@ -4062,18 +4062,15 @@ void Application::registerCommands() {
                         mobileExpr, targetExpr, mode);
     };
 
-    // :alignto — simple form (no `to`) aligns every non-target object in
-    // the current tab onto target, so it works regardless of which object
-    // is currently selected. Explicit `to` form (`:alignto <sel> to <ref>
-    // [sel]`) keeps single-mobile semantics with mobile = current object.
+    // :alignto always broadcasts: every non-target object in the current
+    // tab is superposed onto target. The `to` keyword is purely a separator
+    // between mobile-side and target-side selections — not a mode switch —
+    // so the command works regardless of which object is currently selected
+    // (in particular, it doesn't degenerate to identity when the current
+    // object happens to be the target).
     auto doAlignTo = [parseAlignArgs, runAlign]
         (Application& app, const ParsedCommand& cmd, AlignMode forced)
         -> ExecResult {
-        bool hasToKeyword = false;
-        for (const auto& a : cmd.args) {
-            if (a == "to") { hasToKeyword = true; break; }
-        }
-
         std::string mobileName, mobileExpr, targetName, targetExpr, err;
         AlignMode mode = AlignMode::Auto;
         if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/true,
@@ -4082,13 +4079,6 @@ void Application::registerCommands() {
         if (forced != AlignMode::Auto) mode = forced;
         auto target = app.store().get(targetName);
         if (!target) return {false, "Object not found: " + targetName};
-
-        if (hasToKeyword) {
-            auto mobile = app.tabs().currentTab().currentObject();
-            if (!mobile) return {false, "No object selected"};
-            return runAlign(app, mobile, target, mobile->name(), targetName,
-                            mobileExpr, targetExpr, mode);
-        }
 
         const auto& objs = app.tabs().currentTab().objects();
         std::vector<std::shared_ptr<MolObject>> mobiles;
@@ -4126,7 +4116,7 @@ void Application::registerCommands() {
             return doAlignTo(app, cmd, AlignMode::Auto);
         },
         ":alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm]",
-        "Superpose every other object in the tab onto target; with 'to', superpose only the current object (auto TM/MM; trailing tm/mm forces)",
+        "Superpose every other object in the tab onto target (auto TM/MM; trailing tm/mm forces)",
         {":alignto ref",
          ":alignto chain A to ref chain A",
          ":alignto chain A+B to model chain A+B",
