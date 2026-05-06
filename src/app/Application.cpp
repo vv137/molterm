@@ -749,10 +749,12 @@ void Application::handleAction(Action action) {
         // Objects — viewport + panels + seqbar + status
         case Action::NextObject:
             tab.selectNextObject();
+            onCurrentObjectChanged();
             dirty({C::Viewport, C::ObjectPanel, C::SeqBar, C::StatusBar});
             break;
         case Action::PrevObject:
             tab.selectPrevObject();
+            onCurrentObjectChanged();
             dirty({C::Viewport, C::ObjectPanel, C::SeqBar, C::StatusBar});
             break;
         case Action::ToggleVisible: {
@@ -958,7 +960,9 @@ void Application::handleAction(Action action) {
                                            "interface_color", "ic",
                                            "interface_thickness", "it",
                                            "interface_classify", "iclass",
-                                           "interface_show", "is"}) {
+                                           "interface_sidechains", "isc",
+                                           "interface_show", "is",
+                                           "scope"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
                     }
@@ -1969,6 +1973,66 @@ std::string Application::atomInfoString(const MolObject& mol, int atomIdx) const
     return std::string(buf);
 }
 
+bool Application::recomputeInterface() {
+    auto obj = tabMgr_.currentTab().currentObject();
+    if (!obj) {
+        interfaceContacts_.clear();
+        interfaceAtomMask_.clear();
+        interfaceRepr_.clear();
+        return false;
+    }
+
+    contactMapPanel_.update(*obj);
+    contactMapPanel_.contactMap().computeInterface(*obj, interfaceCutoff_);
+    interfaceContacts_ = contactMapPanel_.contactMap().interfaceContacts();
+    if (interfaceContacts_.empty()) {
+        interfaceAtomMask_.clear();
+        interfaceRepr_.clear();
+        return false;
+    }
+
+    const auto& atoms = obj->atoms();
+    interfaceAtomMask_.assign(atoms.size(), false);
+    std::set<std::tuple<std::string,int,char>> interfaceResidues;
+    for (const auto& c : interfaceContacts_) {
+        if (c.atom1 >= 0 && c.atom1 < (int)atoms.size()) {
+            const auto& a = atoms[c.atom1];
+            interfaceResidues.emplace(a.chainId, a.resSeq, a.insCode);
+        }
+        if (c.atom2 >= 0 && c.atom2 < (int)atoms.size()) {
+            const auto& a = atoms[c.atom2];
+            interfaceResidues.emplace(a.chainId, a.resSeq, a.insCode);
+        }
+    }
+    for (size_t i = 0; i < atoms.size(); ++i) {
+        const auto& a = atoms[i];
+        if (interfaceResidues.count({a.chainId, a.resSeq, a.insCode}))
+            interfaceAtomMask_[i] = true;
+    }
+    interfaceRepr_.setData(interfaceAtomMask_, interfaceContacts_);
+    interfaceRepr_.setDrawSidechains(interfaceSidechains_);
+    interfaceRepr_.setInteractionThickness(interfaceThickness_);
+    interfaceRepr_.setLineThickness(std::max(1, interfaceThickness_ - 1));
+    interfaceRepr_.setShowMask(interfaceShowMask_);
+    return true;
+}
+
+void Application::onCurrentObjectChanged() {
+    // Stale-overlay guard: when the user switches objects, any state
+    // built against the prior mol's atom indices (interface mask /
+    // contacts) no longer corresponds to what's being rendered. Refresh
+    // it so dashes + sidechain hairs match the new current object.
+    if (interfaceOverlay_) {
+        if (!recomputeInterface()) {
+            // New object has no inter-chain contacts — turn the overlay
+            // off rather than leave a dangling on-state with empty data.
+            interfaceOverlay_ = false;
+            interfaceFromZoom_ = false;
+        }
+    }
+    if (canvas_) canvas_->invalidate();
+}
+
 Selection Application::parseSelection(const std::string& expr, const MolObject& mol) {
     auto resolver = [this](const std::string& name) -> const Selection* {
         auto it = namedSelections_.find(name);
@@ -2495,6 +2559,10 @@ void Application::registerCommands() {
             tab.selectObject(newIdx);
         }
 
+        // Per-object overlays (interface mask + contacts) reference the
+        // prior object's atom indices; refresh against the new mol so the
+        // overlay matches what's actually being rendered.
+        app.onCurrentObjectChanged();
         auto cur = tab.currentObject();
         // Refresh the panel + seqbar so the UI follows the switch.
         app.layout().markDirty(Layout::Component::ObjectPanel);
@@ -3372,6 +3440,8 @@ void Application::registerCommands() {
         if (opt == "seqwrap")      return {true, "seqwrap = " + onoff(app.layout().seqBarWrap())};
         if (opt == "interface_classify" || opt == "iclass")
             return {true, "interface_classify = " + onoff(app.interfaceClassify_)};
+        if (opt == "interface_sidechains" || opt == "isc")
+            return {true, "interface_sidechains = " + onoff(app.interfaceSidechains_)};
         if (opt == "interface_show" || opt == "is")
             return {true, "interface_show = " +
                           formatInterfaceShowSpec(app.interfaceShowMask_)};
@@ -4612,13 +4682,8 @@ void Application::registerCommands() {
                 app.interfaceOverlay_ = false;
                 return {false, "No object loaded"};
             }
-            // Ensure residues are extracted (via contact map update), then
-            // compute interface using closest heavy atom distance
-            app.contactMapPanel_.update(*obj);
-            app.contactMapPanel_.contactMap().computeInterface(*obj, cutoff);
-            app.interfaceContacts_ =
-                app.contactMapPanel_.contactMap().interfaceContacts();
-            if (app.interfaceContacts_.empty()) {
+            app.interfaceCutoff_ = cutoff;
+            if (!app.recomputeInterface()) {
                 app.interfaceOverlay_ = false;
                 char buf[80];
                 std::snprintf(buf, sizeof(buf),
@@ -4626,34 +4691,6 @@ void Application::registerCommands() {
                               cutoff);
                 return {false, buf};
             }
-
-            // Build per-atom interface mask: expand contact atoms to
-            // whole residues — this is the "same residue as" propagation
-            // VMD provides as a Selection primitive, applied here directly.
-            const auto& atoms = obj->atoms();
-            app.interfaceAtomMask_.assign(atoms.size(), false);
-            std::set<std::tuple<std::string,int,char>> interfaceResidues;
-            for (const auto& c : app.interfaceContacts_) {
-                if (c.atom1 >= 0 && c.atom1 < (int)atoms.size()) {
-                    const auto& a = atoms[c.atom1];
-                    interfaceResidues.emplace(a.chainId, a.resSeq, a.insCode);
-                }
-                if (c.atom2 >= 0 && c.atom2 < (int)atoms.size()) {
-                    const auto& a = atoms[c.atom2];
-                    interfaceResidues.emplace(a.chainId, a.resSeq, a.insCode);
-                }
-            }
-            for (size_t i = 0; i < atoms.size(); ++i) {
-                const auto& a = atoms[i];
-                if (interfaceResidues.count({a.chainId, a.resSeq, a.insCode}))
-                    app.interfaceAtomMask_[i] = true;
-            }
-            app.interfaceRepr_.setData(app.interfaceAtomMask_,
-                                       app.interfaceContacts_);
-            app.interfaceRepr_.setDrawSidechains(app.interfaceSidechains_);
-            app.interfaceRepr_.setInteractionThickness(app.interfaceThickness_);
-            app.interfaceRepr_.setLineThickness(std::max(1, app.interfaceThickness_ - 1));
-            app.interfaceRepr_.setShowMask(app.interfaceShowMask_);
 
             int nHB = 0, nSalt = 0, nHyd = 0, nOther = 0;
             for (const auto& c : app.interfaceContacts_) {

@@ -172,6 +172,17 @@ public:
     void setForcedProtocol(GraphicsProtocol p) { forcedProtocol_ = p; }
     void setAutoCenter(bool v) { autoCenter_ = v; }
 
+    // Recompute the inter-chain interface overlay against the current
+    // object using the last-used cutoff. Returns false (and clears the
+    // overlay) when the new current object has no inter-chain contacts.
+    // Idempotent — safe to call repeatedly.
+    bool recomputeInterface();
+
+    // Hook called whenever the current object changes (via :object,
+    // NextObject/PrevObject hotkeys, etc.). Refreshes per-object overlays
+    // that would otherwise show stale state from a different mol.
+    void onCurrentObjectChanged();
+
     // Macro recording (Phase 4)
     bool isRecordingMacro() const { return macroRecording_; }
     char macroRegister() const { return macroRegister_; }
@@ -294,6 +305,10 @@ private:
     bool interfaceClassify_ = true;
     // Toggle: draw element-colored sidechain bonds for interface residues.
     bool interfaceSidechains_ = true;
+    // Last cutoff (Å) used by `:interface on`. Persisted so that switching
+    // the current object via `:object` / NextObject / PrevObject can
+    // recompute the overlay against the new mol with the same setting.
+    float interfaceCutoff_ = 4.5f;
     // Bitmask of InteractionType bits — only contacts with their bit set
     // get a dashed line drawn. Default hides Hydrophobic + Other (the
     // dense, low-information categories) so a typical complex is
