@@ -146,6 +146,7 @@ public:
 
     Token next() {
         skipWhitespace();
+        lastStart_ = pos_;
         if (pos_ >= input_.size()) return {Token::End, ""};
 
         char ch = input_[pos_];
@@ -181,14 +182,32 @@ public:
 
     Token peek() {
         size_t saved = pos_;
+        size_t savedLast = lastStart_;
         auto tok = next();
         pos_ = saved;
+        lastStart_ = savedLast;
         return tok;
+    }
+
+    // Re-read the most recent token under bareword rules (digit-led
+    // identifiers count as a single Word). Used by the `obj <name>`
+    // handler so PDB-style names like "1ubq" parse as one token rather
+    // than splitting into Number "1" + Word "ubq".
+    std::string readObjName() {
+        pos_ = lastStart_;
+        size_t start = pos_;
+        while (pos_ < input_.size() &&
+               (std::isalnum(static_cast<unsigned char>(input_[pos_])) ||
+                input_[pos_] == '_' || input_[pos_] == '*' ||
+                input_[pos_] == '-' || input_[pos_] == '.'))
+            ++pos_;
+        return input_.substr(start, pos_ - start);
     }
 
 private:
     std::string input_;
     size_t pos_;
+    size_t lastStart_ = 0;
 
     void skipWhitespace() {
         while (pos_ < input_.size() && std::isspace(input_[pos_])) ++pos_;
@@ -606,8 +625,11 @@ private:
                 }, "polymer");
         }
         if (kwLower == "obj") {
-            // obj <name> — select all atoms if current object name matches
-            std::string objName = current_.value;
+            // obj <name> — select all atoms if current object name matches.
+            // Object names like PDB IDs ("1ubq") would otherwise tokenize
+            // as Number "1" + Word "ubq", so re-read the current token as
+            // a bareword to capture the full digit-led name.
+            std::string objName = tokenizer_.readObjName();
             advance();
             if (mol_.name() == objName)
                 return Selection::all(totalAtoms_);

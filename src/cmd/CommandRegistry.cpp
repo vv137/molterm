@@ -1,4 +1,7 @@
 #include "molterm/cmd/CommandRegistry.h"
+
+#include "molterm/app/Application.h"
+#include "molterm/app/CommandScope.h"
 #include "molterm/cmd/CommandParser.h"
 
 #include <algorithm>
@@ -23,6 +26,20 @@ ExecResult CommandRegistry::execute(Application& app, const std::string& input) 
         return {false, "Unknown command: " + cmd.name};
     }
 
+    // Vim-style bang ":foo!" flips command scope for this single
+    // dispatch (scope=all → current, current → all). Commands that
+    // explicitly call forEachInScope(app, ScopeMode::Current, ...) are
+    // unaffected (e.g. :delete pins to current regardless), and :q
+    // continues to read cmd.forced for its own force-quit semantics —
+    // setting a scope override on top is a no-op for those handlers.
+    if (cmd.forced) {
+        ScopeMode flipped = (app.commandScope() == ScopeMode::All)
+                                ? ScopeMode::Current : ScopeMode::All;
+        app.setScopeOverride(flipped);
+        ExecResult r = it->second.handler(app, cmd);
+        app.clearScopeOverride();
+        return r;
+    }
     return it->second.handler(app, cmd);
 }
 

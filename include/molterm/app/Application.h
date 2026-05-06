@@ -4,10 +4,12 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "molterm/app/CommandScope.h"
 #include "molterm/app/TabManager.h"
 #include "molterm/app/TabViewState.h"
 #include "molterm/cmd/CommandRegistry.h"
@@ -142,6 +144,19 @@ public:
     // Named selections
     std::unordered_map<std::string, Selection>& namedSelections() { return namedSelections_; }
 
+    // Command scope: whether per-object commands (color/show/hide/...)
+    // fan out across every object in the tab or stay on the current one.
+    // commandScope_ is the persistent setting (`:set scope ...`);
+    // scopeOverride_ is a transient one-off used by the `:!` bang-prefix.
+    ScopeMode commandScope() const { return commandScope_; }
+    void setCommandScope(ScopeMode m) { commandScope_ = m; }
+    ScopeMode effectiveCommandScope() const {
+        return scopeOverride_.has_value() ? *scopeOverride_ : commandScope_;
+    }
+    void setScopeOverride(ScopeMode m) { scopeOverride_ = m; }
+    void clearScopeOverride() { scopeOverride_.reset(); }
+    bool hasScopeOverride() const { return scopeOverride_.has_value(); }
+
     bool running() const { return running_; }
 
     // Settings
@@ -195,6 +210,12 @@ private:
 
     // Named selections
     std::unordered_map<std::string, Selection> namedSelections_;
+
+    // Command scope (`:set scope all|current`, default all). The optional
+    // override slot is set by the `:!` bang-prefix dispatcher around a
+    // single command and cleared right after.
+    ScopeMode commandScope_ = ScopeMode::All;
+    std::optional<ScopeMode> scopeOverride_;
 
     InfoOverlay infoOverlay_;
 

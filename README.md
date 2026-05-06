@@ -221,6 +221,48 @@ patterns, before any optional `tm`/`mm` mode.
                                             " (intra-object selection alignment)
 ```
 
+### Multi-object workflow
+
+After `:loadalign` (or any multi-load), per-object commands (`:color`,
+`:show`, `:hide`, the hotkey repr toggles, `:zoom`, `:center`, `:orient`)
+fan out across **every loaded object** by default. PyMOL semantics: a
+bare selection is interpreted per-object; narrow with `obj <name>` or
+the slash form `/objname/...`.
+
+```text
+:loadalign relaxed_model_*.pdb              " load + superpose 5 models
+:color rainbow                              " all 5 colored rainbow
+:color red, obj 1ubq                        " just one object
+:color blue, /relaxed_model_3/A//           " chain A of one specific model
+:zoom chain A                               " camera frames the union of chain A across all 5
+```
+
+Two knobs control scope:
+
+```vim
+:set scope current               " single-object mode (legacy behavior)
+:set scope all                   " multi-object mode (default)
+:get scope                       " query
+
+:color! red, chain A             " ! flips scope for this one call
+:show! cartoon                   "   (handy with scope=all when you want to
+                                 "    tweak the current object only)
+```
+
+`:set scope current` in `~/.molterm/init.mt` restores the pre-multi-object
+behavior permanently. Structure-mutating commands (`:delete`, `:rename`,
+`:bond`, `:unbond`, `:assembly`) always operate on the current object
+regardless of scope — switch the current object explicitly with
+`:object`:
+
+```vim
+:object                          " print the current object's name + index
+:object 1ubq                     " switch to that object by name
+:object 2                        " switch by 1-based index (matches :objects)
+:object next                     " cycle forward (also Tab in Normal mode)
+:object prev                     " cycle backward
+```
+
 ### High-quality rendering
 
 PNGs from `:screenshot` are produced by `PixelCanvas` regardless of the
@@ -363,13 +405,19 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 ```vim
 :help                           " Command index overlay (grouped by category)
 :help <cmd>                     " Per-command overlay: usage, description, examples
-:load <file>                    " Load mmCIF/PDB/gzipped file
+:load <pattern>...              " Load mmCIF/PDB/gzipped file(s); supports shell globs and brace ranges:
+                                "   :load *.pdb
+                                "   :load model_{1..5}.cif
+                                "   :load relaxed_*.pdb confident_*.cif
 :fetch <pdb_id>                 " Download from RCSB PDB (e.g. fetch 1abc)
 :fetch afdb:<uniprot_id>        " Download from AlphaFold DB (e.g. fetch afdb:P12345)
-:show <repr> [selection]         " Show repr (optionally for selection only)
-:hide [repr|all] [selection]    " Hide repr (optionally for selection only)
+:show <repr> [selection]         " Show repr (optionally for selection only); applies across scope (see Multi-object scope)
+:hide [repr|all] [selection]    " Hide repr (optionally for selection only); applies across scope
 :color <scheme>                 " element/cpk, chain, ss, bfactor, plddt, rainbow, restype, heteroatom, clear
 :color <name> [selection]       " Per-atom color (red, blue, salmon, etc.) with optional selection
+                                "   Multi-object: a bare selection covers every loaded object;
+                                "   narrow with `obj <name>` or `/objname/...`. Append `!`
+                                "   to flip scope for one call (e.g. `:color! red, chain A`).
 :select <expr>                  " Select atoms (see Selection Algebra below)
 :select <name> = <expr>         " Named selection (e.g. :select s1 = $sele)
 :select clear                   " Clear mouse selection ($sele)
@@ -422,6 +470,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set bs_units vdw|cell          " BallStick sizing: vdw (Å×factor) or cell (legacy sub-pixel)
 :set bsf|bs_factor <n>          " BallStick sizeFactor × vdW when bs_units=vdw (default: 0.15, Mol*-aligned)
 :set sfs|spacefill_scale <n>    " Spacefill ×vdW (default: 1.0, full vdW = CPK)
+:set scope all|current           " Multi-object dispatch (default: all). With `all`, per-object
+                                "   commands (color/show/hide, hotkey repr toggles, zoom/center)
+                                "   apply to every object in the tab. Narrow with `obj <name>`
+                                "   or `/objname/...` in the selection. `:cmd!` flips scope once.
 :set panel on|off                " Object panel visibility
 :set auto_center on|off          " Auto-center camera on load
 :set seqbar on|off               " Sequence bar visibility
@@ -460,6 +512,17 @@ Recursive descent parser with boolean operators. Used by `:select`, `:count`, `:
 :color red $active                       " use named selection with $
 :show cartoon chain A                    " show cartoon only for chain A
 /helix and chain A                       " search with n/N navigation
+```
+
+**Cross-object narrowing** — when `:set scope all` is in effect (the
+default after multi-load), use `obj <name>` or the slash form to scope
+the same selection to a specific object. PDB-style names that start
+with a digit (`1ubq`, `7bz5`) are accepted as a single token:
+
+```vim
+:color red, obj 1ubq                  " just one of N loaded structures
+:color blue, /relaxed_model_3/A//     " chain A of one specific model
+:show cartoon, obj 2def and chain A   " combine with other predicates
 ```
 
 **Spatial proximity** — `within N of <expr>` selects atoms ≤ N Å from any

@@ -1,5 +1,7 @@
 #include "molterm/app/Application.h"
 
+#include "molterm/app/CommandScope.h"
+#include "molterm/app/PathPatterns.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/io/Aligner.h"
 #include "molterm/io/CifLoader.h"
@@ -35,7 +37,6 @@
 #include <limits>
 #include <optional>
 #include <signal.h>
-#include <glob.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #elif defined(__linux__)
@@ -772,25 +773,27 @@ void Application::handleAction(Action action) {
         }
 
         // Representations — viewport only
-        case Action::ShowWireframe: { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Wireframe); dirty({C::Viewport}); break; }
-        case Action::ShowBallStick: { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::BallStick); dirty({C::Viewport}); break; }
-        case Action::ShowSpacefill: { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Spacefill); dirty({C::Viewport}); break; }
-        case Action::ShowCartoon:   { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Cartoon);   dirty({C::Viewport}); break; }
-        case Action::ShowRibbon:    { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Ribbon);    dirty({C::Viewport}); break; }
-        case Action::ShowBackbone:  { auto obj = tab.currentObject(); if (obj) obj->showRepr(ReprType::Backbone);  dirty({C::Viewport}); break; }
-        case Action::HideWireframe: { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Wireframe); dirty({C::Viewport}); break; }
-        case Action::HideBallStick: { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::BallStick); dirty({C::Viewport}); break; }
-        case Action::HideSpacefill: { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Spacefill); dirty({C::Viewport}); break; }
-        case Action::HideCartoon:   { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Cartoon);   dirty({C::Viewport}); break; }
-        case Action::HideRibbon:    { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Ribbon);    dirty({C::Viewport}); break; }
-        case Action::HideBackbone:  { auto obj = tab.currentObject(); if (obj) obj->hideRepr(ReprType::Backbone);  dirty({C::Viewport}); break; }
-        case Action::HideAll:       { auto obj = tab.currentObject(); if (obj) obj->hideAllRepr();                 dirty({C::Viewport}); break; }
+        // Repr-toggle hotkeys honor :set scope, so a single keystroke shows
+        // / hides the same repr across every loaded object after a superpose.
+        case Action::ShowWireframe: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->showRepr(ReprType::Wireframe); return true; }); dirty({C::Viewport}); break; }
+        case Action::ShowBallStick: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->showRepr(ReprType::BallStick); return true; }); dirty({C::Viewport}); break; }
+        case Action::ShowSpacefill: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->showRepr(ReprType::Spacefill); return true; }); dirty({C::Viewport}); break; }
+        case Action::ShowCartoon:   { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->showRepr(ReprType::Cartoon);   return true; }); dirty({C::Viewport}); break; }
+        case Action::ShowRibbon:    { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->showRepr(ReprType::Ribbon);    return true; }); dirty({C::Viewport}); break; }
+        case Action::ShowBackbone:  { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->showRepr(ReprType::Backbone);  return true; }); dirty({C::Viewport}); break; }
+        case Action::HideWireframe: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->hideRepr(ReprType::Wireframe); return true; }); dirty({C::Viewport}); break; }
+        case Action::HideBallStick: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->hideRepr(ReprType::BallStick); return true; }); dirty({C::Viewport}); break; }
+        case Action::HideSpacefill: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->hideRepr(ReprType::Spacefill); return true; }); dirty({C::Viewport}); break; }
+        case Action::HideCartoon:   { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->hideRepr(ReprType::Cartoon);   return true; }); dirty({C::Viewport}); break; }
+        case Action::HideRibbon:    { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->hideRepr(ReprType::Ribbon);    return true; }); dirty({C::Viewport}); break; }
+        case Action::HideBackbone:  { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->hideRepr(ReprType::Backbone);  return true; }); dirty({C::Viewport}); break; }
+        case Action::HideAll:       { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->hideAllRepr();                 return true; }); dirty({C::Viewport}); break; }
 
         // Coloring — viewport + seqbar
         case Action::ColorByElement: { auto obj = tab.currentObject(); if (obj) applyHeteroatomColors(*obj); dirty({C::Viewport, C::SeqBar}); break; }
-        case Action::ColorByChain:   { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::Chain);              dirty({C::Viewport, C::SeqBar}); break; }
-        case Action::ColorBySS:      { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::SecondaryStructure); dirty({C::Viewport, C::SeqBar}); break; }
-        case Action::ColorByBFactor: { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::BFactor);            dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByChain:   { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::Chain);              return true; }); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorBySS:      { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::SecondaryStructure); return true; }); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByBFactor: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::BFactor);            return true; }); dirty({C::Viewport, C::SeqBar}); break; }
 
         // Tabs — swap view state on switch (applyViewState marks changed components dirty)
         case Action::NextTab:
@@ -1141,9 +1144,9 @@ void Application::handleAction(Action action) {
             break;
 
         // More coloring — viewport + seqbar
-        case Action::ColorByPLDDT:   { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::PLDDT);   dirty({C::Viewport, C::SeqBar}); break; }
-        case Action::ColorByRainbow: { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::Rainbow); dirty({C::Viewport, C::SeqBar}); break; }
-        case Action::ColorByResType: { auto obj = tab.currentObject(); if (obj) obj->setColorScheme(ColorScheme::ResType); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByPLDDT:   { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::PLDDT);   return true; }); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByRainbow: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::Rainbow); return true; }); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorByResType: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::ResType); return true; }); dirty({C::Viewport, C::SeqBar}); break; }
 
         // Multi-state cycling — viewport + seqbar + status
         case Action::NextState: {
@@ -2361,20 +2364,65 @@ void Application::registerCommands() {
        {":qa"}, "Help");
 
     // :load <file>
-    cmdRegistry_.registerCmd("load", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        if (cmd.args.empty()) return {false, "Usage: :load <file>"};
-        std::string msg = app.loadFile(cmd.args[0]);
-        bool ok = msg.rfind("Loaded ", 0) == 0;
-        return {ok, msg};
-    }, ":load <file>", "Load a structure file (.pdb, .cif, .cif.gz, ...)",
-       {":load protein.pdb", ":load 1bna.cif"}, "Files");
-    cmdRegistry_.registerCmd("e", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        if (cmd.args.empty()) return {false, "Usage: :e <file>"};
-        std::string msg = app.loadFile(cmd.args[0]);
-        bool ok = msg.rfind("Loaded ", 0) == 0;
-        return {ok, msg};
-    }, ":e <file>", "Load a structure file (alias for :load)",
-       {":e protein.pdb"}, "Files");
+    auto loadPatterns = [](Application& app, const ParsedCommand& cmd,
+                           const char* usage) -> ExecResult {
+        if (cmd.args.empty()) return {false, usage};
+        // Fast path for the common single-literal case: skip globbing
+        // entirely so a path with no metacharacters and no brace range
+        // never has to round-trip through glob() / readdir().
+        const bool singleLiteral =
+            cmd.args.size() == 1 &&
+            cmd.args[0].find_first_of("*?[{") == std::string::npos;
+        std::vector<std::string> matches =
+            singleLiteral ? std::vector<std::string>{cmd.args[0]}
+                          : expandPathPatterns(cmd.args);
+        if (matches.empty()) {
+            std::string joined;
+            for (size_t i = 0; i < cmd.args.size(); ++i) {
+                if (i) joined += ' ';
+                joined += cmd.args[i];
+            }
+            return {false, "No files matched pattern(s): " + joined};
+        }
+        if (matches.size() == 1) {
+            std::string msg = app.loadFile(matches[0]);
+            bool ok = msg.rfind("Loaded ", 0) == 0;
+            return {ok, msg};
+        }
+        int loaded = 0;
+        std::string firstError;
+        for (const auto& p : matches) {
+            std::string msg = app.loadFile(p);
+            if (msg.rfind("Loaded ", 0) == 0) ++loaded;
+            else if (firstError.empty()) firstError = msg;
+        }
+        if (loaded == 0)
+            return {false, "All loads failed; first error: " + firstError};
+        std::string summary = "Loaded " + std::to_string(loaded) +
+                              " structure(s)";
+        const int failed = static_cast<int>(matches.size()) - loaded;
+        if (failed > 0) summary += " (" + std::to_string(failed) + " failed)";
+        return {true, summary};
+    };
+
+    cmdRegistry_.registerCmd("load",
+        [loadPatterns](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return loadPatterns(app, cmd, "Usage: :load <pattern>...");
+        },
+        ":load <pattern>...",
+        "Load structure file(s); supports shell globs and brace ranges",
+        {":load protein.pdb", ":load 1bna.cif",
+         ":load *.pdb", ":load model_{1..5}.cif",
+         ":load relaxed_*.pdb confident_*.cif"},
+        "Files");
+    cmdRegistry_.registerCmd("e",
+        [loadPatterns](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return loadPatterns(app, cmd, "Usage: :e <pattern>...");
+        },
+        ":e <pattern>...",
+        "Load structure file(s) (alias for :load)",
+        {":e protein.pdb", ":e *.cif"},
+        "Files");
 
     // :tabnew
     cmdRegistry_.registerCmd("tabnew", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -2403,6 +2451,63 @@ void Application::registerCommands() {
     }, ":objects", "List objects loaded in the current tab",
        {":objects"}, "Window");
 
+    // :object — make a specific object the "current" one (drives the info
+    // panel, structure-mutating commands, and per-tab seq bar). It does
+    // NOT gate :color/:show/:hide; those follow :set scope.
+    cmdRegistry_.registerCmd("object", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto& tab = app.tabs().currentTab();
+        const auto& objs = tab.objects();
+        if (cmd.args.empty()) {
+            auto cur = tab.currentObject();
+            if (!cur) return {true, "No current object (tab is empty)"};
+            return {true, "Current object: " + cur->name() + " [" +
+                          std::to_string(tab.selectedObjectIdx() + 1) + "/" +
+                          std::to_string(objs.size()) + "]"};
+        }
+        if (objs.empty()) return {false, "No objects loaded"};
+
+        const auto& a = cmd.args[0];
+        if (a == "next") {
+            tab.selectNextObject();
+        } else if (a == "prev" || a == "previous") {
+            tab.selectPrevObject();
+        } else {
+            // Try as 1-based index first (matches the listing in :objects),
+            // fall back to name lookup.
+            int newIdx = -1;
+            try {
+                size_t parsed = 0;
+                int n = std::stoi(a, &parsed);
+                if (parsed == a.size() && n >= 1 &&
+                    n <= static_cast<int>(objs.size())) {
+                    newIdx = n - 1;
+                }
+            } catch (...) {}
+            if (newIdx < 0) {
+                for (size_t i = 0; i < objs.size(); ++i) {
+                    if (objs[i] && objs[i]->name() == a) {
+                        newIdx = static_cast<int>(i);
+                        break;
+                    }
+                }
+            }
+            if (newIdx < 0) return {false, "No such object: " + a};
+            tab.selectObject(newIdx);
+        }
+
+        auto cur = tab.currentObject();
+        // Refresh the panel + seqbar so the UI follows the switch.
+        app.layout().markDirty(Layout::Component::ObjectPanel);
+        app.layout().markDirty(Layout::Component::SeqBar);
+        if (!cur) return {true, "No current object"};
+        return {true, "Current object: " + cur->name() + " [" +
+                      std::to_string(tab.selectedObjectIdx() + 1) + "/" +
+                      std::to_string(objs.size()) + "]"};
+    }, ":object [name|index|next|prev]",
+       "Show or set the current object in the active tab",
+       {":object", ":object 1ubq", ":object 2", ":object next"},
+       "Window");
+
     // Helper: resolve repr name to ReprType. Returns false if unknown.
     auto resolveRepr = [](const std::string& name, ReprType& out) -> bool {
         if (name == "wireframe" || name == "wire" || name == "lines") { out = ReprType::Wireframe; return true; }
@@ -2417,65 +2522,93 @@ void Application::registerCommands() {
     // :show <repr> [selection]
     cmdRegistry_.registerCmd("show", [resolveRepr](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) return {false, "Usage: :show <repr> [selection]"};
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
         ReprType rt;
         if (!resolveRepr(cmd.args[0], rt)) return {false, "Unknown representation: " + cmd.args[0]};
 
-        if (cmd.args.size() > 1) {
-            // Per-atom show: :show cartoon chain A
-            std::string expr;
-            for (size_t i = 1; i < cmd.args.size(); ++i) {
-                if (i > 1) expr += " ";
-                expr += cmd.args[i];
-            }
-            auto sel = app.parseSelection(expr, *obj);
-            if (sel.empty()) return {false, "No atoms match: " + expr};
-            obj->showReprForAtoms(rt, std::vector<int>(sel.indices().begin(), sel.indices().end()));
-            return {true, "Showing " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms"};
+        std::string expr;
+        for (size_t i = 1; i < cmd.args.size(); ++i) {
+            if (i > 1) expr += " ";
+            expr += cmd.args[i];
         }
-        obj->showRepr(rt);
-        return {true, "Showing " + cmd.args[0]};
+
+        int totalAtoms = 0;
+        int objs = forEachInScope(app, expr, [&](ScopedTarget& t) {
+            if (t.wholeObject) {
+                t.obj->showRepr(rt);
+            } else {
+                std::vector<int> idxs(t.sel.indices().begin(), t.sel.indices().end());
+                t.obj->showReprForAtoms(rt, idxs);
+                totalAtoms += static_cast<int>(idxs.size());
+            }
+            return true;
+        });
+
+        if (objs == 0)
+            return {false, expr.empty() ? std::string("No object selected")
+                                        : ("No atoms match: " + expr)};
+        std::string msg = "Showing " + cmd.args[0];
+        if (!expr.empty()) msg += " for " + std::to_string(totalAtoms) + " atom(s)";
+        if (objs > 1) msg += " in " + std::to_string(objs) + " objects";
+        return {true, msg};
     }, ":show <repr> [selection]", "Show representation (wireframe, ballstick, spacefill, cartoon, ribbon, backbone)",
        {":show cartoon", ":show ballstick chain A", ":show wire resn HEM"}, "Display");
 
     // :hide [repr|all] [selection]
     cmdRegistry_.registerCmd("hide", [resolveRepr](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
+        // ":hide" with no args, or ":hide all" → hide every repr on every
+        // in-scope object.
         if (cmd.args.empty() || cmd.args[0] == "all") {
-            obj->hideAllRepr();
-            return {true, "Hidden all representations"};
+            int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
+                t.obj->hideAllRepr();
+                return true;
+            });
+            if (objs == 0) return {false, "No object selected"};
+            std::string msg = "Hidden all representations";
+            if (objs > 1) msg += " in " + std::to_string(objs) + " objects";
+            return {true, msg};
         }
+
         ReprType rt;
         bool hasRepr = resolveRepr(cmd.args[0], rt);
 
-        if (!hasRepr) {
-            // No repr specified — treat all args as selection, hide all reprs for those atoms
-            std::string expr;
-            for (size_t i = 0; i < cmd.args.size(); ++i) {
-                if (i > 0) expr += " ";
-                expr += cmd.args[i];
-            }
-            auto sel = app.parseSelection(expr, *obj);
-            if (sel.empty()) return {false, "No atoms match: " + expr};
-            obj->hideAllReprForAtoms(std::vector<int>(sel.indices().begin(), sel.indices().end()));
-            return {true, "Hidden all representations for " + std::to_string(sel.size()) + " atoms"};
+        // Build the selection expression: when no repr is named the entire
+        // arg list is the expression; otherwise everything after the repr.
+        std::string expr;
+        size_t exprStart = hasRepr ? 1 : 0;
+        for (size_t i = exprStart; i < cmd.args.size(); ++i) {
+            if (i > exprStart) expr += " ";
+            expr += cmd.args[i];
         }
 
-        if (cmd.args.size() > 1) {
-            std::string expr;
-            for (size_t i = 1; i < cmd.args.size(); ++i) {
-                if (i > 1) expr += " ";
-                expr += cmd.args[i];
+        int totalAtoms = 0;
+        int objs = forEachInScope(app, expr, [&](ScopedTarget& t) {
+            if (!hasRepr) {
+                // ":hide chain A" (no repr) — hide every repr for matched atoms.
+                std::vector<int> idxs(t.sel.indices().begin(), t.sel.indices().end());
+                t.obj->hideAllReprForAtoms(idxs);
+                totalAtoms += static_cast<int>(idxs.size());
+            } else if (t.wholeObject) {
+                t.obj->hideRepr(rt);
+            } else {
+                std::vector<int> idxs(t.sel.indices().begin(), t.sel.indices().end());
+                t.obj->hideReprForAtoms(rt, idxs);
+                totalAtoms += static_cast<int>(idxs.size());
             }
-            auto sel = app.parseSelection(expr, *obj);
-            if (sel.empty()) return {false, "No atoms match: " + expr};
-            obj->hideReprForAtoms(rt, std::vector<int>(sel.indices().begin(), sel.indices().end()));
-            return {true, "Hidden " + cmd.args[0] + " for " + std::to_string(sel.size()) + " atoms"};
+            return true;
+        });
+
+        if (objs == 0)
+            return {false, expr.empty() ? std::string("No object selected")
+                                        : ("No atoms match: " + expr)};
+        std::string msg;
+        if (!hasRepr) {
+            msg = "Hidden all representations for " + std::to_string(totalAtoms) + " atom(s)";
+        } else {
+            msg = "Hidden " + cmd.args[0];
+            if (!expr.empty()) msg += " for " + std::to_string(totalAtoms) + " atom(s)";
         }
-        obj->hideRepr(rt);
-        return {true, "Hidden " + cmd.args[0]};
+        if (objs > 1) msg += " in " + std::to_string(objs) + " objects";
+        return {true, msg};
     }, ":hide [repr|all] [selection]", "Hide representation, or all representations",
        {":hide all", ":hide cartoon", ":hide wire chain B"}, "Display");
 
@@ -2483,160 +2616,178 @@ void Application::registerCommands() {
     cmdRegistry_.registerCmd("color", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty())
             return {false, "Usage: :color <scheme> or :color <name> <selection> | Colors: " + ColorMapper::availableColors()};
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
 
         const auto& first = cmd.args[0];
 
-        // Check if first arg is a color scheme name
-        if (first == "element" || first == "cpk") {
-            int count = applyHeteroatomColors(*obj);
-            return {true, "Colored " + std::to_string(count) + " heteroatoms by element"};
+        // Helper: apply a per-object scheme across the current scope.
+        auto applyScheme = [&](ColorScheme scheme, const std::string& label) -> ExecResult {
+            int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
+                t.obj->setColorScheme(scheme);
+                t.obj->clearAtomColors();
+                return true;
+            });
+            if (objs == 0) return {false, "No object selected"};
+            std::string msg = label;
+            if (objs > 1) msg += " (" + std::to_string(objs) + " objects)";
+            return {true, msg};
+        };
+
+        // Scheme branches — :color chain (no further args) etc.
+        if (first == "element" || first == "cpk" ||
+            first == "heteroatom" || first == "hetero" || first == "het_color") {
+            int totalCount = 0;
+            int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
+                totalCount += applyHeteroatomColors(*t.obj);
+                return true;
+            });
+            if (objs == 0) return {false, "No object selected"};
+            std::string msg = "Colored " + std::to_string(totalCount) +
+                              " heteroatoms by element";
+            if (objs > 1) msg += " (" + std::to_string(objs) + " objects)";
+            return {true, msg};
         }
-        if (first == "chain") {
-            // "color chain" with no more args → scheme
-            // "color chain chain A" → ambiguous, treat as scheme if only 1 arg
-            if (cmd.args.size() == 1) {
-                obj->setColorScheme(ColorScheme::Chain);
-                obj->clearAtomColors();
-                return {true, "Coloring by chain"};
-            }
-            // Fall through to try as named color
+        if (first == "chain" && cmd.args.size() == 1) {
+            return applyScheme(ColorScheme::Chain, "Coloring by chain");
         }
         if (first == "ss" || first == "secondary") {
-            obj->setColorScheme(ColorScheme::SecondaryStructure);
-            obj->clearAtomColors();
-            return {true, "Coloring by SS"};
+            return applyScheme(ColorScheme::SecondaryStructure, "Coloring by SS");
         }
         if (first == "bfactor" || first == "b") {
-            obj->setColorScheme(ColorScheme::BFactor);
-            obj->clearAtomColors();
-            return {true, "Coloring by B-factor"};
+            return applyScheme(ColorScheme::BFactor, "Coloring by B-factor");
         }
         if (first == "plddt") {
-            obj->setColorScheme(ColorScheme::PLDDT);
-            obj->clearAtomColors();
-            return {true, "Coloring by pLDDT (AlphaFold confidence)"};
+            return applyScheme(ColorScheme::PLDDT, "Coloring by pLDDT (AlphaFold confidence)");
         }
         if (first == "rainbow") {
-            obj->setColorScheme(ColorScheme::Rainbow);
-            obj->clearAtomColors();
-            return {true, "Coloring rainbow (N→C terminus)"};
+            return applyScheme(ColorScheme::Rainbow, "Coloring rainbow (N→C terminus)");
         }
         if (first == "restype" || first == "type") {
-            obj->setColorScheme(ColorScheme::ResType);
-            obj->clearAtomColors();
-            return {true, "Coloring by residue type (nonpolar/polar/acidic/basic)"};
-        }
-        if (first == "heteroatom" || first == "hetero" || first == "het_color") {
-            int count = applyHeteroatomColors(*obj);
-            return {true, "Colored " + std::to_string(count) + " heteroatoms by element"};
+            return applyScheme(ColorScheme::ResType, "Coloring by residue type (nonpolar/polar/acidic/basic)");
         }
         if (first == "clear" || first == "reset") {
-            obj->clearAtomColors();
-            return {true, "Cleared per-atom colors"};
+            int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
+                t.obj->clearAtomColors();
+                return true;
+            });
+            if (objs == 0) return {false, "No object selected"};
+            std::string msg = "Cleared per-atom colors";
+            if (objs > 1) msg += " (" + std::to_string(objs) + " objects)";
+            return {true, msg};
         }
 
-        // Try as named color + optional selection:
-        // :color red              → color all atoms red
-        // :color red chain A      → color chain A red
+        // Otherwise: named color + optional selection expression.
+        // :color red              → color all atoms red (every in-scope object)
+        // :color red chain A      → color chain A red (every in-scope object)
         int colorPair = ColorMapper::colorByName(first);
         if (colorPair < 0)
             return {false, "Unknown color/scheme: " + first + " | Available: " + ColorMapper::availableColors()};
 
-        if (cmd.args.size() == 1) {
-            // Color all atoms
-            auto sel = Selection::all(static_cast<int>(obj->atoms().size()));
-            obj->setAtomColors(std::vector<int>(sel.indices().begin(), sel.indices().end()), colorPair);
-            return {true, "Colored all atoms " + first};
-        }
-
-        // Remaining args form a selection expression
         std::string expr;
         for (size_t i = 1; i < cmd.args.size(); ++i) {
             if (i > 1) expr += " ";
             expr += cmd.args[i];
         }
 
-        auto sel = app.parseSelection(expr, *obj);
-        if (sel.empty()) return {false, "No atoms match: " + expr};
-        obj->setAtomColors(std::vector<int>(sel.indices().begin(), sel.indices().end()), colorPair);
-        return {true, "Colored " + std::to_string(sel.size()) + " atoms " + first};
+        int totalAtoms = 0;
+        int objs = forEachInScope(app, expr, [&](ScopedTarget& t) {
+            std::vector<int> idxs(t.sel.indices().begin(), t.sel.indices().end());
+            t.obj->setAtomColors(idxs, colorPair);
+            totalAtoms += static_cast<int>(idxs.size());
+            return true;
+        });
+        if (objs == 0)
+            return {false, expr.empty() ? std::string("No object selected")
+                                        : ("No atoms match: " + expr)};
+        std::string msg;
+        if (expr.empty()) msg = "Colored all atoms " + first;
+        else              msg = "Colored " + std::to_string(totalAtoms) + " atom(s) " + first;
+        if (objs > 1) msg += " in " + std::to_string(objs) + " objects";
+        return {true, msg};
     }, ":color <scheme|name> [selection]",
        "Set coloring scheme (element, chain, ss, bfactor, plddt, rainbow, restype, heteroatom) or named color",
        {":color ss", ":color chain", ":color red chain A", ":color rainbow"}, "Coloring");
 
-    // :zoom
-    // Helper: get atom indices from optional selection args
-    auto resolveAtoms = [](Application& app, const ParsedCommand& cmd, int startArg = 0)
-        -> std::pair<std::vector<int>, std::string> {
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {{}, "No object selected"};
-        if (cmd.args.size() <= static_cast<size_t>(startArg)) {
-            // All atoms
-            std::vector<int> all(obj->atoms().size());
-            for (int i = 0; i < static_cast<int>(obj->atoms().size()); ++i) all[i] = i;
-            return {all, ""};
-        }
+    // :zoom / :center / :orient — atoms gathered across every in-scope
+    // object, so a multi-object scope frames the *union* (the natural
+    // behavior after a :loadalign superpose). MolObject coordinates are
+    // already world-aligned (Aligner mutates atoms in place), so summing
+    // x/y/z directly across objects is correct.
+    struct ScopeAtomXYZ {
+        std::vector<float> xs, ys, zs;
+        int objs = 0;
+    };
+    auto collectAtomCoords = [](Application& app, const ParsedCommand& cmd,
+                                int startArg = 0) -> ScopeAtomXYZ {
         std::string expr;
         for (size_t i = startArg; i < cmd.args.size(); ++i) {
             if (i > static_cast<size_t>(startArg)) expr += " ";
             expr += cmd.args[i];
         }
-        auto sel = app.parseSelection(expr, *obj);
-        if (sel.empty()) return {{}, "No atoms match: " + expr};
-        return {std::vector<int>(sel.indices().begin(), sel.indices().end()), ""};
+        ScopeAtomXYZ out;
+        out.objs = forEachInScope(app, expr, [&](ScopedTarget& t) {
+            const auto& atoms = t.obj->atoms();
+            for (int i : t.sel.indices()) {
+                out.xs.push_back(atoms[i].x);
+                out.ys.push_back(atoms[i].y);
+                out.zs.push_back(atoms[i].z);
+            }
+            return true;
+        });
+        return out;
     };
 
-    // Helper: compute center and span from atom indices
-    auto computeGeometry = [](const MolObject& obj, const std::vector<int>& indices)
+    auto computeUnion = [](const ScopeAtomXYZ& g)
         -> std::tuple<float, float, float, float> {
-        const auto& atoms = obj.atoms();
         float cx = 0, cy = 0, cz = 0;
         float minX = std::numeric_limits<float>::max(), maxX = std::numeric_limits<float>::lowest();
         float minY = minX, maxY = maxX, minZ = minX, maxZ = maxX;
-        for (int i : indices) {
-            cx += atoms[i].x; cy += atoms[i].y; cz += atoms[i].z;
-            if (atoms[i].x < minX) minX = atoms[i].x;
-            if (atoms[i].x > maxX) maxX = atoms[i].x;
-            if (atoms[i].y < minY) minY = atoms[i].y;
-            if (atoms[i].y > maxY) maxY = atoms[i].y;
-            if (atoms[i].z < minZ) minZ = atoms[i].z;
-            if (atoms[i].z > maxZ) maxZ = atoms[i].z;
+        const size_t n = g.xs.size();
+        for (size_t i = 0; i < n; ++i) {
+            cx += g.xs[i]; cy += g.ys[i]; cz += g.zs[i];
+            if (g.xs[i] < minX) minX = g.xs[i];
+            if (g.xs[i] > maxX) maxX = g.xs[i];
+            if (g.ys[i] < minY) minY = g.ys[i];
+            if (g.ys[i] > maxY) maxY = g.ys[i];
+            if (g.zs[i] < minZ) minZ = g.zs[i];
+            if (g.zs[i] > maxZ) maxZ = g.zs[i];
         }
-        float n = static_cast<float>(indices.size());
-        cx /= n; cy /= n; cz /= n;
+        if (n > 0) {
+            const float fn = static_cast<float>(n);
+            cx /= fn; cy /= fn; cz /= fn;
+        }
         float span = std::max({maxX - minX, maxY - minY, maxZ - minZ});
         return {cx, cy, cz, span};
     };
 
     // :center [selection]
-    cmdRegistry_.registerCmd("center", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto [indices, err] = resolveAtoms(app, cmd);
-        if (!err.empty()) return {false, err};
-        auto obj = app.tabs().currentTab().currentObject();
-        auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
+    cmdRegistry_.registerCmd("center", [collectAtomCoords, computeUnion](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto g = collectAtomCoords(app, cmd);
+        if (g.xs.empty()) return {false, "No atoms match"};
+        auto [cx, cy, cz, span] = computeUnion(g);
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
-        return {true, "Centered on " + std::to_string(indices.size()) + " atoms"};
+        std::string msg = "Centered on " + std::to_string(g.xs.size()) + " atoms";
+        if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
+        return {true, msg};
     }, ":center [selection]", "Center the view on a selection (or whole object)",
        {":center", ":center chain A", ":center resn HEM"}, "View");
 
     // :zoom [selection]
-    cmdRegistry_.registerCmd("zoom", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto [indices, err] = resolveAtoms(app, cmd);
-        if (!err.empty()) return {false, err};
-        auto obj = app.tabs().currentTab().currentObject();
-        auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
+    cmdRegistry_.registerCmd("zoom", [collectAtomCoords, computeUnion](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto g = collectAtomCoords(app, cmd);
+        if (g.xs.empty()) return {false, "No atoms match"};
+        auto [cx, cy, cz, span] = computeUnion(g);
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
         if (span > 0.0f) app.tabs().currentTab().camera().setZoom(40.0f / span);
-        return {true, "Zoomed to " + std::to_string(indices.size()) + " atoms"};
+        std::string msg = "Zoomed to " + std::to_string(g.xs.size()) + " atoms";
+        if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
+        return {true, msg};
     }, ":zoom [selection]", "Center and zoom to fit the selection (or whole object)",
        {":zoom", ":zoom chain A", ":zoom resi 50-80"}, "View");
 
     // :orient [view <vx>,<vy>,<vz>] [selection] — align PCA axes, optionally view from a
     // direction expressed in the PCA frame (e1=longest, e2=mid, e3=shortest).
     // Default v_pca = (0,0,1): look down the shortest axis (flat face on screen).
-    cmdRegistry_.registerCmd("orient", [resolveAtoms, computeGeometry](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    cmdRegistry_.registerCmd("orient", [collectAtomCoords, computeUnion](Application& app, const ParsedCommand& cmd) -> ExecResult {
         double vx = 0.0, vy = 0.0, vz = 1.0;
         int selStart = 0;
         if (!cmd.args.empty() && cmd.args[0] == "view") {
@@ -2658,22 +2809,21 @@ void Application::registerCommands() {
             selStart = 4;
         }
 
-        auto [indices, err] = resolveAtoms(app, cmd, selStart);
-        if (!err.empty()) return {false, err};
-        auto obj = app.tabs().currentTab().currentObject();
-        auto [cx, cy, cz, span] = computeGeometry(*obj, indices);
+        auto g = collectAtomCoords(app, cmd, selStart);
+        if (g.xs.empty()) return {false, "No atoms match"};
+        auto [cx, cy, cz, span] = computeUnion(g);
         auto& cam = app.tabs().currentTab().camera();
         cam.setCenter(cx, cy, cz);
         if (span > 0.0f) cam.setZoom(40.0f / span);
 
-        if (indices.size() < 2) {
+        if (g.xs.size() < 2) {
             return {true, "Centered (need >=2 atoms for orientation)"};
         }
 
-        const auto& atoms = obj->atoms();
+        // PCA over the union of atom positions across all in-scope objects.
         double A[3][3] = {};
-        for (int i : indices) {
-            double dx = atoms[i].x - cx, dy = atoms[i].y - cy, dz = atoms[i].z - cz;
+        for (size_t i = 0; i < g.xs.size(); ++i) {
+            double dx = g.xs[i] - cx, dy = g.ys[i] - cy, dz = g.zs[i] - cz;
             A[0][0] += dx*dx; A[0][1] += dx*dy; A[0][2] += dx*dz;
             A[1][1] += dy*dy; A[1][2] += dy*dz;
             A[2][2] += dz*dz;
@@ -2771,7 +2921,9 @@ void Application::registerCommands() {
         rot[6] = (float)sz[0]; rot[7] = (float)sz[1]; rot[8] = (float)sz[2];
         cam.setRotation(rot);
 
-        return {true, "Oriented " + std::to_string(indices.size()) + " atoms"};
+        std::string msg = "Oriented " + std::to_string(g.xs.size()) + " atoms";
+        if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
+        return {true, msg};
     }, ":orient [view <vx> <vy> <vz>] [selection]",
        "Center, zoom, and align principal axes (default: view down shortest axis)",
        {":orient", ":orient chain A", ":orient view 1 0 0"}, "View");
@@ -2810,6 +2962,14 @@ void Application::registerCommands() {
             app.layout().setPanel(*v);
             app.tabs().currentTab().viewState().panelVisible = app.layout().panelVisible();
             return {true, app.layout().panelVisible() ? "Panel visible" : "Panel hidden"};
+        }
+        if (opt == "scope") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set scope all|current"};
+            const auto& val = cmd.args[1];
+            if (val == "all")          app.setCommandScope(ScopeMode::All);
+            else if (val == "current") app.setCommandScope(ScopeMode::Current);
+            else return {false, "Usage: :set scope all|current"};
+            return {true, "Command scope: " + val};
         }
         if (opt == "renderer" || opt == "render") {
             if (cmd.args.size() < 2) return {false, "Usage: :set renderer <ascii|braille|block|sixel|pixel|auto|kitty|iterm2>"};
@@ -3203,6 +3363,9 @@ void Application::registerCommands() {
         auto onoff = [](bool b) { return std::string(b ? "on" : "off"); };
 
         if (opt == "panel")        return {true, "panel = " + onoff(app.layout().panelVisible())};
+        if (opt == "scope")
+            return {true, std::string("scope = ") +
+                          (app.commandScope() == ScopeMode::All ? "all" : "current")};
         if (opt == "outline")      return {true, "outline = " + onoff(app.outlineEnabled())};
         if (opt == "auto_center")  return {true, "auto_center = " + onoff(app.autoCenter())};
         if (opt == "seqbar")       return {true, "seqbar = " + onoff(app.layout().seqBarVisible())};
@@ -3358,6 +3521,9 @@ void Application::registerCommands() {
             // is only useful as a hermetic reset, and leaving orphans in
             // the store would defeat that.
             for (const auto& n : app.store().names()) app.store().remove(n);
+            // PixelCanvas diffs against prevRgb_; without invalidate the
+            // last frame's pixels survive into the now-empty viewport.
+            if (app.canvas()) app.canvas()->invalidate();
             if (total == 0) return {true, "Already empty"};
             return {true, "Cleared all objects (" + std::to_string(total) + " total)"};
         }
@@ -3366,6 +3532,7 @@ void Application::registerCommands() {
         int n = static_cast<int>(tab.objects().size());
         if (n == 0) return {true, "Tab is already empty"};
         tab.clear();
+        if (app.canvas()) app.canvas()->invalidate();
         return {true, "Cleared " + std::to_string(n) + " object(s)"};
     },
     ":clear [all]",
@@ -3382,12 +3549,14 @@ void Application::registerCommands() {
             std::string name = obj->name();
             app.store().remove(name);
             tab.removeObject(tab.selectedObjectIdx());
+            if (app.canvas()) app.canvas()->invalidate();
             return {true, "Deleted " + name};
         }
         auto obj = app.store().get(cmd.args[0]);
         if (!obj) return {false, "Object not found: " + cmd.args[0]};
         std::string name = obj->name();
         app.store().remove(name);
+        if (app.canvas()) app.canvas()->invalidate();
         return {true, "Deleted " + name};
     }, ":delete [name]", "Delete an object (defaults to the currently selected one)",
        {":delete", ":delete 1bna"}, "Window");
@@ -3809,48 +3978,7 @@ void Application::registerCommands() {
             }
             if (args.empty()) return {false, kUsage};
 
-            // First brace only; nested / list-form braces unsupported.
-            auto expandBrace = [](const std::string& p) -> std::vector<std::string> {
-                auto lb = p.find('{');
-                if (lb == std::string::npos) return {p};
-                auto rb = p.find('}', lb);
-                if (rb == std::string::npos) return {p};
-                auto inner = p.substr(lb + 1, rb - lb - 1);
-                auto dots = inner.find("..");
-                if (dots == std::string::npos) return {p};
-                try {
-                    int lo = std::stoi(inner.substr(0, dots));
-                    int hi = std::stoi(inner.substr(dots + 2));
-                    if (hi < lo) std::swap(lo, hi);
-                    std::vector<std::string> out;
-                    for (int i = lo; i <= hi; ++i) {
-                        out.push_back(p.substr(0, lb) + std::to_string(i) +
-                                      p.substr(rb + 1));
-                    }
-                    return out;
-                } catch (...) {
-                    return {p};
-                }
-            };
-
-            std::vector<std::string> matches;
-            for (const auto& raw : args) {
-                for (const auto& pat : expandBrace(raw)) {
-                    glob_t g{};
-                    int rc = glob(pat.c_str(), GLOB_NOSORT, nullptr, &g);
-                    if (rc == 0) {
-                        for (size_t i = 0; i < g.gl_pathc; ++i)
-                            matches.emplace_back(g.gl_pathv[i]);
-                    } else if (rc == GLOB_NOMATCH && std::filesystem::exists(pat)) {
-                        // glob() returns NOMATCH for brace-expanded
-                        // literals like "model_3.pdb"; accept those.
-                        matches.push_back(pat);
-                    }
-                    globfree(&g);
-                }
-            }
-            std::sort(matches.begin(), matches.end());
-            matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+            std::vector<std::string> matches = expandPathPatterns(args);
 
             if (matches.empty())
                 return {false, "No files matched pattern(s): " +

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(molterm VERSION 0.11.3 LANGUAGES CXX)
+project(molterm VERSION 0.12.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -124,6 +124,8 @@ set(MOLTERM_SOURCES
     src/app/Tab.cpp
     src/app/TabManager.cpp
     src/app/Application.cpp
+    src/app/CommandScope.cpp
+    src/app/PathPatterns.cpp
     # Config
     src/config/ConfigParser.cpp
     # Export
