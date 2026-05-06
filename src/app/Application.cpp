@@ -1827,26 +1827,43 @@ void Application::renderViewport() {
         }
     }
 
-    // Pixel: yellow ring per selected atom — a dot vanishes at typical
-    // zoom and a filled disc would occlude the atom's own color.
-    // Cell renderers: '*' glyph, the chunkiest single-cell mark.
+    // Highlight overlay: $sele atoms plus pk1-pk4 pick registers.
+    // Pixel: yellow ring — a dot vanishes at typical zoom and a filled
+    // disc would occlude the atom's own color. Cell renderers: '*'
+    // glyph, the chunkiest single-cell mark.
     {
+        const std::vector<int>* selIdx = nullptr;
         auto selIt = namedSelections_.find(kSele);
-        if (selIt != namedSelections_.end() && !selIt->second.empty()) {
+        if (selIt != namedSelections_.end() && !selIt->second.empty())
+            selIdx = &selIt->second.indices();
+
+        int pks[4]; int nPk = 0;
+        for (int p = 0; p < 4; ++p)
+            if (pickRegs_[p] >= 0) pks[nPk++] = pickRegs_[p];
+        std::sort(pks, pks + nPk);
+        nPk = static_cast<int>(std::unique(pks, pks + nPk) - pks);
+
+        if (selIdx || nPk > 0) {
             buildProjCache();
             const int ringR = isPixel
                 ? std::max(3, static_cast<int>(std::lround(
                       4.0f * cameraZoomScale(tabMgr_.currentTab().camera().zoom()))))
                 : 0;
-            // projCache_ is built in atom-index order; Selection::indices()
-            // is sorted. Intersect via two-pointer merge so the cost is
-            // O(n + m) rather than O(n log m).
-            const auto& selIdx = selIt->second.indices();
-            size_t i = 0, j = 0;
-            while (i < projCache_.size() && j < selIdx.size()) {
-                const auto& pa = projCache_[i];
-                if (pa.idx < selIdx[j]) { ++i; continue; }
-                if (pa.idx > selIdx[j]) { ++j; continue; }
+            // Walk projCache_ as the master cursor and advance two
+            // sub-cursors (sele, pk) past anything below the current
+            // atom; an atom is highlit if either head matches. Keeps
+            // the work to O(n + m + k) without copying or allocating.
+            const size_t sn = selIdx ? selIdx->size() : 0;
+            size_t si = 0;
+            int    qi = 0;
+            for (size_t pi = 0; pi < projCache_.size(); ++pi) {
+                if (si >= sn && qi >= nPk) break;
+                const auto& pa = projCache_[pi];
+                while (si < sn && (*selIdx)[si] < pa.idx) ++si;
+                while (qi < nPk && pks[qi] < pa.idx)      ++qi;
+                bool match = (si < sn && (*selIdx)[si] == pa.idx) ||
+                             (qi < nPk && pks[qi] == pa.idx);
+                if (!match) continue;
                 if (isPixel) {
                     if (pa.sx >= -ringR && pa.sx < subW + ringR &&
                         pa.sy >= -ringR && pa.sy < subH + ringR)
@@ -1858,7 +1875,6 @@ void Application::renderViewport() {
                     if (tx >= 0 && tx < w && ty >= 0 && ty < h)
                         win.addCharColored(ty, tx, '*', kColorYellow);
                 }
-                ++i; ++j;
             }
         }
     }
