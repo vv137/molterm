@@ -1,11 +1,13 @@
 #include "molterm/repr/InterfaceRepr.h"
 
 #include <cmath>
+#include <set>
 
 #include "molterm/core/MolObject.h"
 #include "molterm/render/Camera.h"
 #include "molterm/render/Canvas.h"
 #include "molterm/render/ColorMapper.h"
+#include "molterm/repr/Representation.h"  // for RenderContext::colorFor
 
 namespace molterm {
 
@@ -36,15 +38,20 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
     const int   ch    = canvas.subH();
     const int   margin = 8;
 
-    // Sidechain hairs use full CPK coloring (carbons = gray) regardless
-    // of the active scheme. With chain-colored cartoon, scheme-colored
-    // carbons make the sidechain bonds visually merge with the spline
-    // body so the dashed contact lines look like they're dangling in mid-
-    // air with no visible residue at their endpoints. CPK keeps the
-    // contact-mapping read: bonds out from the cartoon are clearly
-    // anchored to gray carbons + colored N/O/S/P tips.
+    // Sidechain bonds: carbons take the active scheme color (chain/SS/
+    // rainbow), N/O/S/P pop out as CPK. The atom-position markers below
+    // anchor the dashed contact lines so they don't appear to dangle —
+    // mainchain-mainchain H-bonds in particular end at backbone N/O,
+    // which the sidechain pass deliberately skips, so without explicit
+    // markers there's nothing visible at the dash endpoints.
+    const ColorScheme scheme = mol.colorScheme();
+    const std::vector<float>* rbw =
+        (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
+    RenderContext ctx{mol, atoms, scheme, rbw, {}};
     auto colorOf = [&](int i) {
-        return ColorMapper::colorForElement(atoms[i].element);
+        if (atoms[i].element != "C")
+            return ColorMapper::colorForElement(atoms[i].element);
+        return ctx.colorFor(i);
     };
 
     // Same gentle thickness scaling as Wireframe/Backbone — sqrt(zoom)
@@ -156,6 +163,37 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
             drawThickLine(x0, y0, p1.depth, mx, my, md, c1, sidechainThick);
             canvas.setActiveAtomIndex(bond.atom2);
             drawThickLine(mx, my, md, x1, y1, p2.depth, c2, sidechainThick);
+        }
+        canvas.setActiveAtomIndex(-1);
+    }
+
+    // ── Atom markers at contact endpoints ─────────────────────────────
+    // Element-colored discs at every contact atom so the dashed lines
+    // have a visible anchor regardless of whether the sidechain pass
+    // reached them. Mainchain-mainchain H-bonds (N···O between two
+    // strands, very common) end at backbone atoms where the sidechain
+    // pass skips backbone-backbone bonds, so without these markers the
+    // dashes appear to dangle in mid-air with no visible residue at the
+    // tip. Element colors regardless of scheme so N=blue / O=red read
+    // even on a chain-colored cartoon body.
+    if (!contacts_.empty()) {
+        std::set<int> contactAtoms;
+        for (const auto& c : contacts_) {
+            if (!(showMask_ & interactionBit(c.type))) continue;
+            if (c.atom1 >= 0 && c.atom1 < static_cast<int>(atoms.size()))
+                contactAtoms.insert(c.atom1);
+            if (c.atom2 >= 0 && c.atom2 < static_cast<int>(atoms.size()))
+                contactAtoms.insert(c.atom2);
+        }
+        const int markerR = std::max(2, sidechainThick + 1);
+        for (int idx : contactAtoms) {
+            const auto& p = project(idx);
+            if (!inFrustum(p.sx, p.sy)) continue;
+            int color = ColorMapper::colorForElement(atoms[idx].element);
+            canvas.setActiveAtomIndex(idx);
+            canvas.drawCircle(static_cast<int>(std::round(p.sx)),
+                              static_cast<int>(std::round(p.sy)),
+                              p.depth, markerR, color, true);
         }
         canvas.setActiveAtomIndex(-1);
     }
