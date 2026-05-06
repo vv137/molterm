@@ -1,4 +1,5 @@
 #include "molterm/repr/WireframeRepr.h"
+#include "molterm/repr/ReprUtil.h"
 #include <cmath>
 
 namespace molterm {
@@ -22,13 +23,7 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         return ctx.colorFor(i);
     };
 
-    // Thickness scales gently with camera zoom so lines stay readable
-    // without bloating at close-up. Square-root tames the response so
-    // 4× zoom is only 2× thicker; clamped to [0.75×, 1.8×] of the base.
-    float zoom = cam.zoom();
-    float scale = std::sqrt(zoom > 0.0f ? zoom : 1.0f);
-    if (scale < 0.75f) scale = 0.75f;
-    if (scale > 1.8f)  scale = 1.8f;
+    float scale = cameraZoomScale(cam.zoom());
     float effThickness = thickness_ * scale;
     int r = toSubPixels(effThickness, canvas.scaleX());
     bool thick = (r > 1);

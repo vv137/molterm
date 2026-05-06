@@ -1,4 +1,5 @@
 #include "molterm/repr/BackboneRepr.h"
+#include "molterm/repr/ReprUtil.h"
 #include <cmath>
 
 namespace molterm {
@@ -9,15 +10,8 @@ void BackboneRepr::render(const MolObject& mol, const Camera& cam,
 
     auto ctx = makeContext(mol, ReprType::Backbone);
     const auto& atoms = ctx.atoms;
-    // Trace thickness scales gently with zoom (sqrt, clamped) so the
-    // backbone stays a thin worm at high zoom instead of a hairline.
-    // Same shape as WireframeRepr — these are abstract markers, not
-    // physical objects, so we don't want full linear growth.
-    float zoom = cam.zoom();
-    float scale = std::sqrt(zoom > 0.0f ? zoom : 1.0f);
-    if (scale < 0.75f) scale = 0.75f;
-    if (scale > 1.8f)  scale = 1.8f;
-    int r = toSubPixels(thickness_ * scale, canvas.scaleX());
+    int r = toSubPixels(thickness_ * cameraZoomScale(cam.zoom()),
+                        canvas.scaleX());
 
     // Collect Cα atoms grouped by chain
     int sw = canvas.subW(), sh = canvas.subH();

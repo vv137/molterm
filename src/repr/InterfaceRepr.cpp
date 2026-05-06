@@ -8,6 +8,7 @@
 #include "molterm/render/Canvas.h"
 #include "molterm/render/ColorMapper.h"
 #include "molterm/repr/Representation.h"  // for RenderContext::colorFor
+#include "molterm/repr/ReprUtil.h"
 
 namespace molterm {
 
@@ -54,17 +55,11 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
         return ctx.colorFor(i);
     };
 
-    // Same gentle thickness scaling as Wireframe/Backbone — sqrt(zoom)
-    // clamped to [0.75, 1.8]. Without this, sidechain bonds and dashed
-    // interaction lines stay hairline at high (focus-mode) zoom while
-    // everything else around them grows. Dash length and gap scale by
-    // the same factor so the dash *aspect* — fat blobs vs thin segments
-    // — stays consistent across zoom levels (otherwise the thickening
-    // line outpaces the fixed dash length and the dashes start reading
-    // as dots).
-    float zoomScale = std::sqrt(std::max(cam.zoom(), 0.0f));
-    if (zoomScale < 0.75f) zoomScale = 0.75f;
-    if (zoomScale > 1.8f)  zoomScale = 1.8f;
+    // Dash length and gap scale by the same factor as line thickness so
+    // the dash *aspect* — fat blobs vs thin segments — stays consistent
+    // across zoom levels (otherwise the thickening line outpaces the
+    // fixed dash length and the dashes start reading as dots).
+    const float zoomScale = cameraZoomScale(cam.zoom());
     const int sidechainThick = std::max(1,
         (int)std::lround(lineThickness_ * zoomScale));
     const int interactionThick = std::max(1,
