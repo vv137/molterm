@@ -1544,7 +1544,7 @@ void Application::renderViewport() {
     //   • focus mode (filtered to the focus neighborhood)
     if ((interfaceOverlay_ || focusSnapshot_.active) &&
         interfaceRepr_.hasData()) {
-        if (auto obj = tab.currentObject()) {
+        if (auto obj = tab.currentObject(); obj && obj->visible()) {
             interfaceRepr_.render(*obj, tab.camera(), *canvas_);
         }
     }
@@ -1796,7 +1796,7 @@ void Application::renderViewport() {
     // Draw measurement dashed lines + labels
     {
         auto obj = tabMgr_.currentTab().currentObject();
-        if (obj && !measurements_.empty()) {
+        if (obj && obj->visible() && !measurements_.empty()) {
             const auto& atoms = obj->atoms();
             auto& cam = tabMgr_.currentTab().camera();
             for (const auto& m : measurements_) {
