@@ -82,6 +82,13 @@ void Window::horizontalLine(int y, int x, int len) {
     mvwhline(win_, y, x, ACS_HLINE, len);
 }
 
+void Window::verticalLine(int y, int x, int len) {
+    if (!win_) return;
+    // mvwvline takes chtype directly so A_ALTCHARSET is preserved.
+    // (Going through addChar would truncate ACS_VLINE to 'x'.)
+    mvwvline(win_, y, x, ACS_VLINE, len);
+}
+
 void Window::addWideChar(int y, int x, char32_t codepoint, int colorPair) {
     if (!win_) return;
     cchar_t cc;

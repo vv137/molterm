@@ -17,10 +17,11 @@ void ObjectPanel::render(Window& win,
                          int selectedIdx) {
     win.erase();
 
-    // Draw left border
-    for (int y = 0; y < win.height(); ++y) {
-        win.addChar(y, 0, ACS_VLINE);
-    }
+    // Subtle gray divider — was rendering as a column of 'x' before
+    // (Window::addChar truncated ACS_VLINE's chtype to its low byte).
+    win.setAttr(COLOR_PAIR(kColorPanelBorder));
+    win.verticalLine(0, 0, win.height());
+    win.unsetAttr(COLOR_PAIR(kColorPanelBorder));
 
     // Header
     win.setAttr(A_BOLD | COLOR_PAIR(kColorPanelHeader));
@@ -46,10 +47,10 @@ void ObjectPanel::render(Window& win,
         if (static_cast<int>(name.size()) > nameBudget && nameBudget > 0)
             name = name.substr(0, nameBudget);
 
-        const int colorPair = selected ? kColorPanelSelected : kColorDefault;
-        if (!shown) win.setAttr(A_DIM);
+        const int colorPair = selected ? kColorPanelSelected
+                            : shown    ? kColorDefault
+                                       : kColorPanelDim;
         win.printColored(y, 2, prefix + name, colorPair);
-        if (!shown) win.unsetAttr(A_DIM);
     }
 
     win.refresh();

@@ -29,6 +29,7 @@ public:
     void addCharColored(int y, int x, char ch, int colorPair);
     void fillRow(int y, char ch, int colorPair);
     void horizontalLine(int y, int x, int len);
+    void verticalLine(int y, int x, int len);
 
     // Output a single Unicode codepoint using the wide-char ncurses API.
     // Required on Linux where narrow mvwprintw mangles multi-byte UTF-8.

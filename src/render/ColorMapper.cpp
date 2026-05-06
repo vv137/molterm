@@ -43,6 +43,11 @@ void ColorMapper::initColors() {
     init_pair(kColorTabInactive,  COLOR_WHITE, COLOR_BLACK);
     init_pair(kColorPanelHeader,  COLOR_CYAN,  -1);
     init_pair(kColorPanelSelected, COLOR_BLACK, COLOR_CYAN);
+    // Hidden objects + the panel border. Distinct dim-gray slots so they
+    // don't fight kColorDefault for attention. 256-color values are set
+    // in the COLORS >= 256 block below; here we install 8-color fallbacks.
+    init_pair(kColorPanelDim,     COLOR_BLUE,  -1);
+    init_pair(kColorPanelBorder,  COLOR_BLUE,  -1);
 
     // Named palette colors
     init_pair(kColorRed,     COLOR_RED,     -1);
@@ -81,6 +86,11 @@ void ColorMapper::initColors() {
 
     // Extended colors (require 256-color terminal)
     if (COLORS >= 256) {
+        // Dim gray for hidden rows; even darker gray for the panel border
+        // so it reads as a divider rather than content.
+        init_pair(kColorPanelDim,    245, -1);
+        init_pair(kColorPanelBorder, 238, -1);
+
         init_pair(kColorOrange,  208, -1);  // orange
         init_pair(kColorPink,    213, -1);  // pink
         init_pair(kColorLime,    118, -1);  // lime

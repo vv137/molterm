@@ -43,6 +43,8 @@ enum ColorPairId : int {
     kColorTabInactive = 43,
     kColorPanelHeader = 44,
     kColorPanelSelected = 45,
+    kColorPanelDim = 46,
+    kColorPanelBorder = 47,
     // Named palette colors (for :color <name> <selection>)
     kColorRed = 50,
     kColorGreen = 51,
