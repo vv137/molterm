@@ -17,6 +17,7 @@
 #include "molterm/repr/SpacefillRepr.h"
 #include "molterm/repr/CartoonRepr.h"
 #include "molterm/repr/RibbonRepr.h"
+#include "molterm/repr/ReprUtil.h"
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
 #include "molterm/core/Geometry.h"
@@ -1826,45 +1827,38 @@ void Application::renderViewport() {
         }
     }
 
-    // Draw selection highlight overlay for $sele atoms.
-    // Pixel: a yellow ring around each selected atom — readable across
-    // zoom levels (a single dot vanishes against any non-trivial repr,
-    // and a filled disc occludes the atom's own coloring).
-    // Cell renderers: a chunky '*' glyph, the largest single mark we
-    // can paint into a terminal cell.
+    // Pixel: yellow ring per selected atom — a dot vanishes at typical
+    // zoom and a filled disc would occlude the atom's own color.
+    // Cell renderers: '*' glyph, the chunkiest single-cell mark.
     {
         auto selIt = namedSelections_.find(kSele);
         if (selIt != namedSelections_.end() && !selIt->second.empty()) {
             buildProjCache();
-            if (isPixel) {
-                // Same sqrt(zoom) clamp [0.75, 1.8] as the other overlays
-                // (Wireframe/Backbone/InterfaceRepr) so the ring scales
-                // with the rest of the scene.
-                float zoomScale = std::sqrt(std::max(
-                    tabMgr_.currentTab().camera().zoom(), 0.0f));
-                if (zoomScale < 0.75f) zoomScale = 0.75f;
-                if (zoomScale > 1.8f)  zoomScale = 1.8f;
-                const int ringR = std::max(3,
-                    static_cast<int>(std::lround(4.0f * zoomScale)));
-                for (const auto& pa : projCache_) {
-                    if (selIt->second.has(pa.idx)) {
-                        if (pa.sx >= -ringR && pa.sx < subW + ringR &&
-                            pa.sy >= -ringR && pa.sy < subH + ringR)
-                            canvas_->drawCircle(pa.sx, pa.sy,
-                                                pa.depth - 0.01f,
-                                                ringR, kColorYellow,
-                                                /*filled=*/false);
-                    }
+            const int ringR = isPixel
+                ? std::max(3, static_cast<int>(std::lround(
+                      4.0f * cameraZoomScale(tabMgr_.currentTab().camera().zoom()))))
+                : 0;
+            // projCache_ is built in atom-index order; Selection::indices()
+            // is sorted. Intersect via two-pointer merge so the cost is
+            // O(n + m) rather than O(n log m).
+            const auto& selIdx = selIt->second.indices();
+            size_t i = 0, j = 0;
+            while (i < projCache_.size() && j < selIdx.size()) {
+                const auto& pa = projCache_[i];
+                if (pa.idx < selIdx[j]) { ++i; continue; }
+                if (pa.idx > selIdx[j]) { ++j; continue; }
+                if (isPixel) {
+                    if (pa.sx >= -ringR && pa.sx < subW + ringR &&
+                        pa.sy >= -ringR && pa.sy < subH + ringR)
+                        canvas_->drawCircle(pa.sx, pa.sy, pa.depth - 0.01f,
+                                            ringR, kColorYellow, /*filled=*/false);
+                } else {
+                    int tx = pa.sx / scaleX;
+                    int ty = pa.sy / scaleY;
+                    if (tx >= 0 && tx < w && ty >= 0 && ty < h)
+                        win.addCharColored(ty, tx, '*', kColorYellow);
                 }
-            } else {
-                for (const auto& pa : projCache_) {
-                    if (selIt->second.has(pa.idx)) {
-                        int tx = pa.sx / scaleX;
-                        int ty = pa.sy / scaleY;
-                        if (tx >= 0 && tx < w && ty >= 0 && ty < h)
-                            win.addCharColored(ty, tx, '*', kColorYellow);
-                    }
-                }
+                ++i; ++j;
             }
         }
     }
