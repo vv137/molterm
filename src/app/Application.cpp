@@ -46,6 +46,13 @@
 
 namespace molterm {
 
+// Command-line argument meaning "every object/representation/tab in
+// the current scope" — accepted by :hide, :clear, :enable, :disable,
+// :set scope. The glob form is honored by commands whose grammar maps
+// 1:1 onto a name token (e.g. :enable *).
+static constexpr const char* kAllToken = "all";
+static constexpr const char* kAllGlob  = "*";
+
 static std::string resolveUSalignPath() {
     namespace fs = std::filesystem;
     constexpr const char* kName = "USalign";
@@ -2700,7 +2707,7 @@ void Application::registerCommands() {
     cmdRegistry_.registerCmd("hide", [resolveRepr](Application& app, const ParsedCommand& cmd) -> ExecResult {
         // ":hide" with no args, or ":hide all" → hide every repr on every
         // in-scope object.
-        if (cmd.args.empty() || cmd.args[0] == "all") {
+        if (cmd.args.empty() || cmd.args[0] == kAllToken) {
             int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
                 t.obj->hideAllRepr();
                 return true;
@@ -2762,7 +2769,7 @@ void Application::registerCommands() {
         auto& tab = app.tabs().currentTab();
         const auto& objs = tab.objects();
         std::vector<std::shared_ptr<MolObject>> out;
-        if (a == "all" || a == "*") {
+        if (a == kAllToken || a == kAllGlob) {
             for (const auto& o : objs) if (o) out.push_back(o);
             return out;
         }
@@ -3177,7 +3184,7 @@ void Application::registerCommands() {
         if (opt == "scope") {
             if (cmd.args.size() < 2) return {false, "Usage: :set scope all|current"};
             const auto& val = cmd.args[1];
-            if (val == "all")          app.setCommandScope(ScopeMode::All);
+            if (val == kAllToken)      app.setCommandScope(ScopeMode::All);
             else if (val == "current") app.setCommandScope(ScopeMode::Current);
             else return {false, "Usage: :set scope all|current"};
             return {true, "Command scope: " + val};
@@ -3576,7 +3583,7 @@ void Application::registerCommands() {
         if (opt == "panel")        return {true, "panel = " + onoff(app.layout().panelVisible())};
         if (opt == "scope")
             return {true, std::string("scope = ") +
-                          (app.commandScope() == ScopeMode::All ? "all" : "current")};
+                          (app.commandScope() == ScopeMode::All ? kAllToken : "current")};
         if (opt == "outline")      return {true, "outline = " + onoff(app.outlineEnabled())};
         if (opt == "auto_center")  return {true, "auto_center = " + onoff(app.autoCenter())};
         if (opt == "seqbar")       return {true, "seqbar = " + onoff(app.layout().seqBarVisible())};
@@ -3719,7 +3726,7 @@ void Application::registerCommands() {
     // :clear — wipe the current tab (or every tab + the global store with 'all')
     cmdRegistry_.registerCmd("clear", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.size() > 1 ||
-            (cmd.args.size() == 1 && cmd.args[0] != "all")) {
+            (cmd.args.size() == 1 && cmd.args[0] != kAllToken)) {
             return {false, "Usage: :clear [all]"};
         }
         bool wipeEverything = !cmd.args.empty();
