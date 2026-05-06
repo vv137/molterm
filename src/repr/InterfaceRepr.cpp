@@ -126,6 +126,19 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
             });
     };
 
+    // Set of atom indices that participate in a contact, regardless of
+    // type filter. Used by the sidechain pass to keep backbone-backbone
+    // bonds adjacent to mainchain contact atoms (so the carbonyl /
+    // peptide stubs around an N···O H-bond are visible), and by the
+    // marker pass below.
+    std::set<int> contactAtoms;
+    for (const auto& c : contacts_) {
+        if (c.atom1 >= 0 && c.atom1 < static_cast<int>(atoms.size()))
+            contactAtoms.insert(c.atom1);
+        if (c.atom2 >= 0 && c.atom2 < static_cast<int>(atoms.size()))
+            contactAtoms.insert(c.atom2);
+    }
+
     // ── Sidechain bonds at the interface (element-colored thin lines) ──
     if (drawSidechains_ && !mask_.empty()) {
         for (const auto& bond : mol.bonds()) {
@@ -139,10 +152,15 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
             const auto& a1 = atoms[bond.atom1];
             const auto& a2 = atoms[bond.atom2];
 
-            // Skip purely backbone bonds — those are already represented
-            // by the cartoon/ribbon spline. We want the sidechain hairs
-            // to pop out at the interface.
-            if (isBackboneName(a1.name) && isBackboneName(a2.name)) continue;
+            // Skip purely backbone bonds since the cartoon spline already
+            // covers the trace — UNLESS one of the endpoints is itself
+            // a contact atom. Mainchain-mainchain H-bonds (β-sheet N···O,
+            // helix-helix) need their adjacent C-O / N-CA stubs drawn so
+            // the dashed contact line has visible mainchain context to
+            // anchor onto, instead of dangling next to the spline.
+            if (isBackboneName(a1.name) && isBackboneName(a2.name) &&
+                !contactAtoms.count(bond.atom1) &&
+                !contactAtoms.count(bond.atom2)) continue;
 
             const auto& p1 = project(bond.atom1);
             const auto& p2 = project(bond.atom2);
@@ -176,17 +194,20 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
     // dashes appear to dangle in mid-air with no visible residue at the
     // tip. Element colors regardless of scheme so N=blue / O=red read
     // even on a chain-colored cartoon body.
-    if (!contacts_.empty()) {
-        std::set<int> contactAtoms;
+    if (!contactAtoms.empty()) {
+        // Filter again by showMask so legend toggles (e.g. "specific only"
+        // hiding hydrophobic + other) hide their markers too. Without
+        // this the dots would persist for hidden interactions.
+        std::set<int> markedAtoms;
         for (const auto& c : contacts_) {
             if (!(showMask_ & interactionBit(c.type))) continue;
             if (c.atom1 >= 0 && c.atom1 < static_cast<int>(atoms.size()))
-                contactAtoms.insert(c.atom1);
+                markedAtoms.insert(c.atom1);
             if (c.atom2 >= 0 && c.atom2 < static_cast<int>(atoms.size()))
-                contactAtoms.insert(c.atom2);
+                markedAtoms.insert(c.atom2);
         }
         const int markerR = std::max(2, sidechainThick + 1);
-        for (int idx : contactAtoms) {
+        for (int idx : markedAtoms) {
             const auto& p = project(idx);
             if (!inFrustum(p.sx, p.sy)) continue;
             int color = ColorMapper::colorForElement(atoms[idx].element);
