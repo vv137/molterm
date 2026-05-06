@@ -5,6 +5,13 @@
 
 namespace molterm {
 
+namespace {
+// Fixed-column visibility glyph in front of the name so long object
+// names can never truncate the marker off the right edge.
+constexpr const char* kGlyphShown  = "\xE2\x97\x8F";  // ●
+constexpr const char* kGlyphHidden = "\xE2\x97\x8B";  // ○
+}  // namespace
+
 void ObjectPanel::render(Window& win,
                          const std::vector<std::shared_ptr<MolObject>>& objects,
                          int selectedIdx) {
@@ -20,24 +27,29 @@ void ObjectPanel::render(Window& win,
     win.print(0, 2, "Objects");
     win.unsetAttr(A_BOLD | COLOR_PAIR(kColorPanelHeader));
 
-    // Object list
     for (int i = 0; i < static_cast<int>(objects.size()); ++i) {
         int y = i + 1;
         if (y >= win.height()) break;
 
         const auto& obj = objects[i];
-        char vis = obj->visible() ? 'v' : 'h';
-        char sel = (i == selectedIdx) ? '>' : ' ';
-        std::string line = std::string(1, sel) + " " + obj->name() +
-                          " (" + std::string(1, vis) + ")";
+        const bool selected = (i == selectedIdx);
+        const bool shown = obj->visible();
 
-        // Truncate if too long
-        int maxLen = win.width() - 3;
-        if (static_cast<int>(line.size()) > maxLen)
-            line = line.substr(0, maxLen);
+        std::string prefix;
+        prefix += (selected ? '>' : ' ');
+        prefix += ' ';
+        prefix += (shown ? kGlyphShown : kGlyphHidden);
+        prefix += ' ';
 
-        int colorPair = (i == selectedIdx) ? kColorPanelSelected : kColorDefault;
-        win.printColored(y, 2, line, colorPair);
+        const int nameBudget = win.width() - 6;  // 2 indent + 4 prefix
+        std::string name = obj->name();
+        if (static_cast<int>(name.size()) > nameBudget && nameBudget > 0)
+            name = name.substr(0, nameBudget);
+
+        const int colorPair = selected ? kColorPanelSelected : kColorDefault;
+        if (!shown) win.setAttr(A_DIM);
+        win.printColored(y, 2, prefix + name, colorPair);
+        if (!shown) win.unsetAttr(A_DIM);
     }
 
     win.refresh();
