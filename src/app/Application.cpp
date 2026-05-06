@@ -1956,6 +1956,118 @@ void Application::onResize() {
     needsRedraw_ = true;
 }
 
+void Application::drawPixelOverlay(PixelCanvas& pc) {
+    if (!overlayVisible_) return;
+    auto& tab = tabMgr_.currentTab();
+    auto obj = tab.currentObject();
+    if (!obj || !obj->visible()) return;
+    auto& cam = tab.camera();
+    const auto& atoms = obj->atoms();
+    int subW = pc.subW();
+    int subH = pc.subH();
+    int scaleX = pc.scaleX();
+
+    // Residue labels — `resN###` rendered in white next to each labeled atom.
+    if (!labelAtoms_.empty()) {
+        std::set<int> labelSet(labelAtoms_.begin(), labelAtoms_.end());
+        for (int idx : labelSet) {
+            if (idx < 0 || idx >= static_cast<int>(atoms.size())) continue;
+            const auto& a = atoms[idx];
+            float fsx, fsy, depth;
+            cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);
+            int isx = static_cast<int>(fsx);
+            int isy = static_cast<int>(fsy);
+            if (isx < 0 || isx >= subW || isy < 0 || isy >= subH) continue;
+            std::string lbl = a.resName + std::to_string(a.resSeq);
+            pc.drawText(isx + scaleX, isy, depth, lbl, kColorWhite);
+        }
+    }
+
+    // Measurement dashed lines + midpoint distance/angle/dihedral labels.
+    if (!measurements_.empty()) {
+        auto drawDash = [&](float sx1, float sy1, float d1,
+                            float sx2, float sy2, float d2,
+                            int color, int thickness) {
+            int isx1 = static_cast<int>(sx1), isy1 = static_cast<int>(sy1);
+            int isx2 = static_cast<int>(sx2), isy2 = static_cast<int>(sy2);
+            int steps = std::max(std::abs(isx2 - isx1), std::abs(isy2 - isy1));
+            if (steps == 0) steps = 1;
+            int dashLen = std::max(4, thickness * 2);
+            for (int s = 0; s <= steps; s += dashLen * 2) {
+                for (int ds = 0; ds < dashLen && s + ds <= steps; ++ds) {
+                    float t = static_cast<float>(s + ds) / static_cast<float>(steps);
+                    int x = isx1 + static_cast<int>((isx2 - isx1) * t);
+                    int y = isy1 + static_cast<int>((isy2 - isy1) * t);
+                    float depth = d1 + (d2 - d1) * t;
+                    for (int dy = 0; dy < thickness; ++dy) {
+                        for (int dx = 0; dx < thickness; ++dx) {
+                            int px = x + dx - thickness / 2;
+                            int py = y + dy - thickness / 2;
+                            if (px >= 0 && px < subW && py >= 0 && py < subH)
+                                pc.drawDot(px, py, depth, color);
+                        }
+                    }
+                }
+            }
+        };
+
+        for (const auto& m : measurements_) {
+            if (m.atoms.size() < 2) continue;
+            for (size_t mi = 0; mi + 1 < m.atoms.size(); ++mi) {
+                int a1 = m.atoms[mi], a2 = m.atoms[mi + 1];
+                if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
+                if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
+                float sx1, sy1, d1, sx2, sy2, d2;
+                cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+                cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                drawDash(sx1, sy1, d1, sx2, sy2, d2, kColorYellow, 2);
+            }
+            int a1 = m.atoms[0], a2 = m.atoms[1];
+            if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
+            if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
+            float sx1, sy1, d1, sx2, sy2, d2;
+            cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+            cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+            int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
+            int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
+            pc.drawText(lx, ly, (d1 + d2) / 2.0f, m.label, kColorYellow);
+        }
+    }
+
+    // $sele highlight + pk1..pk4 pick registers as yellow rings.
+    {
+        const std::vector<int>* selIdx = nullptr;
+        auto selIt = namedSelections_.find(kSele);
+        if (selIt != namedSelections_.end() && !selIt->second.empty())
+            selIdx = &selIt->second.indices();
+
+        int pks[4]; int nPk = 0;
+        for (int p = 0; p < 4; ++p)
+            if (pickRegs_[p] >= 0) pks[nPk++] = pickRegs_[p];
+        std::sort(pks, pks + nPk);
+        nPk = static_cast<int>(std::unique(pks, pks + nPk) - pks);
+
+        if (selIdx || nPk > 0) {
+            int ringR = std::max(3, static_cast<int>(std::lround(
+                4.0f * cameraZoomScale(cam.zoom()))));
+            std::set<int> highlight;
+            if (selIdx) highlight.insert(selIdx->begin(), selIdx->end());
+            for (int i = 0; i < nPk; ++i) highlight.insert(pks[i]);
+            for (int idx : highlight) {
+                if (idx < 0 || idx >= static_cast<int>(atoms.size())) continue;
+                const auto& a = atoms[idx];
+                float fsx, fsy, depth;
+                cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);
+                int isx = static_cast<int>(fsx);
+                int isy = static_cast<int>(fsy);
+                if (isx < -ringR || isx >= subW + ringR ||
+                    isy < -ringR || isy >= subH + ringR) continue;
+                pc.drawCircle(isx, isy, depth - 0.01f, ringR, kColorYellow, false);
+            }
+        }
+    }
+}
+
 void Application::buildProjCache() {
     if (projCacheFrame_ == frameCounter_ && !projCache_.empty()) return;
     projCacheFrame_ = frameCounter_;
@@ -4479,6 +4591,11 @@ void Application::registerCommands() {
                 app.interfaceRepr_.render(*obj, tab.camera(), offscreen);
             }
         }
+
+        // Match the live render's overlay layer: residue labels,
+        // measurement dashed lines + values, $sele/pk highlight rings.
+        // Drawn after fog/dim so labels stay legible against dimmed atoms.
+        app.drawPixelOverlay(offscreen);
 
         // Restore projection for the active canvas
         auto* canvas = app.canvas();

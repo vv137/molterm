@@ -390,6 +390,13 @@ private:
     Selection parseSelection(const std::string& expr, const MolObject& mol);
     void buildProjCache();
 
+    // Draw labels, measurement dashed lines/labels, and sele/pk highlight
+    // rings into the given pixel canvas. Used by the live render path's
+    // pixel branch and by `:screenshot` so offscreen exports include the
+    // same overlays the user sees on screen. Camera projection must be
+    // prepared for `pc`'s pixel space before calling.
+    void drawPixelOverlay(class PixelCanvas& pc);
+
     // Focus Selection mode (Mol*-style click-to-focus).
     // `subjectIndices` are the atoms forming the focus subject (e.g. a
     // residue's atoms). enterFocus saves current camera + repr-visibility

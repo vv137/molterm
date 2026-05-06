@@ -952,7 +952,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Contact map** (hidden) — `:contactmap [cutoff]` Cα-Cα distance heatmap panel (available via command)
 - [x] **Geometric SS fallback** — φ/ψ Ramachandran classifier with 3+/4+ run smoothing, runs when a file has no HELIX/SHEET records (CASP TS, AlphaFold, raw coords)
 - [x] **DSSP-quality SS** — Kabsch & Sander H-bond model with n-turn helix (α / 3₁₀ / π) + bridge β-sheet detection + ladder propagation with bulge connection (`:dssp`, per-state cached for trajectories). Validated against `mkdssp 4.5` on 15 PDB structures: 13 match at 100% (incl. 4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ); 1AKE / 7TIM at 99% — remaining mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff. Optional 8-class output not yet exposed
-- [ ] **Pixel-mode label rendering** — built-in bitmap font for labels rendered directly into RGB framebuffer
+- [x] **Pixel-mode label rendering** — embedded TTF (SpaceMono-Regular) rasterized via stb_truetype into the RGB framebuffer; covers residue labels, measurement values, and $sele/pk highlight rings in both live pixel mode and offscreen `:screenshot`
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
 - [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
 - [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
