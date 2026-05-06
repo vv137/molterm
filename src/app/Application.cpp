@@ -1826,16 +1826,34 @@ void Application::renderViewport() {
         }
     }
 
-    // Draw selection highlight overlay for $sele atoms
+    // Draw selection highlight overlay for $sele atoms.
+    // Pixel: a yellow ring around each selected atom — readable across
+    // zoom levels (a single dot vanishes against any non-trivial repr,
+    // and a filled disc occludes the atom's own coloring).
+    // Cell renderers: a chunky '*' glyph, the largest single mark we
+    // can paint into a terminal cell.
     {
         auto selIt = namedSelections_.find("sele");
         if (selIt != namedSelections_.end() && !selIt->second.empty()) {
             buildProjCache();
             if (isPixel) {
+                // Same sqrt(zoom) clamp [0.75, 1.8] as the other overlays
+                // (Wireframe/Backbone/InterfaceRepr) so the ring scales
+                // with the rest of the scene.
+                float zoomScale = std::sqrt(std::max(
+                    tabMgr_.currentTab().camera().zoom(), 0.0f));
+                if (zoomScale < 0.75f) zoomScale = 0.75f;
+                if (zoomScale > 1.8f)  zoomScale = 1.8f;
+                const int ringR = std::max(3,
+                    static_cast<int>(std::lround(4.0f * zoomScale)));
                 for (const auto& pa : projCache_) {
                     if (selIt->second.has(pa.idx)) {
-                        if (pa.sx >= 0 && pa.sx < subW && pa.sy >= 0 && pa.sy < subH)
-                            canvas_->drawDot(pa.sx, pa.sy, pa.depth - 0.01f, kColorYellow);
+                        if (pa.sx >= -ringR && pa.sx < subW + ringR &&
+                            pa.sy >= -ringR && pa.sy < subH + ringR)
+                            canvas_->drawCircle(pa.sx, pa.sy,
+                                                pa.depth - 0.01f,
+                                                ringR, kColorYellow,
+                                                /*filled=*/false);
                     }
                 }
             } else {
