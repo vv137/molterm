@@ -125,9 +125,25 @@ Application::~Application() {
     Logger::instance().close();
 }
 
+// Resolve ~/.molterm/history.txt — same convention as Logger.cpp:29
+// (~/.molterm/molterm.log), so all per-user state lives in one place.
+static std::string resolveHistoryPath() {
+    const char* home = std::getenv("HOME");
+    if (!home) return {};
+    return std::string(home) + "/.molterm/history.txt";
+}
+
 void Application::init(int argc, char* argv[]) {
     Logger::instance().open();
     MLOG_INFO("MolTerm starting (argc=%d)", argc);
+
+    // Restore command history from previous sessions before any commands
+    // run (init-script or argv-driven loads will get pushed onto the same
+    // history vector so they replay cleanly into the persisted file too).
+    {
+        std::string hp = resolveHistoryPath();
+        if (!hp.empty()) cmdLine_.loadHistory(hp);
+    }
 
     ColorMapper::initColors();
 
@@ -327,6 +343,10 @@ int Application::run() {
 void Application::quit(bool force) {
     (void)force;
     SessionSaver::saveSession(*this);
+    {
+        std::string hp = resolveHistoryPath();
+        if (!hp.empty()) cmdLine_.saveHistory(hp);
+    }
     MLOG_INFO("Quitting MolTerm");
     running_ = false;
     quitRequested_ = true;
@@ -893,7 +913,33 @@ void Application::handleAction(Action action) {
 
                 std::vector<std::string> candidates;
 
-                if (cmdName == "load" || cmdName == "e" || cmdName == "export") {
+                // Selection-aware: if the immediately-preceding token is the
+                // selector keyword `obj`, suggest loaded object names —
+                // covers `:color red, obj <Tab>`, `:show cartoon obj <Tab>`,
+                // `:select foo = obj <Tab>`, etc., regardless of cmdName.
+                auto prevTokenLower = [](const std::string& s) -> std::string {
+                    int i = static_cast<int>(s.size()) - 1;
+                    while (i >= 0 && (s[i] == ' ' || s[i] == '\t')) --i;
+                    int end = i + 1;
+                    while (i >= 0 && s[i] != ' ' && s[i] != '\t' && s[i] != ',') --i;
+                    std::string tok = s.substr(i + 1, end - i - 1);
+                    std::transform(tok.begin(), tok.end(), tok.begin(), ::tolower);
+                    return tok;
+                };
+                std::string beforePartial =
+                    (input.rfind(' ') != std::string::npos)
+                        ? input.substr(0, input.rfind(' '))
+                        : "";
+                bool selectorObjContext =
+                    prevTokenLower(beforePartial) == "obj";
+
+                if (selectorObjContext) {
+                    for (const auto& n : store_.names()) {
+                        if (n.find(partial) == 0) candidates.push_back(n);
+                    }
+                } else if (cmdName == "load" || cmdName == "e" || cmdName == "export" ||
+                           cmdName == "loadalign" || cmdName == "run" ||
+                           cmdName == "screenshot") {
                     // Filename completion via std::filesystem
                     namespace fs = std::filesystem;
                     std::string dir = ".";
@@ -916,6 +962,7 @@ void Application::handleAction(Action action) {
                         }
                     } catch (...) {}
                 } else if (cmdName == "delete" || cmdName == "rename" ||
+                           cmdName == "object" ||
                            cmdName == "align" || cmdName == "mmalign" || cmdName == "super" ||
                            cmdName == "alignto" || cmdName == "mmalignto") {
                     // Object name completion

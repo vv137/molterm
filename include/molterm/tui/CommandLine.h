@@ -40,6 +40,12 @@ public:
     // Add to history after command execution
     void pushHistory(const std::string& cmd);
 
+    // Persistent history. Both fail silently — history is convenience,
+    // not data, and users routinely lose terminal-app history without
+    // anyone noticing.
+    void loadHistory(const std::string& path);
+    void saveHistory(const std::string& path) const;
+
     // Messages (shown when command line is inactive)
     void setMessage(const std::string& msg);
     void clearMessage();

@@ -2,6 +2,8 @@
 #include "molterm/render/ColorMapper.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 
 namespace molterm {
 
@@ -124,6 +126,42 @@ void CommandLine::pushHistory(const std::string& cmd) {
     if (history_.size() > 200) {
         history_.erase(history_.begin());
     }
+}
+
+void CommandLine::loadHistory(const std::string& path) {
+    std::ifstream in(path);
+    if (!in.good()) return;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        // Drop CR (cross-platform) and silently skip lines with control bytes —
+        // the history file is human-editable, but users shouldn't crash us
+        // by pasting a binary blob into it.
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        bool sane = true;
+        for (unsigned char c : line) {
+            if (c < 0x20 && c != '\t') { sane = false; break; }
+        }
+        if (!sane || line.empty()) continue;
+        history_.push_back(line);
+        if (history_.size() > 200) history_.erase(history_.begin());
+    }
+}
+
+void CommandLine::saveHistory(const std::string& path) const {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(fs::path(path).parent_path(), ec);
+    // Write to a sibling tempfile then rename — readers (the next session)
+    // either see the previous version or the new one, never a half-written
+    // file from a crash mid-write.
+    fs::path tmp = fs::path(path).string() + ".tmp";
+    {
+        std::ofstream out(tmp);
+        if (!out.good()) return;
+        for (const auto& cmd : history_) out << cmd << '\n';
+    }
+    fs::rename(tmp, path, ec);
 }
 
 void CommandLine::historyPrev() {
