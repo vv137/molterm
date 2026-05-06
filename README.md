@@ -16,9 +16,9 @@
 MolTerm renders 3D molecular structures directly in the terminal. It targets structural biologists and computational chemists who live in the terminal and want quick molecule inspection without launching a full GUI.
 
 <p align="center">
-  <img src="assets/cartoon_quality.png" alt="4HHB hemoglobin hetero-tetramer (α2β2) — Mol*-aligned cartoon with elliptical helix tubes, smoothstep SS transitions, and chain coloring" width="640">
+  <img src="assets/cartoon_quality.png" alt="4HHB hemoglobin hetero-tetramer (α2β2) — cartoon with elliptical helix tubes, smoothstep SS transitions, and chain coloring" width="640">
   <br>
-  <em>4HHB hemoglobin hetero-tetramer (α2β2) — Mol*-aligned cartoon: elliptical helix tubes, smoothstep SS transitions, chain coloring. Rendered offscreen in pixel mode at 300 DPI.</em>
+  <em>4HHB hemoglobin hetero-tetramer (α2β2) — cartoon: elliptical helix tubes, smoothstep SS transitions, chain coloring. Rendered offscreen in pixel mode at 300 DPI.</em>
 </p>
 
 ### Press <code>m</code> — terminal-only Braille becomes pixel-perfect
@@ -62,7 +62,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
 <p align="center">
   <img src="assets/dna_helix.png" alt="1bna B-DNA dodecamer with flat ribbon backbone and shaped base prisms" width="640">
   <br>
-  <em>1bna — flat-ribbon nucleic backbone (Mol* <code>nucleicProfile='square'</code>). Bases rendered as polygonal prisms following actual ring atom positions: hexagonal pyrimidines (C/T in blue/cyan), L-shaped fused bicyclic purines (A/G in red/green), each with a thin stem connecting to C1' of the sugar.</em>
+  <em>1bna — flat-ribbon nucleic backbone. Bases rendered as polygonal prisms following actual ring atom positions: hexagonal pyrimidines (C/T in blue/cyan), L-shaped fused bicyclic purines (A/G in red/green), each with a thin stem connecting to C1' of the sugar.</em>
 </p>
 
 ## Features
@@ -71,7 +71,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
 - **3-tier bond detection** — standard residue table (20 AA + 8 nucleotides, with bond order) → inter-residue peptide/phosphodiester bonds → distance fallback for ligands
 - **Multi-renderer pipeline** — Unicode Braille (8x resolution), half-block, ASCII, and native pixel protocols (Sixel, Kitty, iTerm2) with auto-detection
 - **VIM-like modal interface** — Normal, Command, Search modes with trie-based multi-key bindings (`sw`, `dd`, `gt`, etc.)
-- **Rich representations** — wireframe, ball-and-stick, spacefill, cartoon (Catmull-Rom spline + Mol*-aligned elliptical/tubular helix + tension-tuned spline + 3-point frame smoothing + smoothstep SS transitions + nucleic flat-ribbon backbone + hexagonal/bicyclic base ring prisms), flat ribbon, backbone trace — per-object or per-selection visibility
+- **Rich representations** — wireframe, ball-and-stick, spacefill, cartoon (Catmull-Rom spline + elliptical/tubular helix + tension-tuned spline + 3-point frame smoothing + smoothstep SS transitions + nucleic flat-ribbon backbone + hexagonal/bicyclic base ring prisms), flat ribbon, backbone trace — per-object or per-selection visibility
 - **Selection algebra** — recursive descent parser: `chain A and helix`, `resi 50-60 or name CA`, boolean `and/or/not` with parentheses
 - **Mouse selection** — `gs`/`gS`/`gc` pick modes for atom/residue/chain selection with `$sele` highlight overlay
 - **Multi-level inspect** — click to inspect at atom/residue/chain/object level (`I` cycles), pick registers pk1-pk4 for measurements
@@ -87,7 +87,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
 - **Multi-state animation** — NMR ensemble / trajectory state cycling with `[`/`]` keys
 - **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
 - **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode); dashed lines respect z-buffer so atoms in front occlude them
-- **Mol*-style focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
+- **Focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
 - **DSSP secondary structure** — full Kabsch-Sander pipeline: turns ▶ helices (3₁₀ / α / π) ▶ bridges (parallel / antiparallel) ▶ ladders with bulge propagation ▶ sheets, collapsed to molterm's 3-class SS. Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`. Validated against `mkdssp 4.5`: 13/15 PDB test structures match at 100% (4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ, 1MBN, 1HHO, 1LMB, 2HHB, 2NLS, 2GB1, 1L2Y, 1CRN); 1AKE/7TIM at 99% (residual mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff, where float precision flips the boundary)
 - **Full customization** — keybindings, color themes, and settings via TOML configs in `~/.molterm/`
 - **Structured logging** — session log to `~/.molterm/molterm.log`
@@ -385,7 +385,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `gs` | Enter atom select mode (click to toggle atoms in `$sele`) |
 | `gS` | Enter residue select mode (click to toggle residues) |
 | `gc` | Enter chain select mode (click to toggle chains) |
-| `gf` | Enter focus pick mode (click to focus, Mol*-style) |
+| `gf` | Enter focus pick mode (click to focus) |
 | `ESC` | Exit pick mode / exit focus session / cancel pending |
 | `[` / `]` | Prev/next state (NMR ensembles) |
 | `m` | Toggle braille/pixel renderer |
@@ -450,7 +450,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :screenshot [file.png] [W H [DPI]] " Save PNG; W H force off-screen size, optional DPI stamps pHYs metadata
 :interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
 :interface legend               " Overlay with interaction-color legend + per-type stats (focus-aware scope)
-:focus <selection>              " Mol*-style click-to-focus: zoom + isolate sidechains
+:focus <selection>              " Click-to-focus: zoom + isolate sidechains
                                 "   Whole interacting residues are auto-promoted into the neighborhood
 :focus off                      " Exit focus session, restore camera + reprs
 :dssp                           " Recompute DSSP secondary structure for current state (per-state cached)
@@ -461,14 +461,14 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set od|outline_darken <n>      " Outline darkness (default: 0.15, 0=black)
 :set ch|cartoon_helix <n>       " Cartoon helix half-width Å (default: 1.30)
 :set csh|cartoon_sheet <n>      " Cartoon sheet half-width Å (default: 1.50)
-:set cl|cartoon_loop <n>        " Cartoon loop radius Å (default: 0.20, Mol*-aligned)
+:set cl|cartoon_loop <n>        " Cartoon loop radius Å (default: 0.20)
 :set csd|cartoon_subdiv <n>     " Cartoon spline subdivisions (default: 14)
-:set csa|cartoon_aspect <n>     " Cartoon helix W:H aspect ratio (default: 5.0, Mol*-aligned)
+:set csa|cartoon_aspect <n>     " Cartoon helix W:H aspect ratio (default: 5.0)
 :set chr|cartoon_helix_radial <n> " Cartoon helix elliptical cross-section vertices (4-64, default: 16)
 :set cth|cartoon_tubular_helix on|off " Tubular helix mode (circular tube vs elliptical ribbon, default: off)
-:set ctr|cartoon_tubular_radius <n> " Tubular helix tube radius Å (default: 0.7, Mol*-aligned)
+:set ctr|cartoon_tubular_radius <n> " Tubular helix tube radius Å (default: 0.7)
 :set bs_units vdw|cell          " BallStick sizing: vdw (Å×factor) or cell (legacy sub-pixel)
-:set bsf|bs_factor <n>          " BallStick sizeFactor × vdW when bs_units=vdw (default: 0.15, Mol*-aligned)
+:set bsf|bs_factor <n>          " BallStick sizeFactor × vdW when bs_units=vdw (default: 0.15)
 :set sfs|spacefill_scale <n>    " Spacefill ×vdW (default: 1.0, full vdW = CPK)
 :set scope all|current           " Multi-object dispatch (default: all). With `all`, per-object
                                 "   commands (color/show/hide, hotkey repr toggles, zoom/center)
