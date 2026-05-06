@@ -2755,6 +2755,74 @@ void Application::registerCommands() {
     }, ":hide [repr|all] [selection]", "Hide representation, or all representations",
        {":hide all", ":hide cartoon", ":hide wire chain B"}, "Display");
 
+    // :enable / :disable — toggle whole-object visibility (PyMOL convention).
+    // Distinct from :show/:hide which operate on per-representation flags.
+    auto resolveObjectArg = [](Application& app, const std::string& a)
+        -> std::vector<std::shared_ptr<MolObject>> {
+        auto& tab = app.tabs().currentTab();
+        const auto& objs = tab.objects();
+        std::vector<std::shared_ptr<MolObject>> out;
+        if (a == "all" || a == "*") {
+            for (const auto& o : objs) if (o) out.push_back(o);
+            return out;
+        }
+        try {
+            size_t parsed = 0;
+            int n = std::stoi(a, &parsed);
+            if (parsed == a.size() && n >= 1 &&
+                n <= static_cast<int>(objs.size()) && objs[n - 1]) {
+                out.push_back(objs[n - 1]);
+                return out;
+            }
+        } catch (...) {}
+        for (const auto& o : objs) {
+            if (o && o->name() == a) { out.push_back(o); return out; }
+        }
+        return out;
+    };
+    auto setObjectVisibility = [resolveObjectArg](
+        Application& app, const ParsedCommand& cmd, bool vis) -> ExecResult {
+        std::vector<std::shared_ptr<MolObject>> targets;
+        if (cmd.args.empty()) {
+            auto cur = app.tabs().currentTab().currentObject();
+            if (!cur) return {false, "No current object"};
+            targets.push_back(cur);
+        } else {
+            targets = resolveObjectArg(app, cmd.args[0]);
+            if (targets.empty()) return {false, "No such object: " + cmd.args[0]};
+        }
+        int changed = 0;
+        for (auto& obj : targets) {
+            if (obj->visible() != vis) { obj->setVisible(vis); ++changed; }
+        }
+        using C = Layout::Component;
+        app.layout().markDirty(C::ObjectPanel);
+        app.layout().markDirty(C::Viewport);
+        app.layout().markDirty(C::StatusBar);
+        const char* verb = vis ? "Enabled" : "Disabled";
+        if (targets.size() == 1) {
+            return {true, std::string(verb) + " " + targets[0]->name()};
+        }
+        return {true, std::string(verb) + " " + std::to_string(changed) +
+                      "/" + std::to_string(targets.size()) + " objects"};
+    };
+
+    cmdRegistry_.registerCmd("enable",
+        [setObjectVisibility](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return setObjectVisibility(app, cmd, true);
+        },
+        ":enable [name|index|all]",
+        "Make object visible (default: current object)",
+        {":enable", ":enable 1ubq", ":enable 2", ":enable all"}, "Display");
+
+    cmdRegistry_.registerCmd("disable",
+        [setObjectVisibility](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return setObjectVisibility(app, cmd, false);
+        },
+        ":disable [name|index|all]",
+        "Hide object entirely (default: current object)",
+        {":disable", ":disable 1ubq", ":disable 2", ":disable all"}, "Display");
+
     // :color <scheme>
     cmdRegistry_.registerCmd("color", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty())
