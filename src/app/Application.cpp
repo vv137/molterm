@@ -1268,6 +1268,18 @@ void Application::handleAction(Action action) {
             break;
         }
 
+        case Action::ClearSelection: {
+            auto [hadSele, hadPk] = clearVisualSelection();
+            if (hadSele || hadPk) {
+                cmdLine_.setMessage("Cleared $sele (" + std::to_string(hadSele) +
+                                    " atoms) and pk1-pk4");
+            } else {
+                cmdLine_.setMessage("Selection already empty");
+            }
+            dirty({C::Viewport, C::StatusBar, C::CommandLine});
+            break;
+        }
+
         case Action::EnterFocusPickMode: {
             // Toggle: a second `gf` while already in Focus mode returns to
             // Inspect (matches the gs/gS/gc convention).
@@ -1988,6 +2000,22 @@ void Application::onResize() {
     if (canvas_) canvas_->invalidate();
     framesToSkip_ = 0;
     needsRedraw_ = true;
+}
+
+std::pair<std::size_t, int> Application::clearVisualSelection() {
+    std::size_t hadSele = 0;
+    auto it = namedSelections_.find(kSele);
+    if (it != namedSelections_.end()) {
+        hadSele = it->second.size();
+        it->second.clear();
+    }
+    int hadPk = 0;
+    for (int p = 0; p < 4; ++p) {
+        if (pickRegs_[p] >= 0) ++hadPk;
+        pickRegs_[p] = -1;
+    }
+    pickNext_ = 0;
+    return {hadSele, hadPk};
 }
 
 std::array<float, 9> Application::setupStereoEye(int eyePass,
@@ -4013,11 +4041,13 @@ void Application::registerCommands() {
     // :select <expression>
     cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) return {false, "Usage: :select <expr> | :select <name> = <expr> | :select clear"};
-        // :select clear — clear $sele
+        // :select clear — wipe $sele AND pk1-pk4 (matches the `gx` hotkey
+        // so the command and shortcut have identical semantics).
         if (cmd.args[0] == "clear") {
-            auto it = app.namedSelections().find(kSele);
-            if (it != app.namedSelections().end()) it->second.clear();
-            return {true, "Selection cleared"};
+            auto [hadSele, hadPk] = app.clearVisualSelection();
+            if (!hadSele && !hadPk) return {true, "Selection already empty"};
+            return {true, "Cleared $sele (" + std::to_string(hadSele) +
+                          " atoms) and pk1-pk4"};
         }
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
@@ -5199,6 +5229,7 @@ void Application::showKeybindingHelp() {
         " gt/gT      Next/prev tab      dd     Delete object",
         " o panel   i inspect   / search   n/N results",
         " gs/gS/gC  Atom/residue/chain pick   gf  Focus pick",
+        " gx        Clear $sele + pk1-pk4",
         "",
         "ANALYSIS & STATE",
         " I  toggle :interface overlay     F  focus picked residue",

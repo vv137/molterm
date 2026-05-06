@@ -120,6 +120,7 @@ void KeymapManager::bindNormalDefaults() {
     km.bind(Mode::Normal, {'g', 'S'},  Action::EnterSelectResidue, "Select residues (click)");
     km.bind(Mode::Normal, {'g', 'c'},  Action::EnterSelectChain,   "Select chains (click)");
     km.bind(Mode::Normal, {'g', 'f'},  Action::EnterFocusPickMode, "Focus on click (Mol*-style)");
+    km.bind(Mode::Normal, {'g', 'x'},  Action::ClearSelection,     "Clear $sele + pk1-pk4");
     km.bind(Mode::Normal, {27},        Action::ExitToNormal, "Exit focus / cancel pickmode");  // ESC
     km.bind(Mode::Normal, {3},         Action::ExitToNormal, "Exit (Ctrl+C)");
     // Sequence bar: `b` toggles visibility (always wrap / all sequences).

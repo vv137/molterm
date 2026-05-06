@@ -108,6 +108,7 @@ enum class Action {
     EnterSelectAtom,
     EnterSelectResidue,
     EnterSelectChain,
+    ClearSelection,
 
     // Macro recording (Phase 4)
     TogglePixelRenderer,
@@ -199,6 +200,7 @@ inline std::string actionName(Action a) {
         case Action::EnterSelectAtom: return "enter_select_atom";
         case Action::EnterSelectResidue: return "enter_select_residue";
         case Action::EnterSelectChain: return "enter_select_chain";
+        case Action::ClearSelection: return "clear_selection";
         case Action::TogglePixelRenderer: return "toggle_pixel";
         case Action::Screenshot:  return "screenshot";
         case Action::StartMacro:     return "start_macro";
@@ -294,6 +296,7 @@ inline Action actionFromName(const std::string& name) {
     if (name == "enter_select_atom") return Action::EnterSelectAtom;
     if (name == "enter_select_residue") return Action::EnterSelectResidue;
     if (name == "enter_select_chain") return Action::EnterSelectChain;
+    if (name == "clear_selection") return Action::ClearSelection;
     if (name == "toggle_pixel")     return Action::TogglePixelRenderer;
     if (name == "screenshot")       return Action::Screenshot;
     if (name == "start_macro")      return Action::StartMacro;

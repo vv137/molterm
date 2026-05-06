@@ -386,6 +386,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `gS` | Enter residue select mode (click to toggle residues) |
 | `gc` | Enter chain select mode (click to toggle chains) |
 | `gf` | Enter focus pick mode (click to focus) |
+| `gx` | Clear `$sele` and pk1-pk4 |
 | `ESC` | Exit pick mode / exit focus session / cancel pending |
 | `[` / `]` | Prev/next state (NMR ensembles) |
 | `m` | Toggle braille/pixel renderer |
@@ -420,7 +421,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   to flip scope for one call (e.g. `:color! red, chain A`).
 :select <expr>                  " Select atoms (see Selection Algebra below)
 :select <name> = <expr>         " Named selection (e.g. :select s1 = $sele)
-:select clear                   " Clear mouse selection ($sele)
+:select clear                   " Clear $sele and pk1-pk4 (also bound to gx)
 :count <expr>                   " Count matching atoms
 :center [selection]             " Center view
 :zoom [selection]               " Center + zoom to fit

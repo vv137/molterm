@@ -347,6 +347,13 @@ public:
     std::vector<int>& labelAtoms() { return labelAtoms_; }
     std::vector<Measurement>& measurements() { return measurements_; }
     bool overlayVisible_ = true;
+
+    // Wipe both transient selection overlays at once: `$sele` and the
+    // pk1-pk4 pick registers. Both render as yellow rings; clearing
+    // them gives the user a clean slate. Returns the pre-clear sizes
+    // (sele atoms, live pk registers) so callers can build a status
+    // message without re-querying. Backs `gx` and `:select clear`.
+    std::pair<std::size_t, int> clearVisualSelection();
 private:
 
     // Projected atom cache for picking (populated once per frame)
