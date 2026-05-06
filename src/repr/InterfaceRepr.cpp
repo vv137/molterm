@@ -6,7 +6,6 @@
 #include "molterm/render/Camera.h"
 #include "molterm/render/Canvas.h"
 #include "molterm/render/ColorMapper.h"
-#include "molterm/repr/Representation.h"  // for RenderContext::colorFor
 
 namespace molterm {
 
@@ -37,16 +36,15 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
     const int   ch    = canvas.subH();
     const int   margin = 8;
 
-    // Standard PyMOL/ChimeraX/Mol* convention for chain/SS-colored views:
-    // all carbons take the active scheme color, N/O/S/P pop out as CPK.
-    const ColorScheme scheme = mol.colorScheme();
-    const std::vector<float>* rbw =
-        (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
-    RenderContext ctx{mol, atoms, scheme, rbw, {}};
+    // Sidechain hairs use full CPK coloring (carbons = gray) regardless
+    // of the active scheme. With chain-colored cartoon, scheme-colored
+    // carbons make the sidechain bonds visually merge with the spline
+    // body so the dashed contact lines look like they're dangling in mid-
+    // air with no visible residue at their endpoints. CPK keeps the
+    // contact-mapping read: bonds out from the cartoon are clearly
+    // anchored to gray carbons + colored N/O/S/P tips.
     auto colorOf = [&](int i) {
-        if (atoms[i].element != "C")
-            return ColorMapper::colorForElement(atoms[i].element);
-        return ctx.colorFor(i);
+        return ColorMapper::colorForElement(atoms[i].element);
     };
 
     // Same gentle thickness scaling as Wireframe/Backbone — sqrt(zoom)
