@@ -35,6 +35,11 @@
 
 namespace molterm {
 
+// Name of the transient last-result selection populated by `:sele`,
+// click-picks, and similar one-off operations. Persisted in
+// namedSelections_ so the user can refer back to it as `$sele`.
+inline constexpr const char* kSele = "sele";
+
 enum class InspectLevel { Atom, Residue, Chain, Object };
 enum class PickMode { Inspect, SelectAtom, SelectResidue, SelectChain, Focus };
 

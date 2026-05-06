@@ -67,7 +67,7 @@ int forEachInScope(Application& app, ScopeMode mode, const std::string& expr,
             if (!obj) continue;
             auto sel = Selection::parse(expr, *obj, resolver);
             if (!sel.empty()) {
-                app.namedSelections()["sele"] = std::move(sel);
+                app.namedSelections()[kSele] = std::move(sel);
                 break;
             }
         }

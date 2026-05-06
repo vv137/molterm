@@ -577,7 +577,7 @@ void Application::handleMouse(int /*key*/) {
 
             if (pickMode_ == PickMode::SelectAtom) {
                 // Click toggles atom in $sele
-                auto& sele = namedSelections_["sele"];
+                auto& sele = namedSelections_[kSele];
                 if (sele.has(atomIdx)) {
                     sele.removeIndex(atomIdx);
                     cmdLine_.setMessage("sele(-1) = " + std::to_string(sele.size()) +
@@ -591,7 +591,7 @@ void Application::handleMouse(int /*key*/) {
                 }
             } else if (pickMode_ == PickMode::SelectResidue) {
                 // Click toggles entire residue in $sele
-                auto& sele = namedSelections_["sele"];
+                auto& sele = namedSelections_[kSele];
                 // Check if any atom of this residue is already selected
                 bool alreadySelected = false;
                 std::vector<int> resAtoms;
@@ -616,7 +616,7 @@ void Application::handleMouse(int /*key*/) {
                 }
             } else if (pickMode_ == PickMode::SelectChain) {
                 // Click toggles entire chain in $sele
-                auto& sele = namedSelections_["sele"];
+                auto& sele = namedSelections_[kSele];
                 bool alreadySelected = false;
                 std::vector<int> chainAtoms;
                 for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
@@ -874,7 +874,7 @@ void Application::handleAction(Action action) {
             if (pickMode_ != PickMode::Inspect) {
                 pickMode_ = PickMode::Inspect;
                 cmdLine_.setMessage("Inspect mode | sele=" +
-                    std::to_string(namedSelections_["sele"].size()));
+                    std::to_string(namedSelections_[kSele].size()));
             }
             dirty({C::CommandLine, C::StatusBar});
             break;
@@ -1147,7 +1147,7 @@ void Application::handleAction(Action action) {
                 desc = residueInfoString(atoms[target]);
             } else {
                 // Fall back to the active named selection.
-                auto it = namedSelections_.find("sele");
+                auto it = namedSelections_.find(kSele);
                 if (it == namedSelections_.end() || it->second.empty()) {
                     cmdLine_.setMessage(
                         "Focus: click an atom or run :select first");
@@ -1252,7 +1252,7 @@ void Application::handleAction(Action action) {
             if (pickMode_ != PickMode::Inspect)
                 cmdLine_.setMessage(std::string(pickModeName(pickMode_)) +
                     " mode (click to add/remove, ESC to exit) sele=" +
-                    std::to_string(namedSelections_["sele"].size()));
+                    std::to_string(namedSelections_[kSele].size()));
             else
                 cmdLine_.setMessage("Inspect mode");
             dirty({C::CommandLine, C::StatusBar});
@@ -1431,7 +1431,7 @@ void Application::renderFrame() {
         auto obj = tabMgr_.currentTab().currentObject();
         if (obj) {
             const Selection* sele = nullptr;
-            auto selIt = namedSelections_.find("sele");
+            auto selIt = namedSelections_.find(kSele);
             if (selIt != namedSelections_.end()) sele = &selIt->second;
             activeSeqBar().render(layout_.seqBar(), activeViewState().focusResi, activeViewState().focusChain, sele,
                           obj->colorScheme(), layout_.seqBarWrap());
@@ -1833,7 +1833,7 @@ void Application::renderViewport() {
     // Cell renderers: a chunky '*' glyph, the largest single mark we
     // can paint into a terminal cell.
     {
-        auto selIt = namedSelections_.find("sele");
+        auto selIt = namedSelections_.find(kSele);
         if (selIt != namedSelections_.end() && !selIt->second.empty()) {
             buildProjCache();
             if (isPixel) {
@@ -1902,7 +1902,7 @@ void Application::updateStatusBar() {
     }
 
     if (pickMode_ != PickMode::Inspect) {
-        auto selIt = namedSelections_.find("sele");
+        auto selIt = namedSelections_.find(kSele);
         int selCount = (selIt != namedSelections_.end()) ? static_cast<int>(selIt->second.size()) : 0;
         objInfo = std::string(pickModeName(pickMode_)) + " [" + std::to_string(selCount) + "] " + objInfo;
     }
@@ -2104,8 +2104,8 @@ Selection Application::parseSelection(const std::string& expr, const MolObject& 
         return (it != namedSelections_.end()) ? &it->second : nullptr;
     };
     auto sel = Selection::parse(expr, mol, resolver);
-    // Auto-save latest result as "sele"
-    namedSelections_["sele"] = sel;
+    // Auto-save latest result under kSele so `$sele` references it.
+    namedSelections_[kSele] = sel;
     return sel;
 }
 
@@ -3728,7 +3728,7 @@ void Application::registerCommands() {
         if (cmd.args.empty()) return {false, "Usage: :select <expr> | :select <name> = <expr> | :select clear"};
         // :select clear — clear $sele
         if (cmd.args[0] == "clear") {
-            auto it = app.namedSelections().find("sele");
+            auto it = app.namedSelections().find(kSele);
             if (it != app.namedSelections().end()) it->second.clear();
             return {true, "Selection cleared"};
         }
@@ -3794,7 +3794,7 @@ void Application::registerCommands() {
        {":count chain A", ":count resn HEM", ":count $sele"}, "Selection");
 
     // :sele — list named selections
-    cmdRegistry_.registerCmd("sele", [](Application& app, const ParsedCommand&) -> ExecResult {
+    cmdRegistry_.registerCmd(kSele, [](Application& app, const ParsedCommand&) -> ExecResult {
         auto& sels = app.namedSelections();
         if (sels.empty()) return {true, "No named selections"};
         std::string result = "Selections:";
