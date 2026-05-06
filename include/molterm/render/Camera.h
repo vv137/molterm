@@ -41,6 +41,12 @@ public:
     void projectCached(float wx, float wy, float wz,
                        float& sx, float& sy, float& depth) const;
 
+    // Override the projection X origin after prepareProjection(). Used by
+    // stereoscopic rendering to place each eye's view in its half of the
+    // canvas without changing the projection scale.
+    void setProjOffsetX(float ox) const { projOffX_ = ox; }
+    float projOffsetX() const { return projOffX_; }
+
     // Access internal state (for export)
     const std::array<float, 9>& rotation() const { return rot_; }
     float centerX() const { return centerX_; }

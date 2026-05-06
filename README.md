@@ -455,6 +455,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :focus off                      " Exit focus session, restore camera + reprs
 :dssp                           " Recompute DSSP secondary structure for current state (per-state cached)
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
+:set stereo off|walleye|crosseye " Side-by-side stereoscopic split. Walleye =
+                                 "   parallel viewing (left image to left eye);
+                                 "   crosseye = the user crosses their eyes.
+:set stereo_angle <deg>         " Parallax angle (total, eyes ±half), default 6
 :set fog <0-1>                  " Depth fog strength (default: 0.35)
 :set outline on|off             " Silhouette outlines
 :set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
@@ -954,7 +958,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **DSSP-quality SS** — Kabsch & Sander H-bond model with n-turn helix (α / 3₁₀ / π) + bridge β-sheet detection + ladder propagation with bulge connection (`:dssp`, per-state cached for trajectories). Validated against `mkdssp 4.5` on 15 PDB structures: 13 match at 100% (incl. 4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ); 1AKE / 7TIM at 99% — remaining mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff. Optional 8-class output not yet exposed
 - [x] **Pixel-mode label rendering** — embedded TTF (SpaceMono-Regular) rasterized via stb_truetype into the RGB framebuffer; covers residue labels, measurement values, and $sele/pk highlight rings in both live pixel mode and offscreen `:screenshot`
 - [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
-- [ ] **Stereoscopic view** — side-by-side 3D (split viewport, ±2° rotation offset)
+- [x] **Stereoscopic view** — `:set stereo walleye|crosseye` splits the viewport into two ±half-angle Y-rotated renders; `:set stereo_angle <deg>` (default 6°) controls parallax. Labels, measurements, focus-dim, and interface overlay all render per eye. `:export` emits the matching `stereo` / `set stereo_angle` lines so the same view loads in PyMOL
 - [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
 
 ### Phase 8: Export + Generation

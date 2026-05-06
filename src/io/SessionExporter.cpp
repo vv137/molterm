@@ -55,7 +55,9 @@ static std::string dirOfPath(const std::string& filepath) {
 }
 
 std::string SessionExporter::exportPML(const std::string& filepath, const Tab& tab,
-                                       int /*viewportW*/, int /*viewportH*/) {
+                                       int /*viewportW*/, int /*viewportH*/,
+                                       StereoMode stereoMode,
+                                       float stereoAngle) {
     std::ofstream out(filepath);
     if (!out.is_open())
         return "Cannot open file: " + filepath;
@@ -66,7 +68,13 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
     out << "# Tab: " << tab.name() << "\n\n";
 
     out << "set auto_zoom, off\n";
-    out << "viewport 1280, 960\n\n";
+    out << "viewport 1280, 960\n";
+    if (stereoMode != StereoMode::Off) {
+        out << "set stereo_angle, " << stereoAngle << "\n";
+        out << "stereo " << (stereoMode == StereoMode::Crosseye ? "crosseye" : "walleye") << "\n";
+        out << "stereo on\n";
+    }
+    out << "\n";
 
     // Write current coordinates as PDB files alongside the .pml,
     // so aligned/moved objects are faithfully exported.

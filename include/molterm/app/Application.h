@@ -21,6 +21,7 @@
 #include "molterm/render/Canvas.h"
 #include "molterm/render/ColorMapper.h"
 #include "molterm/render/ProtocolPicker.h"
+#include "molterm/render/StereoMode.h"
 #include "molterm/render/ZoomGate.h"
 #include "molterm/repr/InterfaceRepr.h"
 #include "molterm/repr/Representation.h"
@@ -176,6 +177,11 @@ public:
     bool autoCenter() const { return autoCenter_; }
     void setForcedProtocol(GraphicsProtocol p) { forcedProtocol_ = p; }
     void setAutoCenter(bool v) { autoCenter_ = v; }
+
+    StereoMode stereoMode() const { return stereoMode_; }
+    void setStereoMode(StereoMode m) { stereoMode_ = m; }
+    float stereoAngle() const { return stereoAngle_; }
+    void setStereoAngle(float deg) { stereoAngle_ = deg; }
 
     // Recompute the inter-chain interface overlay against the current
     // object using the last-used cutoff. Returns false (and clears the
@@ -362,6 +368,8 @@ private:
     float fogStrength_ = 0.35f;
     bool outlineEnabled_ = true;
     float outlineThreshold_ = 0.3f;
+    StereoMode stereoMode_ = StereoMode::Off;
+    float stereoAngle_ = 6.0f;  // total parallax in degrees (eyes ±half)
     float outlineDarken_ = 0.15f;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
@@ -396,6 +404,20 @@ private:
     // same overlays the user sees on screen. Camera projection must be
     // prepared for `pc`'s pixel space before calling.
     void drawPixelOverlay(class PixelCanvas& pc);
+
+    // Set up the camera + projection for one eye of a stereoscopic render.
+    // eyePass = 0 → left half, 1 → right half. With stereoMode_ == Off it
+    // just calls prepareProjection on the full canvas. Returns the camera
+    // rotation that was active on entry; pass it to restoreStereoCamera()
+    // after the eye's draw calls so the next eye (or non-stereo callers)
+    // see the original rotation.
+    std::array<float, 9> setupStereoEye(int eyePass,
+                                        int totalSubW, int subH,
+                                        float aspectYX);
+    void restoreStereoCamera(const std::array<float, 9>& savedRot);
+    int stereoEyeCount() const {
+        return stereoMode_ == StereoMode::Off ? 1 : 2;
+    }
 
     // Focus Selection mode (Mol*-style click-to-focus).
     // `subjectIndices` are the atoms forming the focus subject (e.g. a

@@ -1017,6 +1017,7 @@ void Application::handleAction(Action action) {
                                            "interface_classify", "iclass",
                                            "interface_sidechains", "isc",
                                            "interface_show", "is",
+                                           "stereo", "stereo_angle", "sa",
                                            "scope"}) {
                         std::string os(o);
                         if (os.find(partial) == 0) candidates.push_back(os);
@@ -1473,9 +1474,6 @@ void Application::renderViewport() {
 
     auto& tab = tabMgr_.currentTab();
 
-    // Prepare projection once per frame (not per-repr per-object)
-    tab.camera().prepareProjection(canvas_->subW(), canvas_->subH(), canvas_->aspectYX());
-
     // Wireframe paints heteroatoms by element while keeping carbons on
     // the scheme color whenever the user is looking at an interface
     // (overlay or focus) — N/O/S/P need to pop as donors/acceptors there.
@@ -1483,14 +1481,23 @@ void Application::renderViewport() {
         wf->setHeteroatomCarbonScheme(interfaceOverlay_ || focusSnapshot_.active);
     }
 
-    for (const auto& obj : tab.objects()) {
-        if (!obj->visible()) continue;
-        for (auto& [reprType, repr] : representations_) {
-            if (obj->reprVisible(reprType)) {
-                repr->render(*obj, tab.camera(), *canvas_);
+    // Render reprs once per stereoscopic eye. setupStereoEye() handles the
+    // single-pass, non-stereo case too (returns immediately after preparing
+    // a normal full-canvas projection).
+    std::array<float, 9> savedRot{};
+    for (int eye = 0; eye < stereoEyeCount(); ++eye) {
+        savedRot = setupStereoEye(eye, canvas_->subW(), canvas_->subH(),
+                                  canvas_->aspectYX());
+        for (const auto& obj : tab.objects()) {
+            if (!obj->visible()) continue;
+            for (auto& [reprType, repr] : representations_) {
+                if (obj->reprVisible(reprType)) {
+                    repr->render(*obj, tab.camera(), *canvas_);
+                }
             }
         }
     }
+    restoreStereoCamera(savedRot);
 
     // ── ZoomGate auto-engage / disengage ────────────────────────────────
     // When the user has set :set interface_zoom <T>, crossing the
@@ -1542,10 +1549,18 @@ void Application::renderViewport() {
     // unattenuated. Fires under either:
     //   • global :interface overlay (full structure)
     //   • focus mode (filtered to the focus neighborhood)
+    // Per-eye in stereo mode so each half gets its own vivid overlay.
     if ((interfaceOverlay_ || focusSnapshot_.active) &&
         interfaceRepr_.hasData()) {
         if (auto obj = tab.currentObject(); obj && obj->visible()) {
-            interfaceRepr_.render(*obj, tab.camera(), *canvas_);
+            std::array<float, 9> savedIfaceRot{};
+            for (int eye = 0; eye < stereoEyeCount(); ++eye) {
+                savedIfaceRot = setupStereoEye(eye, canvas_->subW(),
+                                                canvas_->subH(),
+                                                canvas_->aspectYX());
+                interfaceRepr_.render(*obj, tab.camera(), *canvas_);
+            }
+            restoreStereoCamera(savedIfaceRot);
         }
     }
 
@@ -1710,6 +1725,25 @@ void Application::renderViewport() {
 
   if (overlayVisible_) {
     bool isPixel = (rendererType_ == RendererType::Pixel);
+
+    // Stereo + pixel: drawPixelOverlay encapsulates labels, measurements,
+    // and sele/pk rings against whatever projection the camera currently
+    // has. Run it once per eye so each half gets its own overlay layer
+    // aligned with the eye's slightly-rotated geometry.
+    if (stereoMode_ != StereoMode::Off && isPixel) {
+        if (auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get())) {
+            std::array<float, 9> savedOverlayRot{};
+            for (int eye = 0; eye < stereoEyeCount(); ++eye) {
+                savedOverlayRot = setupStereoEye(eye, canvas_->subW(),
+                                                  canvas_->subH(),
+                                                  canvas_->aspectYX());
+                drawPixelOverlay(*pc);
+            }
+            restoreStereoCamera(savedOverlayRot);
+        }
+        win.refresh();
+        return;
+    }
 
     // Draw labels on viewport
     {
@@ -1954,6 +1988,35 @@ void Application::onResize() {
     if (canvas_) canvas_->invalidate();
     framesToSkip_ = 0;
     needsRedraw_ = true;
+}
+
+std::array<float, 9> Application::setupStereoEye(int eyePass,
+                                                  int totalSubW, int subH,
+                                                  float aspectYX) {
+    auto& cam = tabMgr_.currentTab().camera();
+    if (stereoMode_ == StereoMode::Off) {
+        cam.prepareProjection(totalSubW, subH, aspectYX);
+        return cam.rotation();
+    }
+    auto savedRot = cam.rotation();
+    float halfAngle = stereoAngle_ * 0.5f;
+    bool crosseye = (stereoMode_ == StereoMode::Crosseye);
+    // Walleye: left eye sees the LEFT image — left half gets the camera
+    // rotated to the left (negative Y) so the molecule shifts right toward
+    // the user's left visual field. Crosseye swaps the halves.
+    float angle;
+    if (eyePass == 0) angle = crosseye ? +halfAngle : -halfAngle;
+    else              angle = crosseye ? -halfAngle : +halfAngle;
+    cam.rotateY(angle);
+    int halfW = totalSubW / 2;
+    cam.prepareProjection(halfW, subH, aspectYX);
+    cam.setProjOffsetX((eyePass == 0) ? halfW * 0.5f : halfW * 1.5f);
+    return savedRot;
+}
+
+void Application::restoreStereoCamera(const std::array<float, 9>& savedRot) {
+    if (stereoMode_ == StereoMode::Off) return;
+    tabMgr_.currentTab().camera().setRotation(savedRot);
 }
 
 void Application::drawPixelOverlay(PixelCanvas& pc) {
@@ -3383,6 +3446,25 @@ void Application::registerCommands() {
             app.setOutlineDarken(std::stof(cmd.args[1]));
             return {true, "Outline darken set to " + cmd.args[1]};
         }
+        if (opt == "stereo") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set stereo off|walleye|crosseye|on"};
+            const auto& val = cmd.args[1];
+            if (val == "off" || val == "0")        app.setStereoMode(StereoMode::Off);
+            else if (val == "walleye" || val == "parallel" ||
+                     val == "on" || val == "sidebyside")
+                                                   app.setStereoMode(StereoMode::Walleye);
+            else if (val == "crosseye" || val == "cross")
+                                                   app.setStereoMode(StereoMode::Crosseye);
+            else return {false, "Usage: :set stereo off|walleye|crosseye"};
+            return {true, "Stereo: " + val};
+        }
+        if (opt == "stereo_angle" || opt == "sa") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set stereo_angle <degrees>"};
+            float deg = std::stof(cmd.args[1]);
+            deg = std::max(0.5f, std::min(20.0f, deg));
+            app.setStereoAngle(deg);
+            return {true, "Stereo angle: " + std::to_string(deg) + " deg"};
+        }
         if (opt == "focus_dim" || opt == "fd") {
             if (cmd.args.size() < 2) return {false, "Usage: :set focus_dim <0.0-1.0>"};
             float v = std::stof(cmd.args[1]);
@@ -3723,6 +3805,14 @@ void Application::registerCommands() {
             return {true, "outline_threshold = " + std::to_string(app.outlineThreshold())};
         if (opt == "outline_darken" || opt == "od")
             return {true, "outline_darken = " + std::to_string(app.outlineDarken())};
+        if (opt == "stereo") {
+            const char* m = "off";
+            if (app.stereoMode() == StereoMode::Walleye)  m = "walleye";
+            if (app.stereoMode() == StereoMode::Crosseye) m = "crosseye";
+            return {true, std::string("stereo = ") + m};
+        }
+        if (opt == "stereo_angle" || opt == "sa")
+            return {true, "stereo_angle = " + std::to_string(app.stereoAngle())};
         if (opt == "pan_speed" || opt == "ps")
             return {true, "pan_speed = " + std::to_string(app.tabs().currentTab().camera().panSpeed())};
         if (opt == "backbone_thickness" || opt == "bt") {
@@ -4462,7 +4552,8 @@ void Application::registerCommands() {
 
         int vpW = app.layout().viewportWidth();
         int vpH = app.layout().viewportHeight();
-        std::string result = SessionExporter::exportPML(path, tab, vpW, vpH);
+        std::string result = SessionExporter::exportPML(
+            path, tab, vpW, vpH, app.stereoMode(), app.stereoAngle());
         bool ok = result.find("Failed") == std::string::npos &&
                   result.find("Error") == std::string::npos;
         return {ok, result};
@@ -4555,21 +4646,28 @@ void Application::registerCommands() {
         offscreen.clear();
 
         auto& tab = app.tabs().currentTab();
-        // Re-prepare projection for the offscreen pixel coordinate space
-        tab.camera().prepareProjection(offscreen.subW(), offscreen.subH(), offscreen.aspectYX());
 
         if (auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe))) {
             wf->setHeteroatomCarbonScheme(app.interfaceOverlay_ || app.focusSnapshot_.active);
         }
 
-        for (const auto& obj : tab.objects()) {
-            if (!obj->visible()) continue;
-            for (auto& [reprType, repr] : app.representations()) {
-                if (obj->reprVisible(reprType)) {
-                    repr->render(*obj, tab.camera(), offscreen);
+        // Render reprs once per stereoscopic eye (single-pass when
+        // stereo is off). Mirrors renderViewport().
+        std::array<float, 9> savedScreenshotRot{};
+        for (int eye = 0; eye < app.stereoEyeCount(); ++eye) {
+            savedScreenshotRot = app.setupStereoEye(eye, offscreen.subW(),
+                                                     offscreen.subH(),
+                                                     offscreen.aspectYX());
+            for (const auto& obj : tab.objects()) {
+                if (!obj->visible()) continue;
+                for (auto& [reprType, repr] : app.representations()) {
+                    if (obj->reprVisible(reprType)) {
+                        repr->render(*obj, tab.camera(), offscreen);
+                    }
                 }
             }
         }
+        app.restoreStereoCamera(savedScreenshotRot);
 
         if (app.outlineEnabled()) offscreen.applyOutline(app.outlineThreshold(), app.outlineDarken());
         if (app.fogStrength() > 0.0f)
@@ -4588,14 +4686,26 @@ void Application::registerCommands() {
         if ((app.interfaceOverlay_ || app.focusSnapshot_.active) &&
             app.interfaceRepr_.hasData()) {
             if (auto obj = tab.currentObject()) {
-                app.interfaceRepr_.render(*obj, tab.camera(), offscreen);
+                for (int eye = 0; eye < app.stereoEyeCount(); ++eye) {
+                    savedScreenshotRot = app.setupStereoEye(
+                        eye, offscreen.subW(), offscreen.subH(),
+                        offscreen.aspectYX());
+                    app.interfaceRepr_.render(*obj, tab.camera(), offscreen);
+                }
+                app.restoreStereoCamera(savedScreenshotRot);
             }
         }
 
         // Match the live render's overlay layer: residue labels,
         // measurement dashed lines + values, $sele/pk highlight rings.
         // Drawn after fog/dim so labels stay legible against dimmed atoms.
-        app.drawPixelOverlay(offscreen);
+        for (int eye = 0; eye < app.stereoEyeCount(); ++eye) {
+            savedScreenshotRot = app.setupStereoEye(
+                eye, offscreen.subW(), offscreen.subH(),
+                offscreen.aspectYX());
+            app.drawPixelOverlay(offscreen);
+        }
+        app.restoreStereoCamera(savedScreenshotRot);
 
         // Restore projection for the active canvas
         auto* canvas = app.canvas();

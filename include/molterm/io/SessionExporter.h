@@ -3,15 +3,20 @@
 #include <string>
 
 #include "molterm/app/Tab.h"
+#include "molterm/render/StereoMode.h"
 
 namespace molterm {
 
 class SessionExporter {
 public:
     // Export a .pml (PyMOL script) that reconstructs the current tab.
-    // viewportW/H are terminal cell dimensions, needed to convert pan to Angstroms.
+    // viewportW/H are terminal cell dimensions, needed to convert pan to
+    // Angstroms. When stereoMode != Off, the script also drops PyMOL into
+    // the matching `stereo` mode with `set stereo_angle, <degrees>`.
     static std::string exportPML(const std::string& filepath, const Tab& tab,
-                                 int viewportW, int viewportH);
+                                 int viewportW, int viewportH,
+                                 StereoMode stereoMode = StereoMode::Off,
+                                 float stereoAngle = 6.0f);
 
 private:
     // PyMOL representation name from ReprType
