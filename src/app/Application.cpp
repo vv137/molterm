@@ -4014,18 +4014,23 @@ void Application::registerCommands() {
     // :rename
     cmdRegistry_.registerCmd("rename", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) return {false, "Usage: :rename <new_name> or :rename <old> <new>"};
+        // Renaming to the current name is a no-op rather than an error, so
+        // scripts that defensively assert a canonical name after :load (which
+        // auto-names from the file stem) stay one-liners.
         if (cmd.args.size() < 2) {
             auto obj = app.tabs().currentTab().currentObject();
             if (!obj) return {false, "No object selected"};
             std::string oldName = obj->name();
+            if (oldName == cmd.args[0]) return {true, "Already named " + oldName};
             if (app.store().rename(oldName, cmd.args[0]))
                 return {true, "Renamed " + oldName + " -> " + cmd.args[0]};
             return {false, "Failed to rename"};
         }
+        if (cmd.args[0] == cmd.args[1]) return {true, "Already named " + cmd.args[0]};
         if (app.store().rename(cmd.args[0], cmd.args[1]))
             return {true, "Renamed " + cmd.args[0] + " -> " + cmd.args[1]};
         return {false, "Failed to rename"};
-    }, ":rename [old] <new>", "Rename an object (single arg renames the current object)",
+    }, ":rename [old] <new>", "Rename an object (single arg renames the current object; no-op if already that name)",
        {":rename ref", ":rename 1bna ref"}, "Window");
 
     // :info
