@@ -149,6 +149,21 @@ public:
     void setVerbose(bool v) { verbose_ = v; }
     // Helps diagnose empty-canvas screenshots from headless scripts.
     void logViewState(const struct ParsedCommand& cmd) const;
+    void logSelectionInfo(const std::string& name,
+                          const std::string& expr,
+                          const class Selection& sel,
+                          const class MolObject& obj) const;
+    void logAlignPair(const std::string& mobile,
+                      const std::string& target,
+                      bool complex,
+                      const struct AlignResult& r) const;
+    void logRenderStats(int pixW, int pixH, int dpi,
+                        int visibleAtoms,
+                        double elapsedSec) const;
+    // Atoms that would actually be rasterized: sum over visible objects of
+    // atoms in any visible repr (approximated by atom count when no
+    // per-atom mask, otherwise atoms that pass the mask).
+    int countVisibleAtoms() const;
 
     // Renderer switching
     void setRenderer(RendererType type);
