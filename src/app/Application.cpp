@@ -352,6 +352,71 @@ splitAtEqToken(const std::vector<std::string>& args) {
     }
     return {args, ""};
 }
+
+// Per-chain CA-residue 1-letter sequences. Tracks insCode in addition to
+// resSeq so antibodies/TCRs (CDR insertion codes 100A/100B etc.) don't
+// collapse into a single residue.
+std::map<std::string, std::string> chainSequences(const MolObject& obj) {
+    std::map<std::string, std::string> out;
+    std::string prevChain;
+    int prevResSeq = std::numeric_limits<int>::min();
+    char prevIns = '\0';
+    for (const auto& a : obj.atoms()) {
+        if (a.name != "CA") continue;
+        if (a.chainId != prevChain || a.resSeq != prevResSeq || a.insCode != prevIns) {
+            out[a.chainId] += SeqBar::toOneLetter(a.resName);
+            prevChain = a.chainId;
+            prevResSeq = a.resSeq;
+            prevIns = a.insCode;
+        }
+    }
+    return out;
+}
+
+// LCS-length identity in [0, 1]. Cheap enough for chain-sized sequences
+// (a few hundred residues each); the all-pairs scan in autoPairChains
+// is the only caller and runs once per `:align ... automap` invocation.
+float seqIdentity(const std::string& a, const std::string& b) {
+    if (a.empty() || b.empty()) return 0.0f;
+    std::vector<int> prev(b.size() + 1, 0), cur(b.size() + 1, 0);
+    for (size_t i = 0; i < a.size(); ++i) {
+        for (size_t j = 0; j < b.size(); ++j) {
+            cur[j + 1] = (a[i] == b[j])
+                ? prev[j] + 1
+                : std::max(cur[j], prev[j + 1]);
+        }
+        std::swap(prev, cur);
+    }
+    return static_cast<float>(prev.back()) /
+           static_cast<float>(std::max(a.size(), b.size()));
+}
+
+// Greedy chain pairing by descending sequence-identity score. Pairs below
+// `minIdentity` are dropped so a stray chain doesn't get glued to an
+// unrelated one (the user's #13 example: TCR-pMHC where chain letters
+// were reordered between deposits).
+std::vector<std::pair<std::string, std::string>>
+autoPairChains(const MolObject& mobile, const MolObject& target, float minIdentity) {
+    auto mSeqs = chainSequences(mobile);
+    auto tSeqs = chainSequences(target);
+    struct Score { float s; std::string mc, tc; };
+    std::vector<Score> scores;
+    for (const auto& [mc, ms] : mSeqs)
+        for (const auto& [tc, ts] : tSeqs)
+            scores.push_back({seqIdentity(ms, ts), mc, tc});
+    std::sort(scores.begin(), scores.end(),
+              [](const Score& a, const Score& b) { return a.s > b.s; });
+    std::set<std::string> usedM, usedT;
+    std::vector<std::pair<std::string, std::string>> pairs;
+    for (const auto& sc : scores) {
+        if (sc.s < minIdentity) break;
+        if (usedM.count(sc.mc) || usedT.count(sc.tc)) continue;
+        pairs.push_back({sc.mc, sc.tc});
+        usedM.insert(sc.mc);
+        usedT.insert(sc.tc);
+    }
+    return pairs;
+}
 }  // namespace
 
 void Application::logViewState(const ParsedCommand& cmd) const {
@@ -4349,19 +4414,21 @@ void Application::registerCommands() {
     // MM. :super = TM-only alias.
     enum class AlignMode { Auto, ForceTM, ForceMM };
 
-    // Pop a trailing tm/mm token from a token vector (returns the mode
-    // and removes the token in place). The check is exact-match only —
-    // selections containing "tm" inside an expression aren't affected
-    // because we only pop the LAST token.
-    auto popModeToken = [](std::vector<std::string>& toks) -> AlignMode {
+    // Pop a trailing tm/mm/automap token from a token vector. Returns the
+    // mode + an automap flag, removing the matched tokens in place. Order
+    // is irrelevant ("tm automap" and "automap tm" both work).
+    auto popModeToken = [](std::vector<std::string>& toks)
+        -> std::pair<AlignMode, bool> {
         AlignMode m = AlignMode::Auto;
+        bool automap = false;
         while (!toks.empty()) {
             const std::string& last = toks.back();
-            if (last == "tm")      { m = AlignMode::ForceTM; toks.pop_back(); }
-            else if (last == "mm") { m = AlignMode::ForceMM; toks.pop_back(); }
+            if      (last == "tm")      { m = AlignMode::ForceTM; toks.pop_back(); }
+            else if (last == "mm")      { m = AlignMode::ForceMM; toks.pop_back(); }
+            else if (last == "automap") { automap = true;          toks.pop_back(); }
             else break;
         }
-        return m;
+        return {m, automap};
     };
 
     auto chainCount = [](const MolObject& obj, const std::vector<int>& atoms) -> int {
@@ -4387,9 +4454,35 @@ void Application::registerCommands() {
                                   std::shared_ptr<MolObject> target,
                                   const std::string& mobileLabel,
                                   const std::string& targetLabel,
-                                  const std::string& mobileExpr,
-                                  const std::string& targetExpr,
-                                  AlignMode mode) -> ExecResult {
+                                  std::string mobileExpr,
+                                  std::string targetExpr,
+                                  AlignMode mode,
+                                  bool automap) -> ExecResult {
+        std::string mapMsg;
+        if (automap) {
+            if (!mobileExpr.empty() || !targetExpr.empty()) {
+                return {false,
+                    "automap takes no selections: drop the chain/sel args"};
+            }
+            auto pairs = autoPairChains(*mobile, *target, /*minIdentity=*/0.3f);
+            if (pairs.empty())
+                return {false, "automap: no chain pair scored above 0.3 identity"};
+            std::string mChains, tChains;
+            mapMsg = "  pairs:";
+            for (const auto& [mc, tc] : pairs) {
+                if (!mChains.empty()) mChains += '+';
+                if (!tChains.empty()) tChains += '+';
+                mChains += mc;
+                tChains += tc;
+                mapMsg += " " + mc + "↔" + tc;
+            }
+            mobileExpr = "chain " + mChains;
+            targetExpr = "chain " + tChains;
+            // Force MM if any pair lands on multi-chain side; otherwise TM.
+            if (mode == AlignMode::Auto)
+                mode = pairs.size() > 1 ? AlignMode::ForceMM : AlignMode::ForceTM;
+        }
+
         std::vector<int> mobileAtoms, targetAtoms;
         if (!mobileExpr.empty()) {
             auto mSel = app.parseSelection(mobileExpr, *mobile);
@@ -4420,8 +4513,10 @@ void Application::registerCommands() {
 
         Aligner::applyTransform(*mobile, result);
         std::string prefix = complex ? "MM-" : "TM-";
-        return {true, prefix + "aligned " + mobileLabel + " → " + targetLabel +
-                      " | " + result.message};
+        std::string out = prefix + "aligned " + mobileLabel + " → " +
+                          targetLabel + " | " + result.message;
+        if (!mapMsg.empty()) out += "\n" + mapMsg;
+        return {true, out};
     };
 
     // Parse :align-style args into (mobileName, mobileExpr, targetName,
@@ -4446,12 +4541,12 @@ void Application::registerCommands() {
         const ParsedCommand& cmd, bool mobileFromCurrent,
         std::string& mobileName, std::string& mobileExpr,
         std::string& targetName, std::string& targetExpr,
-        AlignMode& mode, std::string& err) -> bool {
+        AlignMode& mode, bool& automap, std::string& err) -> bool {
 
         std::vector<std::string> args = cmd.args;
         const char* usage = mobileFromCurrent
-            ? "Usage: :alignto <target> [sel] | <mobile_sel> to <target> [target_sel]"
-            : "Usage: :align <obj> [sel] to <obj> [sel] [tm|mm]";
+            ? "Usage: :alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm] [automap]"
+            : "Usage: :align <obj> [sel] to <obj> [sel] [tm|mm] [automap]";
 
         int toIdx = -1;
         for (int i = 0; i < static_cast<int>(args.size()); ++i) {
@@ -4461,7 +4556,7 @@ void Application::registerCommands() {
         if (toIdx >= 0) {
             std::vector<std::string> left(args.begin(), args.begin() + toIdx);
             std::vector<std::string> right(args.begin() + toIdx + 1, args.end());
-            mode = popModeToken(right);
+            std::tie(mode, automap) = popModeToken(right);
             if (right.empty()) { err = "Missing target after 'to'"; return false; }
             targetName = right[0];
             targetExpr = joinTokens(right, 1);
@@ -4476,14 +4571,14 @@ void Application::registerCommands() {
         }
 
         // No 'to' separator.
-        mode = popModeToken(args);
+        std::tie(mode, automap) = popModeToken(args);
         if (mobileFromCurrent) {
             if (args.empty()) { err = usage; return false; }
             targetName = args[0];
             targetExpr = joinTokens(args, 1);
             return true;
         }
-        // Legacy two-name form: :align <mob> <ref> [shared_sel] [tm|mm]
+        // Legacy two-name form: :align <mob> <ref> [shared_sel] [tm|mm] [automap]
         if (args.size() < 2) { err = usage; return false; }
         mobileName = args[0];
         targetName = args[1];
@@ -4498,16 +4593,17 @@ void Application::registerCommands() {
         -> ExecResult {
         std::string mobileName, mobileExpr, targetName, targetExpr, err;
         AlignMode mode = AlignMode::Auto;
+        bool automap = false;
         if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/false,
                             mobileName, mobileExpr, targetName, targetExpr,
-                            mode, err)) return {false, err};
+                            mode, automap, err)) return {false, err};
         if (forced != AlignMode::Auto) mode = forced;
         auto mobile = app.store().get(mobileName);
         auto target = app.store().get(targetName);
         if (!mobile) return {false, "Object not found: " + mobileName};
         if (!target) return {false, "Object not found: " + targetName};
         return runAlign(app, mobile, target, mobileName, targetName,
-                        mobileExpr, targetExpr, mode);
+                        mobileExpr, targetExpr, mode, automap);
     };
 
     // :alignto always broadcasts: every non-target object in the current
@@ -4521,9 +4617,10 @@ void Application::registerCommands() {
         -> ExecResult {
         std::string mobileName, mobileExpr, targetName, targetExpr, err;
         AlignMode mode = AlignMode::Auto;
+        bool automap = false;
         if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/true,
                             mobileName, mobileExpr, targetName, targetExpr,
-                            mode, err)) return {false, err};
+                            mode, automap, err)) return {false, err};
         if (forced != AlignMode::Auto) mode = forced;
         auto target = app.store().get(targetName);
         if (!target) return {false, "Object not found: " + targetName};
@@ -4540,7 +4637,7 @@ void Application::registerCommands() {
         std::string combined;
         for (auto& m : mobiles) {
             auto r = runAlign(app, m, target, m->name(), targetName,
-                              mobileExpr, targetExpr, mode);
+                              mobileExpr, targetExpr, mode, automap);
             if (r.ok) ++okCount;
             if (!combined.empty()) combined += "; ";
             combined += r.msg;
@@ -4552,23 +4649,26 @@ void Application::registerCommands() {
         [doAlignByName](Application& app, const ParsedCommand& cmd) -> ExecResult {
             return doAlignByName(app, cmd, AlignMode::Auto);
         },
-        ":align <obj> [sel] to <obj> [sel] [tm|mm]",
-        "Superpose structures (auto-pick TM vs MM by chain count; trailing tm/mm forces)",
+        ":align <obj> [sel] to <obj> [sel] [tm|mm] [automap]",
+        "Superpose structures (auto-pick TM vs MM by chain count; trailing tm/mm forces; "
+        "automap = sequence-based chain pairing for reordered deposits)",
         {":align mob to ref",
          ":align mob chain A to ref chain A",
-         ":align complex1 to complex2 mm"},
+         ":align complex1 to complex2 mm",
+         ":align top1 to ref_8yiv automap"},
         "Analysis");
 
     cmdRegistry_.registerCmd("alignto",
         [doAlignTo](Application& app, const ParsedCommand& cmd) -> ExecResult {
             return doAlignTo(app, cmd, AlignMode::Auto);
         },
-        ":alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm]",
-        "Superpose every other object in the tab onto target (auto TM/MM; trailing tm/mm forces)",
+        ":alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm] [automap]",
+        "Superpose every other object in the tab onto target (auto TM/MM; trailing tm/mm forces; automap pairs chains by sequence)",
         {":alignto ref",
          ":alignto chain A to ref chain A",
          ":alignto chain A+B to model chain A+B",
-         ":alignto ref mm"},
+         ":alignto ref mm",
+         ":alignto ref_8yiv automap"},
         "Analysis");
 
     // :super — TM-only alias for :align (kept for back-compat with existing
@@ -4608,9 +4708,9 @@ void Application::registerCommands() {
                 return {false, "Usage: :loadalign <pattern> [sel] [tm|mm]"};
 
             constexpr const char* kUsage =
-                "Usage: :loadalign <pattern> [sel] [tm|mm]";
+                "Usage: :loadalign <pattern> [sel] [tm|mm] [automap]";
             std::vector<std::string> args = cmd.args;
-            AlignMode mode = popModeToken(args);
+            auto [mode, automap] = popModeToken(args);
             if (args.empty()) return {false, kUsage};
 
             // Selection grammar has no terminator, so without invoking
@@ -4666,7 +4766,7 @@ void Application::registerCommands() {
             for (size_t i = 1; i < loaded.size(); ++i) {
                 auto r = runAlign(app, loaded[i], loaded.front(),
                                   loaded[i]->name(), targetName,
-                                  sharedExpr, sharedExpr, mode);
+                                  sharedExpr, sharedExpr, mode, automap);
                 if (r.ok) { ++aligned; detail += "\n  " + r.msg; }
                 else { ++alignFailed; detail += "\n  " + loaded[i]->name() + ": " + r.msg; }
             }

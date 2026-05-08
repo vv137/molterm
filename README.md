@@ -221,6 +221,22 @@ patterns, before any optional `tm`/`mm` mode.
                                             " (intra-object selection alignment)
 ```
 
+**`automap`** trails `:align` / `:alignto` / `:loadalign` to discover the
+mobile↔target chain pairing automatically by sequence identity (LCS, ≥0.3
+floor). Use it when the same complex was deposited with different chain
+labels (e.g. TCR-pMHC where one structure is A=HLA, B=β2m, C=peptide,
+D=TCRα, E=TCRβ and another reorders to C=HLA, D=β2m, E=peptide, A=TCRα,
+B=TCRβ). The discovered pairs are printed in the result message.
+
+```text
+:align top1_bt2 to ref_8yiv automap         " auto-discover chain pairs
+:alignto ref_8yiv automap                   " same, broadcast over the tab
+```
+
+`automap` rejects any caller-supplied selection (the discovered pairing
+becomes the selection); strip the `chain X` / `chain X+Y` from the call
+and let it figure that out.
+
 ### Multi-object workflow
 
 After `:loadalign` (or any multi-load), per-object commands (`:color`,
