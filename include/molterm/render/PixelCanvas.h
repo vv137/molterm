@@ -56,8 +56,12 @@ public:
     void setActiveAtomIndex(int idx) override;
 
     // Render a text string at sub-pixel coordinates with depth testing.
+    // pixelHeight > 0 overrides the default cell-derived font size — used
+    // by overlay knobs (`:set label_font_size`) so labels stay legible at
+    // hi-DPI screenshot sizes where cell pixels would otherwise dominate.
     void drawText(int sx, int sy, float depth,
-                  const std::string& text, int colorPair);
+                  const std::string& text, int colorPair,
+                  int pixelHeight = 0);
 
     // Access framebuffer (for post-processing like depth fog)
     uint8_t* rgbData() { return rgb_.data(); }

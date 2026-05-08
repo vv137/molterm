@@ -581,6 +581,20 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   Tokens: {resname} {resseq}/{seqid} {chain} {name} {element} {restype}
                                 "   Example: :set lf "P{resseq}"   then  :label name CA and resi 1-10
                                 "   gives P1..P10. Per-atom :label sel = "text" overrides the template.
+:set lfs|label_font_size <px>   " :label font size in pixels (default: 14, range: 8..72).
+                                "   Independent of cell size — keeps labels legible on
+                                "   2400x1800 / 4800-DPI screenshots where the cell-derived
+                                "   default would shrink them to ~6 pt.
+:set anf|annotation_font_size <px>
+                                " :measure / :angle / :dihedral caption font size in
+                                "   pixels (default: 14, range: 8..72).
+:set anlw|annotation_linewidth <px>
+                                " :measure dashed-line thickness (default: 2 sub-pixels,
+                                "   range: 1..8).
+:set scale|overlay_scale <x>     " Global multiplier on label_font_size, annotation_font_size,
+                                "   annotation_linewidth, and the $sele/pk yellow rings
+                                "   (default: 1.0, range: 0.5..4.0). Quick toggle between
+                                "   rough (1.0) and hi-DPI (2.0) renders.
 :get <option>                    " Query current value of any :set option (for scripting)
 :info                           " Show atom/bond count
 :q                              " Quit
