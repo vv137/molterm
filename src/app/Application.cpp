@@ -353,6 +353,15 @@ splitAtEqToken(const std::vector<std::string>& args) {
     return {args, ""};
 }
 
+const char* bgModeName(BgMode m) {
+    switch (m) {
+        case BgMode::Transparent: return "transparent";
+        case BgMode::White:       return "white";
+        case BgMode::Black:       return "black";
+    }
+    return "transparent";
+}
+
 }  // namespace
 
 void Application::logViewState(const ParsedCommand& cmd) const {
@@ -367,6 +376,87 @@ void Application::logViewState(const ParsedCommand& cmd) const {
         cmd.name.c_str(),
         cam.centerX(), cam.centerY(), cam.centerZ(),
         cam.zoom(), cam.panXOffset(), cam.panYOffset(), total);
+}
+
+void Application::logSelectionInfo(const std::string& name,
+                                   const std::string& expr,
+                                   const Selection& sel,
+                                   const MolObject& obj) const {
+    if (!verbose_) return;
+    const auto& atoms = obj.atoms();
+    std::set<std::string> chains;
+    std::set<std::tuple<std::string, int, char>> residues;
+    for (int idx : sel.indices()) {
+        if (idx < 0 || idx >= static_cast<int>(atoms.size())) continue;
+        const auto& a = atoms[idx];
+        chains.insert(a.chainId);
+        residues.emplace(a.chainId, a.resSeq, a.insCode);
+    }
+    std::string chainList;
+    for (const auto& c : chains) {
+        if (!chainList.empty()) chainList += ',';
+        chainList += c.empty() ? "_" : c;
+    }
+    std::fprintf(stderr,
+        "[sel] %s = %s  ->  %zu atoms / %zu residues",
+        name.c_str(), expr.c_str(), sel.size(), residues.size());
+    if (chains.size() > 1)
+        std::fprintf(stderr, " across chains %s", chainList.c_str());
+    std::fputc('\n', stderr);
+}
+
+void Application::logAlignPair(const std::string& mobile,
+                               const std::string& target,
+                               bool complex,
+                               const AlignResult& r) const {
+    if (!verbose_) return;
+    // r.message is built by Aligner::parseOutput on success ("TM1=… TM2=…
+    // RMSD=… Aligned=…") and carries the failure cause otherwise. Reuse
+    // it so the wire format stays in lockstep with the user-facing
+    // result string.
+    std::fprintf(stderr, "[align] %s -> %s (%s) %s%s\n",
+                 mobile.c_str(), target.c_str(),
+                 complex ? "MM" : "TM",
+                 r.success ? "" : "failed: ",
+                 r.message.c_str());
+}
+
+int Application::countVisibleAtoms() const {
+    int total = 0;
+    const auto& tab = tabMgr_.currentTab();
+    for (const auto& obj : tab.objects()) {
+        if (!obj || !obj->visible()) continue;
+        // If no repr is enabled at all, no atoms render — treat as 0 for
+        // this object. Otherwise count atoms that would draw under any
+        // active repr's mask (or all atoms when no per-atom mask is set).
+        bool anyRepr = false;
+        for (const auto& [type, _] : representations_) {
+            if (obj->reprVisible(type)) { anyRepr = true; break; }
+        }
+        if (!anyRepr) continue;
+        if (!obj->hasPerAtomRepr()) {
+            total += static_cast<int>(obj->atoms().size());
+            continue;
+        }
+        for (int i = 0; i < static_cast<int>(obj->atoms().size()); ++i) {
+            for (const auto& [type, _] : representations_) {
+                if (obj->reprVisibleForAtom(type, i)) { ++total; break; }
+            }
+        }
+    }
+    return total;
+}
+
+void Application::logRenderStats(int pixW, int pixH, int dpi,
+                                 int visibleAtoms,
+                                 double elapsedSec) const {
+    if (!verbose_) return;
+    std::fprintf(stderr, "[render] PNG %dx%d", pixW, pixH);
+    if (dpi > 0) std::fprintf(stderr, " @ %d dpi", dpi);
+    std::fprintf(stderr,
+        " bg=%s outline=%s fog=%.2f elapsed=%.2fs visible_atoms=%d\n",
+        bgModeName(bgMode_), outlineEnabled_ ? "on" : "off", fogStrength_,
+        elapsedSec, visibleAtoms);
 }
 
 void Application::applyBgMode(PixelCanvas& pc) const {
@@ -4047,15 +4137,8 @@ void Application::registerCommands() {
             return {true, "label_format = " +
                           (app.labelFormat().empty() ? std::string("(default)")
                                                      : app.labelFormat())};
-        if (opt == "bg" || opt == "background_color") {
-            const char* n = "transparent";
-            switch (app.bgMode()) {
-                case BgMode::Transparent: n = "transparent"; break;
-                case BgMode::White:       n = "white";       break;
-                case BgMode::Black:       n = "black";       break;
-            }
-            return {true, std::string("bg = ") + n};
-        }
+        if (opt == "bg" || opt == "background_color")
+            return {true, std::string("bg = ") + bgModeName(app.bgMode())};
         if (opt == "verbose" || opt == "v")
             return {true, std::string("verbose = ") + (app.verbose() ? "on" : "off")};
         if (opt == "transparency" || opt == "transp") {
@@ -4341,10 +4424,12 @@ void Application::registerCommands() {
             // Store as named selection
             app.namedSelections()[name] = sel;
             if (sel.empty()) return {false, "Selection '" + name + "' is empty: " + expr};
+            app.logSelectionInfo(name, expr, sel, *obj);
             return {true, "Selection '" + name + "' = " + std::to_string(sel.size()) + " atoms"};
         }
 
         if (sel.empty()) return {false, "Selection empty: " + expr};
+        app.logSelectionInfo("(anon)", expr, sel, *obj);
         return {true, "Selected " + std::to_string(sel.size()) + " atoms: " + expr};
     }, ":select <expr>", "Select atoms (use 'name = expr' for a named selection; 'clear' to drop $sele)",
        {":select chain A", ":select s1 = resi 50-80", ":select clear"}, "Selection");
@@ -4478,6 +4563,7 @@ void Application::registerCommands() {
         auto result = complex
             ? Aligner::alignComplex(*mobile, *target, mobileAtoms, targetAtoms)
             : Aligner::align(*mobile, *target, mobileAtoms, targetAtoms);
+        app.logAlignPair(mobileLabel, targetLabel, complex, result);
         if (!result.success) return {false, "Align failed: " + result.message};
 
         Aligner::applyTransform(*mobile, result);
@@ -4925,13 +5011,28 @@ void Application::registerCommands() {
             return msg;
         };
 
+        // Surface 0-visible-atom screenshots unconditionally — silent
+        // empty PNGs are the most common headless-script footgun.
+        int visibleAtoms = app.countVisibleAtoms();
+        if (visibleAtoms == 0) {
+            std::fprintf(stderr,
+                "[warn] :screenshot — 0 visible atoms; PNG will be empty\n");
+        }
+
+        auto t0 = std::chrono::steady_clock::now();
+
         // If already in pixel mode and no explicit size was requested,
         // grab the live framebuffer. The canvas already carries bgMode_
         // since renderViewport() applies it before clear().
         if (app.rendererType() == RendererType::Pixel && reqPixW == 0) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
-            if (pc && pc->savePNG(path, reqDpi))
+            if (pc && pc->savePNG(path, reqDpi)) {
+                double dt = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - t0).count();
+                app.logRenderStats(pc->pixelWidth(), pc->pixelHeight(),
+                                   reqDpi, visibleAtoms, dt);
                 return ExecResult{true, savedMsg(pc->pixelWidth(), pc->pixelHeight())};
+            }
             return {false, "Failed to save " + path};
         }
 
@@ -5027,8 +5128,13 @@ void Application::registerCommands() {
         if (canvas)
             tab.camera().prepareProjection(canvas->subW(), canvas->subH(), canvas->aspectYX());
 
-        if (offscreen.savePNG(path, reqDpi))
+        if (offscreen.savePNG(path, reqDpi)) {
+            double dt = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            app.logRenderStats(offscreen.pixelWidth(), offscreen.pixelHeight(),
+                               reqDpi, visibleAtoms, dt);
             return ExecResult{true, savedMsg(offscreen.pixelWidth(), offscreen.pixelHeight())};
+        }
         return {false, "Failed to save " + path};
     }, ":screenshot [file.png] [W H [DPI]]",
        "Save a PNG; optional explicit size (W H) and DPI metadata for figure prep",

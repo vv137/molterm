@@ -511,10 +511,20 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   transparent uses a touched-pixel mask, not a
                                 "   color heuristic, so labels and outline-darkened
                                 "   atoms stay opaque.
-:set v|verbose on|off           " Stream `[view] <cmd> -> ...` to stderr after
-                                "   :center / :zoom / :orient / :turn / :focus —
-                                "   useful for diagnosing empty-canvas screenshots
-                                "   from headless scripts.
+:set v|verbose on|off           " Stream diagnostic lines to stderr after each
+                                "   command (off by default):
+                                "     [view]   :center/:zoom/:orient/:turn/:focus
+                                "              -> camera center, zoom, pan, atom count
+                                "     [sel]    :select <name> = <expr>  ->  N atoms /
+                                "              M residues [across chains A,B,...]
+                                "     [align]  per (mobile,target) pair attempted by
+                                "              :align / :alignto, with TM1/TM2/RMSD/Aligned
+                                "     [render] :screenshot — PNG dims, DPI, bg, outline,
+                                "              fog, elapsed seconds, visible_atoms
+                                "   `[warn] :screenshot — 0 visible atoms; PNG will be
+                                "   empty` is also printed to stderr regardless of
+                                "   verbose, since silent empty PNGs are the most
+                                "   common headless-script footgun.
 :set transp|transparency <0..1> [selection]
                                 " Per-atom transparency (0 = opaque, 1 = invisible);
                                 "   selection narrows the application; no selection =
