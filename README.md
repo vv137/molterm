@@ -493,6 +493,9 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set it|interface_thickness <n>  " Interface dashed-line thickness, pixel mode (1-6, default: 4)
 :set is|interface_show <spec>    " Which interaction types draw dashes:
                                 "   all | specific | none | <list of hbond,salt,hydrophobic,other>
+                                "   Lists may use ',' or '+' as separator: :set is hbond,salt
+                                "   Examples: :set is hbond,salt          :set is hbond+salt
+                                "             :set is hbond,salt,hydrophobic
                                 "   Default 'specific' = hbond + salt only.
                                 "   The legend stats remain complete regardless.
 :set bt <n>                     " Backbone trace thickness, cells (default: 0.5)

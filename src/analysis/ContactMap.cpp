@@ -36,8 +36,10 @@ int parseInterfaceShowSpec(const std::string& spec) {
     int mask = 0;
     size_t i = 0;
     while (i < lower.size()) {
-        size_t comma = lower.find(',', i);
-        std::string tok = trim(lower.substr(i, comma - i));
+        // Accept ',' or '+' as separators — '+' matches the selection-language
+        // convention (chain A+B) some users reach for first.
+        size_t sep = lower.find_first_of(",+", i);
+        std::string tok = trim(lower.substr(i, sep - i));
         if (tok == "hbond" || tok == "h")
             mask |= interactionBit(InteractionType::HBond);
         else if (tok == "salt" || tok == "saltbridge")
@@ -48,8 +50,8 @@ int parseInterfaceShowSpec(const std::string& spec) {
             mask |= interactionBit(InteractionType::Other);
         else
             return -1;
-        if (comma == std::string::npos) break;
-        i = comma + 1;
+        if (sep == std::string::npos) break;
+        i = sep + 1;
     }
     return mask;
 }
