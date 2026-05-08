@@ -286,6 +286,12 @@ set fog 0.4                        # atmospheric depth fog 0-1     (def 0.35)
 
 (Same commands as `:screenshot …`, `:set …` typed interactively.)
 
+**Script syntax:** `#` starts a comment that runs to end-of-line — anything
+after it is ignored, *including* `;`. So `# step 1; step 2` is a single
+comment, not two commands. `;` (outside a comment) separates commands on
+one line, useful for `:setenv`-style preamble or piping with `molterm -s -`.
+A `#` inside `"..."` or `'...'` is preserved as part of the quoted argument.
+
 The optional 4th `screenshot` arg stamps a PNG `pHYs` chunk so LaTeX,
 Word, and image viewers know the intended physical print size — pixel
 count is unchanged, only metadata. Pick pixels = inches × DPI: a
