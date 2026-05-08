@@ -242,6 +242,10 @@ Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool
         size_t end = cmd.find_last_not_of(" \t");
         if (end == std::string::npos) return true;
         cmd.resize(end + 1);
+        // Expand ${VAR} *after* the ';' split so a setenv'd value carrying a
+        // ';' is treated as one argument, and so :setenv on a line takes
+        // effect for the next command on the same line.
+        cmd = expandScriptVars(cmd);
         ExecResult r = cmdRegistry_.execute(*this, cmd);
         ++result.count;
         if (!r.msg.empty()) result.lastMsg = r.msg;
@@ -313,6 +317,18 @@ std::string expandLabelTemplate(const std::string& fmt, const AtomData& a) {
     return out;
 }
 
+// `[A-Za-z_][A-Za-z0-9_]*` — accepted in both ${NAME} expansion and :setenv.
+bool isValidEnvName(const std::string& s) {
+    if (s.empty() || !(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_'))
+        return false;
+    for (size_t k = 1; k < s.size(); ++k) {
+        char c = s[k];
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_'))
+            return false;
+    }
+    return true;
+}
+
 // Join args[lo..hi) with single-space separators.
 std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi) {
     std::string out;
@@ -323,6 +339,39 @@ std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi)
     return out;
 }
 }  // namespace
+
+std::string Application::expandScriptVars(const std::string& line) const {
+    if (line.find_first_of("$\\") == std::string::npos) return line;
+    std::string out;
+    out.reserve(line.size());
+    for (size_t i = 0; i < line.size(); ) {
+        char c = line[i];
+        if (c == '\\' && i + 1 < line.size() && line[i + 1] == '$') {
+            out += '$';
+            i += 2;
+            continue;
+        }
+        if (c == '$' && i + 1 < line.size() && line[i + 1] == '{') {
+            size_t close = line.find('}', i + 2);
+            if (close != std::string::npos) {
+                std::string name = line.substr(i + 2, close - i - 2);
+                if (isValidEnvName(name)) {
+                    auto it = scriptEnv_.find(name);
+                    if (it != scriptEnv_.end()) {
+                        out += it->second;
+                    } else if (const char* env = std::getenv(name.c_str())) {
+                        out += env;
+                    }
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        out += c;
+        ++i;
+    }
+    return out;
+}
 
 std::string Application::resolveLabel(int atomIdx) const {
     auto obj = tabMgr_.currentTab().currentObject();
@@ -964,6 +1013,7 @@ void Application::handleAction(Action action) {
             cmdLine_.pushHistory(input);
             cmdLine_.deactivate();
             inputHandler_->setMode(Mode::Normal);
+            input = expandScriptVars(input);
             ExecResult result = cmdRegistry_.execute(*this, input);
             if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
             layout_.markAllDirty(); needsRedraw_ = true;
@@ -4962,6 +5012,33 @@ void Application::registerCommands() {
     }, ":run [--strict] <file>",
        "Execute a command script (# comments supported; --strict aborts on first error)",
        {":run render.mt", ":run --strict ci.mt"}, "Files");
+
+    cmdRegistry_.registerCmd("setenv", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto& env = app.scriptEnv();
+        if (cmd.args.empty()) {
+            if (env.empty()) return {true, "(no script env vars set)"};
+            std::string out;
+            for (const auto& [k, v] : env) {
+                if (!out.empty()) out += "\n";
+                out += k + " = " + v;
+            }
+            return {true, out};
+        }
+        const std::string& name = cmd.args[0];
+        if (!isValidEnvName(name))
+            return {false, "Invalid name: " + name + " (use [A-Za-z_][A-Za-z0-9_]*)"};
+        if (cmd.args.size() == 1) {
+            env.erase(name);
+            return {true, "Unset " + name};
+        }
+        std::string value = joinArgs(cmd.args, 1, cmd.args.size());
+        env[name] = value;
+        return {true, name + " = " + value};
+    }, ":setenv [NAME [value]]",
+       "Set / unset / list script env vars used by ${VAR} expansion in scripts and commands",
+       {":setenv WS /store/casp17/H2324",
+        ":load ${WS}/models/top1.cif",
+        ":setenv WS"}, "Files");
 
     cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> ExecResult {
         if (SessionSaver::saveSession(app))

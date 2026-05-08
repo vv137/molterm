@@ -129,6 +129,12 @@ public:
     // If strict is true, stops on the first failure.
     ScriptRunResult runScriptStream(std::istream& in, bool strict = false);
 
+    // Expand ${VAR} references against the in-process scriptEnv_ map (set by
+    // :setenv) with a fall-through to the OS environment. Unset → empty.
+    // Backslash-escapes the dollar: `\$X` → literal `$X`.
+    std::string expandScriptVars(const std::string& line) const;
+    std::unordered_map<std::string, std::string>& scriptEnv() { return scriptEnv_; }
+
     // Renderer switching
     void setRenderer(RendererType type);
     RendererType rendererType() const { return rendererType_; }
@@ -334,6 +340,8 @@ private:
     // Pick registers: pk1→pk4, rotates on each inspect click (like PyMOL)
     int pickRegs_[4] = {-1, -1, -1, -1};
     int pickNext_ = 0;
+
+    std::unordered_map<std::string, std::string> scriptEnv_;
 
     // Labels: atom indices to render text labels for
     std::vector<int> labelAtoms_;
