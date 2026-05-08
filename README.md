@@ -245,6 +245,12 @@ fan out across **every loaded object** by default. PyMOL semantics: a
 bare selection is interpreted per-object; narrow with `obj <name>` or
 the slash form `/objname/...`.
 
+`:zoom` / `:center` / `:orient` also skip `:disable`d objects in
+broadcast mode — a disabled crystal reference loaded alongside a model
+won't drag the camera bounding box off-canvas. Switch to
+`:set scope current` (or `:!zoom`) if you need to frame a single
+disabled object explicitly.
+
 ```text
 :loadalign relaxed_model_*.pdb              " load + superpose 5 models
 :color rainbow                              " all 5 colored rainbow
