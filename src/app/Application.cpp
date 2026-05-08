@@ -3390,6 +3390,12 @@ void Application::registerCommands() {
     // behavior after a :loadalign superpose). MolObject coordinates are
     // already world-aligned (Aligner mutates atoms in place), so summing
     // x/y/z directly across objects is correct.
+    //
+    // Broadcast mode (scope=all) skips :disable'd objects: the user has
+    // signaled the object isn't on screen, and bounding the camera to its
+    // atoms collapses the visible structure off-canvas (issue #23). Scope
+    // = current still honors the active object even when it's disabled —
+    // the user explicitly targeted it.
     struct ScopeAtomXYZ {
         std::vector<float> xs, ys, zs;
         int objs = 0;
@@ -3402,13 +3408,16 @@ void Application::registerCommands() {
             expr += cmd.args[i];
         }
         ScopeAtomXYZ out;
-        out.objs = forEachInScope(app, expr, [&](ScopedTarget& t) {
+        bool broadcast = app.effectiveCommandScope() == ScopeMode::All;
+        forEachInScope(app, expr, [&](ScopedTarget& t) {
+            if (broadcast && !t.obj->visible()) return true;
             const auto& atoms = t.obj->atoms();
             for (int i : t.sel.indices()) {
                 out.xs.push_back(atoms[i].x);
                 out.ys.push_back(atoms[i].y);
                 out.zs.push_back(atoms[i].z);
             }
+            ++out.objs;
             return true;
         });
         return out;
