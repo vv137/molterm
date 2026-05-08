@@ -58,6 +58,11 @@ enum class RendererType {
     Pixel,    // PixelCanvas + auto-detected protocol (Sixel/Kitty/iTerm2)
 };
 
+// PNG / pixel-canvas background. `Transparent` writes alpha=0 for untouched
+// pixels (deterministic, via canvas-tracked clear color + colorIds_ mask —
+// not the legacy "RGB==(0,0,0)" heuristic that flipped between canvas sizes).
+enum class BgMode { Transparent, White, Black };
+
 class Application {
 public:
     Application();
@@ -134,6 +139,11 @@ public:
     // Backslash-escapes the dollar: `\$X` → literal `$X`.
     std::string expandScriptVars(const std::string& line) const;
     std::unordered_map<std::string, std::string>& scriptEnv() { return scriptEnv_; }
+
+    BgMode bgMode() const { return bgMode_; }
+    void setBgMode(BgMode m) { bgMode_ = m; }
+    // Push the current bgMode onto a PixelCanvas before clear()/savePNG().
+    void applyBgMode(class PixelCanvas& pc) const;
 
     // Renderer switching
     void setRenderer(RendererType type);
@@ -342,6 +352,8 @@ private:
     int pickNext_ = 0;
 
     std::unordered_map<std::string, std::string> scriptEnv_;
+
+    BgMode bgMode_ = BgMode::Transparent;
 
     // Labels: atom indices to render text labels for
     std::vector<int> labelAtoms_;

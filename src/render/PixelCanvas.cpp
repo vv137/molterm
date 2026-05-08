@@ -85,12 +85,23 @@ void PixelCanvas::resizePixels(int pixW, int pixH) {
 }
 
 void PixelCanvas::clear() {
-    std::memset(rgb_.data(), 0, rgb_.size());
+    if (bgR_ == bgG_ && bgG_ == bgB_) {
+        std::memset(rgb_.data(), bgR_, rgb_.size());
+    } else {
+        for (size_t i = 0; i + 2 < rgb_.size(); i += 3) {
+            rgb_[i] = bgR_; rgb_[i + 1] = bgG_; rgb_[i + 2] = bgB_;
+        }
+    }
     std::memset(colorIds_.data(), 0xFF, colorIds_.size());
     if (!atomIds_.empty()) std::fill(atomIds_.begin(), atomIds_.end(), -1);
     zbuf_.clear();
     zMin_ = std::numeric_limits<float>::max();
     zMax_ = std::numeric_limits<float>::lowest();
+}
+
+void PixelCanvas::setBackground(uint8_t r, uint8_t g, uint8_t b, bool transparent) {
+    bgR_ = r; bgG_ = g; bgB_ = b;
+    bgTransparent_ = transparent;
 }
 
 void PixelCanvas::setActiveAtomIndex(int idx) {
@@ -788,13 +799,18 @@ bool PixelCanvas::savePNG(const std::string& path, int dpi) const {
     for (int y = 0; y < pixH_; ++y) {
         raw[offset++] = 0;  // filter: None
         for (int x = 0; x < pixW_; ++x) {
-            size_t si = (static_cast<size_t>(y) * pixW_ + x) * 3;
+            size_t pi = static_cast<size_t>(y) * pixW_ + x;
+            size_t si = pi * 3;
             uint8_t r = src[si], g = src[si + 1], b = src[si + 2];
-            bool isBg = (r == 0 && g == 0 && b == 0);
             raw[offset++] = r;
             raw[offset++] = g;
             raw[offset++] = b;
-            raw[offset++] = isBg ? 0 : 255;  // alpha: 0=transparent, 255=opaque
+            // colorIds_<0 marks pixels no atom rendered to, but text/overlay
+            // passes write RGB without updating colorIds_ — the RGB-equals-bg
+            // check keeps labels and dashed lines opaque.
+            bool untouched = (colorIds_[pi] < 0) &&
+                             (r == bgR_ && g == bgG_ && b == bgB_);
+            raw[offset++] = (bgTransparent_ && untouched) ? 0 : 255;
         }
     }
 

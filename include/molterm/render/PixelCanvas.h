@@ -90,6 +90,10 @@ public:
     // metadata only.
     bool savePNG(const std::string& path, int dpi = 0) const;
 
+    // Background fill applied on clear() and used to identify "untouched"
+    // pixels in transparent-PNG mode. Defaults: black RGB, transparent PNG.
+    void setBackground(uint8_t r, uint8_t g, uint8_t b, bool transparent);
+
     // Swap encoder at runtime
     void setEncoder(std::unique_ptr<GraphicsEncoder> enc);
     const GraphicsEncoder* encoder() const { return encoder_.get(); }
@@ -116,6 +120,9 @@ private:
     DepthBuffer zbuf_;
     float zMin_ = 0, zMax_ = 0;
     std::vector<uint8_t> preFogRgb_;  // snapshot before fog for PNG export
+
+    uint8_t bgR_ = 0, bgG_ = 0, bgB_ = 0;
+    bool bgTransparent_ = true;
 
     void queryCellSize();
     void initFont();
