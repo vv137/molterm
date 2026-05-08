@@ -68,6 +68,7 @@ private:
         float hintX, hintY, hintZ;
         bool hasHint;
         bool isNucleic;
+        int atomIdx = -1;
     };
 
     void renderNucleicBases(const MolObject& mol, const RenderContext& ctx,
@@ -82,6 +83,10 @@ private:
         std::vector<float> x, y, z;
         std::vector<SSType> ss;
         std::vector<int>   color;
+        // Source-CA atom index per spine point — surfaces per-residue alpha
+        // through the triangle batch so :set transparency targeting CA-bound
+        // selections (e.g. helix residues) reaches the cartoon emitter.
+        std::vector<int>   atomIdx;
         std::vector<float> arrowFrac;
         std::vector<float> tx, ty, tz;
         std::vector<float> nx, ny, nz;

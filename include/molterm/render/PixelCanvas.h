@@ -94,6 +94,12 @@ public:
     // pixels in transparent-PNG mode. Defaults: black RGB, transparent PNG.
     void setBackground(uint8_t r, uint8_t g, uint8_t b, bool transparent);
 
+    // Per-atom alpha LUT for blending: PixelCanvas reads the active atom's
+    // alpha (set via setActiveAtomIndex) and source-over-blends against the
+    // current dst when alpha < 1, skipping z-buffer write so the geometry
+    // doesn't occlude content drawn later. Pass nullptr to disable.
+    void setAlphaLUT(const std::vector<float>* lut) { alphaLUT_ = lut; }
+
     // Swap encoder at runtime
     void setEncoder(std::unique_ptr<GraphicsEncoder> enc);
     const GraphicsEncoder* encoder() const { return encoder_.get(); }
@@ -124,8 +130,37 @@ private:
     uint8_t bgR_ = 0, bgG_ = 0, bgB_ = 0;
     bool bgTransparent_ = true;
 
+    // Alpha-blend state. activeAlpha_ is updated by setActiveAtomIndex when
+    // alphaLUT_ is non-null; draw paths blend + skip z-write when < 1.0.
+    const std::vector<float>* alphaLUT_ = nullptr;
+    float activeAlpha_ = 1.0f;
+
     void queryCellSize();
     void initFont();
+
+    // Pixels with alpha >= kOpaqueAlpha are treated as fully opaque (z-write
+    // + colorIds claim); below that the draw skips z-write and source-over-
+    // blends so the geometry doesn't occlude content drawn later.
+    static constexpr float kOpaqueAlpha = 0.999f;
+
+    // Z-buffer + RGB write helpers; 4-arg overloads default to activeAlpha_,
+    // explicit-alpha forms are used by the batch rasterizer for per-triangle
+    // alpha. claimPixel handles the post-pass tagging (colorIds_/atomIds_)
+    // — opaque draws claim ownership; transparent draws don't (so outline /
+    // depth-fog skip them).
+    bool depthOk(int sx, int sy, float depth) { return depthOk(sx, sy, depth, activeAlpha_); }
+    void writePixel(int sx, int sy, uint8_t r, uint8_t g, uint8_t b) {
+        writePixel(sx, sy, r, g, b, activeAlpha_);
+    }
+    bool depthOk(int sx, int sy, float depth, float alpha);
+    void writePixel(int sx, int sy, uint8_t r, uint8_t g, uint8_t b, float alpha);
+    void claimPixel(size_t pIdx, int colorPair, int atomIdx, float alpha);
+    float lookupAlpha(int atomIdx) const {
+        return (alphaLUT_ && atomIdx >= 0 &&
+                atomIdx < static_cast<int>(alphaLUT_->size()))
+            ? (*alphaLUT_)[atomIdx]
+            : 1.0f;
+    }
 
     // stb_truetype font state (lazy-initialized on first drawText call)
     struct FontState;

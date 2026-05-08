@@ -144,7 +144,7 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
 
     auto& C = cachedSpine_;
     C.x.clear(); C.y.clear(); C.z.clear();
-    C.ss.clear(); C.color.clear(); C.arrowFrac.clear();
+    C.ss.clear(); C.color.clear(); C.atomIdx.clear(); C.arrowFrac.clear();
     C.tx.clear(); C.ty.clear(); C.tz.clear();
     C.nx.clear(); C.ny.clear(); C.nz.clear();
     C.bx.clear(); C.by.clear(); C.bz.clear();
@@ -254,7 +254,8 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
                     (t < 0.5f) ? col1 : col2,
                     af,
                     near.hintX, near.hintY, near.hintZ, near.hasHint,
-                    near.isNucleic
+                    near.isNucleic,
+                    near.idx
                 });
             }
         }
@@ -262,7 +263,8 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
         spine.push_back({last.x, last.y, last.z, last.ss,
             ctx.colorFor(last.idx), -1.0f,
             last.hintX, last.hintY, last.hintZ, last.hasHint,
-            last.isNucleic});
+            last.isNucleic,
+            last.idx});
 
         int nPts = static_cast<int>(spine.size());
         if (nPts < 2) { cStart = cEnd; continue; }
@@ -380,6 +382,7 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
             C.z.push_back(spine[j].z);
             C.ss.push_back(spine[j].ss);
             C.color.push_back(spine[j].color);
+            C.atomIdx.push_back(spine[j].atomIdx);
             C.arrowFrac.push_back(spine[j].arrowFrac);
             C.tx.push_back(tx[j]); C.ty.push_back(ty[j]); C.tz.push_back(tz[j]);
             C.nx.push_back(nx[j]); C.ny.push_back(ny[j]); C.nz.push_back(nz[j]);
@@ -550,7 +553,7 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
         };
 
         auto emitStrip = [&](const std::vector<Vert>& ringA,
-                             const std::vector<Vert>& ringB, int color) {
+                             const std::vector<Vert>& ringB, int color, int atomIdx) {
             int rn = static_cast<int>(std::min(ringA.size(), ringB.size()));
             for (int j = 0; j < rn; ++j) {
                 int j1 = (j + 1) % rn;
@@ -564,14 +567,14 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
                 cam.projectCached(d.x, d.y, d.z, ds, dy, dd);
 
                 triBatch->push_back({{as, bs, ds}, {ay, by2, dy},
-                                     {ad, bd, dd}, color});
+                                     {ad, bd, dd}, color, atomIdx});
                 triBatch->push_back({{bs, cs, ds}, {by2, cy, dy},
-                                     {bd, cd, dd}, color});
+                                     {bd, cd, dd}, color, atomIdx});
             }
         };
 
         auto emitCap = [&](const std::vector<Vert>& ring, float cx, float cy,
-                           float cz, int color) {
+                           float cz, int color, int atomIdx) {
             int rn = static_cast<int>(ring.size());
             if (rn < 3) return;
             float ccsx, ccsy, ccsd;
@@ -584,34 +587,35 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
                 cam.projectCached(b.x, b.y, b.z, bsx, bsy, bd);
                 triBatch->push_back({{ccsx, asx, bsx},
                                      {ccsy, asy, bsy},
-                                     {ccsd, ad, bd}, color});
+                                     {ccsd, ad, bd}, color, atomIdx});
             }
         };
 
         auto prevRing = makeRing(chainStart);
         emitCap(prevRing, C.x[chainStart], C.y[chainStart], C.z[chainStart],
-                C.color[chainStart]);
+                C.color[chainStart], C.atomIdx[chainStart]);
 
         for (int i = chainStart + 1; i < chainEnd; ++i) {
             auto ring = makeRing(i);
             int color = C.color[i];
+            int atomIdx = C.atomIdx[i];
 
             if (prevRing.size() == ring.size()) {
-                emitStrip(prevRing, ring, color);
+                emitStrip(prevRing, ring, color, atomIdx);
             } else {
                 int target = static_cast<int>(
                     std::max(prevRing.size(), ring.size()));
                 if (static_cast<int>(prevRing.size()) == target) {
-                    emitStrip(prevRing, resampleRing(ring, target), color);
+                    emitStrip(prevRing, resampleRing(ring, target), color, atomIdx);
                 } else {
-                    emitStrip(resampleRing(prevRing, target), ring, color);
+                    emitStrip(resampleRing(prevRing, target), ring, color, atomIdx);
                 }
             }
             prevRing = std::move(ring);
         }
 
         emitCap(prevRing, C.x[chainEnd-1], C.y[chainEnd-1], C.z[chainEnd-1],
-                C.color[chainEnd-1]);
+                C.color[chainEnd-1], C.atomIdx[chainEnd-1]);
     } else {
         // Braille/block/ascii: thick circle-stamped spline lines
         float scaleF = static_cast<float>(canvas.scaleX());
@@ -807,7 +811,7 @@ void CartoonRepr::renderNucleicBases(const MolObject& /* mol */,
         auto tri = [&](float x0,float y0,float z0,
                        float x1,float y1,float z1,
                        float x2,float y2,float z2) {
-            triBatch.push_back({{x0,x1,x2}, {y0,y1,y2}, {z0,z1,z2}, color});
+            triBatch.push_back({{x0,x1,x2}, {y0,y1,y2}, {z0,z1,z2}, color, c1idx});
         };
 
         for (int i = 0; i < N; ++i) {

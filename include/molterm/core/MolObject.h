@@ -80,6 +80,21 @@ public:
     void setAtomColors(const std::vector<int>& indices, int colorPair);
     void clearAtomColors();
 
+    // Per-atom transparency in [0, 1]. 1.0 = fully opaque (default), 0.0 =
+    // fully invisible. Set via :set transparency <value> [selection]; read
+    // by PixelCanvas during render to alpha-blend the atom's geometry.
+    // Empty vector means "all opaque" — no per-atom storage cost until used.
+    const std::vector<float>& atomAlpha() const { return atomAlpha_; }
+    float atomAlpha(int idx) const {
+        if (idx >= 0 && idx < static_cast<int>(atomAlpha_.size()))
+            return atomAlpha_[idx];
+        return 1.0f;
+    }
+    void setAtomAlpha(int idx, float alpha);
+    void setAtomAlphas(const std::vector<int>& indices, float alpha);
+    void setAtomAlphaAll(float alpha);
+    void clearAtomAlpha();
+
     // Per-chain rainbow fractions [0,1] for each atom (N→C terminus)
     const std::vector<float>& rainbowFractions() const;
 
@@ -130,6 +145,7 @@ private:
     std::unordered_map<ReprType, std::vector<bool>> reprAtomMask_;
     ColorScheme colorScheme_ = ColorScheme::Element;
     std::vector<int> atomColors_;  // per-atom override, -1 = use scheme
+    std::vector<float> atomAlpha_;  // per-atom transparency, 1.0 = opaque (lazy alloc)
     mutable std::vector<float> rainbowCache_;
 
     // Per-state DSSP cache: ssPerState_[stateIdx] = SS labels for that

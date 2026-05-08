@@ -16,6 +16,10 @@ struct TriangleSpan {
     float y[3];
     float z[3];
     int colorPair;
+    // Optional atom index for per-triangle alpha lookup (and focus-dim
+    // tagging when the rasterizer fans triangles into the batch). Defaults
+    // to -1 = "use whatever activeAtomIdx_ is in effect for the batch".
+    int atomIdx = -1;
 };
 
 // Abstract canvas for sub-pixel rendering.

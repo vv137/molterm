@@ -110,6 +110,7 @@ void PixelCanvas::setActiveAtomIndex(int idx) {
         // Lazy alloc on first stamping caller
         atomIds_.assign(static_cast<size_t>(pixW_) * pixH_, -1);
     }
+    activeAlpha_ = lookupAlpha(idx);
 }
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
@@ -121,16 +122,39 @@ void PixelCanvas::setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
     rgb_[idx + 2] = b;
 }
 
+bool PixelCanvas::depthOk(int sx, int sy, float depth, float alpha) {
+    return alpha < kOpaqueAlpha
+        ? zbuf_.test(sx, sy, depth)
+        : zbuf_.testAndSet(sx, sy, depth);
+}
+
+void PixelCanvas::writePixel(int sx, int sy, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    size_t idx = (static_cast<size_t>(sy) * pixW_ + sx) * 3;
+    if (alpha >= kOpaqueAlpha) {
+        rgb_[idx] = r; rgb_[idx + 1] = g; rgb_[idx + 2] = b;
+        return;
+    }
+    rgb_[idx]     = static_cast<uint8_t>(rgb_[idx]     + (r - rgb_[idx])     * alpha);
+    rgb_[idx + 1] = static_cast<uint8_t>(rgb_[idx + 1] + (g - rgb_[idx + 1]) * alpha);
+    rgb_[idx + 2] = static_cast<uint8_t>(rgb_[idx + 2] + (b - rgb_[idx + 2]) * alpha);
+}
+
+void PixelCanvas::claimPixel(size_t pIdx, int colorPair, int atomIdx, float alpha) {
+    if (alpha >= kOpaqueAlpha) colorIds_[pIdx] = static_cast<int8_t>(colorPair);
+    if (!atomIds_.empty()) atomIds_[pIdx] = atomIdx;
+}
+
 void PixelCanvas::drawDot(int sx, int sy, float depth, int colorPair) {
     if (!inBounds(sx, sy)) return;
-    if (!zbuf_.testAndSet(sx, sy, depth)) return;
+    if (!depthOk(sx, sy, depth)) return;
     if (depth < zMin_) zMin_ = depth;
     if (depth > zMax_) zMax_ = depth;
     auto c = colorPairToRGB(colorPair);
-    setPixel(sx, sy, c.r, c.g, c.b);
-    size_t pIdx = static_cast<size_t>(sy) * pixW_ + sx;
-    colorIds_[pIdx] = static_cast<int8_t>(colorPair);
-    if (!atomIds_.empty()) atomIds_[pIdx] = activeAtomIdx_;
+    writePixel(sx, sy, c.r, c.g, c.b);
+    // Transparent draws don't claim colorIds_ so post-passes (outline,
+    // depth fog) treat them as bg — fog-blending or outline-darkening a
+    // pixel that's already a ghosted alpha blend looks wrong.
+    claimPixel(static_cast<size_t>(sy) * pixW_ + sx, colorPair, activeAtomIdx_, activeAlpha_);
 }
 
 void PixelCanvas::drawLine(int x0, int y0, float d0,
@@ -138,13 +162,11 @@ void PixelCanvas::drawLine(int x0, int y0, float d0,
     // Shaded line: interpolate depth along line, apply subtle intensity variation.
     // Closer segments are brighter, farther are dimmer (complements depth fog).
     auto base = colorPairToRGB(colorPair);
-
-    int32_t* aid = atomIds_.empty() ? nullptr : atomIds_.data();
     int32_t aIdx = activeAtomIdx_;
     Canvas::bresenham(x0, y0, d0, x1, y1, d1,
         [&](int x, int y, float depth) {
             if (!inBounds(x, y)) return;
-            if (!zbuf_.testAndSet(x, y, depth)) return;
+            if (!depthOk(x, y, depth)) return;
             if (depth < zMin_) zMin_ = depth;
             if (depth > zMax_) zMax_ = depth;
 
@@ -154,10 +176,8 @@ void PixelCanvas::drawLine(int x0, int y0, float d0,
             uint8_t cr = static_cast<uint8_t>(std::min(255.0f, base.r * intensity));
             uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
             uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
-            setPixel(x, y, cr, cg, cb);
-            size_t pIdx = static_cast<size_t>(y) * pixW_ + x;
-            colorIds_[pIdx] = static_cast<int8_t>(colorPair);
-            if (aid) aid[pIdx] = aIdx;
+            writePixel(x, y, cr, cg, cb);
+            claimPixel(static_cast<size_t>(y) * pixW_ + x, colorPair, aIdx, activeAlpha_);
         });
 }
 
@@ -193,7 +213,7 @@ void PixelCanvas::drawCircle(int cx, int cy, float depth,
             float intensity = 0.45f + 0.55f * halfLambert;
 
             float zOff = depth - nz * static_cast<float>(radius) * 0.01f;
-            if (!zbuf_.testAndSet(px, py, zOff)) continue;
+            if (!depthOk(px, py, zOff)) continue;
 
             if (depth < zMin_) zMin_ = depth;
             if (depth > zMax_) zMax_ = depth;
@@ -201,10 +221,8 @@ void PixelCanvas::drawCircle(int cx, int cy, float depth,
             uint8_t cr = static_cast<uint8_t>(std::min(255.0f, base.r * intensity));
             uint8_t cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
             uint8_t cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
-            setPixel(px, py, cr, cg, cb);
-            size_t pIdx = static_cast<size_t>(py) * pixW_ + px;
-            colorIds_[pIdx] = static_cast<int8_t>(colorPair);
-            if (!atomIds_.empty()) atomIds_[pIdx] = activeAtomIdx_;
+            writePixel(px, py, cr, cg, cb);
+            claimPixel(static_cast<size_t>(py) * pixW_ + px, colorPair, activeAtomIdx_, activeAlpha_);
         }
     }
 }
@@ -284,14 +302,12 @@ void PixelCanvas::drawTriangle(float x0, float y0, float z0,
 
             float depth = u * z0 + v * z1 + w * z2;
 
-            if (!zbuf_.testAndSet(px, py, depth)) continue;
+            if (!depthOk(px, py, depth)) continue;
             if (depth < zMin_) zMin_ = depth;
             if (depth > zMax_) zMax_ = depth;
 
-            setPixel(px, py, cr, cg, cb);
-            size_t pIdx = static_cast<size_t>(py) * pixW_ + px;
-            colorIds_[pIdx] = static_cast<int8_t>(colorPair);
-            if (!atomIds_.empty()) atomIds_[pIdx] = activeAtomIdx_;
+            writePixel(px, py, cr, cg, cb);
+            claimPixel(static_cast<size_t>(py) * pixW_ + px, colorPair, activeAtomIdx_, activeAlpha_);
         }
     }
 }
@@ -326,6 +342,8 @@ void PixelCanvas::drawTriangleBatch(const TriangleSpan* tris,
         uint8_t cr, cg, cb;
         int8_t colorPair;
         int minX, maxX, minY, maxY;
+        int atomIdx;
+        float alpha;
     };
 
     std::vector<ProjTri> projected;
@@ -370,6 +388,12 @@ void PixelCanvas::drawTriangleBatch(const TriangleSpan* tris,
         p.cg = static_cast<uint8_t>(std::min(255.0f, base.g * intensity));
         p.cb = static_cast<uint8_t>(std::min(255.0f, base.b * intensity));
         p.colorPair = static_cast<int8_t>(t.colorPair);
+        // Per-triangle alpha: if the triangle carries an atomIdx and the
+        // alphaLUT is in effect, look it up; otherwise inherit batch alpha.
+        p.atomIdx = t.atomIdx;
+        // Per-triangle atomIdx wins over the batch-wide activeAtomIdx_ for
+        // the alpha lookup; -1 falls through to the batch alpha.
+        p.alpha = (t.atomIdx >= 0) ? lookupAlpha(t.atomIdx) : activeAlpha_;
 
         int aabMinX = static_cast<int>(std::min({p.x[0], p.x[1], p.x[2]}));
         int aabMaxX = static_cast<int>(std::max({p.x[0], p.x[1], p.x[2]})) + 1;
@@ -401,10 +425,9 @@ void PixelCanvas::drawTriangleBatch(const TriangleSpan* tris,
     std::vector<float> tileZMin(numTiles, std::numeric_limits<float>::max());
     std::vector<float> tileZMax(numTiles, std::numeric_limits<float>::lowest());
 
-    // All triangles in the batch share whatever atom index was set when
-    // the call started (per-triangle atom IDs would require extending
-    // TriangleSpan). Capture once so workers don't race on the field.
-    int32_t* aidBuf = atomIds_.empty() ? nullptr : atomIds_.data();
+    // Per-triangle atom indices (TriangleSpan::atomIdx) win when present;
+    // triangles emitted without an explicit index inherit the batch-wide
+    // setActiveAtomIndex. Captured once so workers don't race on the field.
     const int32_t batchAtomIdx = activeAtomIdx_;
 
     auto rasterizeTile = [&](int tileIdx) {
@@ -456,14 +479,15 @@ void PixelCanvas::drawTriangleBatch(const TriangleSpan* tris,
                     if (u < kEdgeEps || v < kEdgeEps || w < kEdgeEps) continue;
 
                     float depth = u * p.z[0] + v * p.z[1] + w * p.z[2];
-                    if (!zbuf_.testAndSet(px, py, depth)) continue;
+                    if (!depthOk(px, py, depth, p.alpha)) continue;
                     if (depth < lZMin) lZMin = depth;
                     if (depth > lZMax) lZMax = depth;
 
-                    setPixel(px, py, p.cr, p.cg, p.cb);
-                    size_t pIdx = static_cast<size_t>(py) * pixW_ + px;
-                    colorIds_[pIdx] = p.colorPair;
-                    if (aidBuf) aidBuf[pIdx] = batchAtomIdx;
+                    writePixel(px, py, p.cr, p.cg, p.cb, p.alpha);
+                    claimPixel(static_cast<size_t>(py) * pixW_ + px,
+                               p.colorPair,
+                               p.atomIdx >= 0 ? p.atomIdx : batchAtomIdx,
+                               p.alpha);
                 }
             }
         }

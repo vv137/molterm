@@ -515,6 +515,12 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   :center / :zoom / :orient / :turn / :focus —
                                 "   useful for diagnosing empty-canvas screenshots
                                 "   from headless scripts.
+:set transp|transparency <0..1> [selection]
+                                " Per-atom transparency (0 = opaque, 1 = invisible);
+                                "   selection narrows the application; no selection =
+                                "   whole object. Pixel-mode only; transparent pixels
+                                "   are skipped by the outline pass so glassy helices
+                                "   don't carry a black silhouette.
 :set outline on|off             " Silhouette outlines
 :set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
 :set od|outline_darken <n>      " Outline darkness (default: 0.15, 0=black)

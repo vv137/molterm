@@ -1719,18 +1719,26 @@ void Application::renderViewport() {
     // Render reprs once per stereoscopic eye. setupStereoEye() handles the
     // single-pass, non-stereo case too (returns immediately after preparing
     // a normal full-canvas projection).
+    auto* pcLive = dynamic_cast<PixelCanvas*>(canvas_.get());
     std::array<float, 9> savedRot{};
     for (int eye = 0; eye < stereoEyeCount(); ++eye) {
         savedRot = setupStereoEye(eye, canvas_->subW(), canvas_->subH(),
                                   canvas_->aspectYX());
         for (const auto& obj : tab.objects()) {
             if (!obj->visible()) continue;
+            // Push the per-object alpha LUT so PixelCanvas can blend
+            // transparent atoms in the upcoming repr->render() calls.
+            if (pcLive) {
+                pcLive->setAlphaLUT(obj->atomAlpha().empty() ? nullptr
+                                                             : &obj->atomAlpha());
+            }
             for (auto& [reprType, repr] : representations_) {
                 if (obj->reprVisible(reprType)) {
                     repr->render(*obj, tab.camera(), *canvas_);
                 }
             }
         }
+        if (pcLive) pcLive->setAlphaLUT(nullptr);
     }
     restoreStereoCamera(savedRot);
 
@@ -4045,6 +4053,34 @@ void Application::registerCommands() {
             app.setVerbose(*b);
             return {true, std::string("verbose = ") + (*b ? "on" : "off")};
         }
+        if (opt == "transparency" || opt == "transp") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set transparency <0..1> [selection]"};
+            float v;
+            try { v = std::stof(cmd.args[1]); } catch (...) {
+                return {false, "Invalid transparency: " + cmd.args[1]};
+            }
+            if (v < 0.0f || v > 1.0f)
+                return {false, "Transparency out of range (0..1)"};
+            // 1.0 - v: PyMOL-style "transparency" is 1 = fully invisible,
+            // but PixelCanvas blending uses alpha (1 = opaque). Convert.
+            float alpha = 1.0f - v;
+            auto obj = app.tabs().currentTab().currentObject();
+            if (!obj) return {false, "No object selected"};
+            if (cmd.args.size() == 2) {
+                if (v <= 0.0f) { obj->clearAtomAlpha(); return {true, "transparency cleared"}; }
+                obj->setAtomAlphaAll(alpha);
+                return {true, "transparency = " + cmd.args[1] +
+                              " (whole object, " + std::to_string(obj->atoms().size()) + " atoms)"};
+            }
+            std::string expr = joinArgs(cmd.args, 2, cmd.args.size());
+            auto sel = app.parseSelection(expr, *obj);
+            if (sel.empty()) return {false, "No atoms match: " + expr};
+            std::vector<int> idxs(sel.indices().begin(), sel.indices().end());
+            obj->setAtomAlphas(idxs, alpha);
+            return {true, "transparency = " + cmd.args[1] +
+                          " on " + std::to_string(idxs.size()) + " atoms (" + expr + ")"};
+        }
         return {false, "Unknown option: " + opt};
     }, ":set <option> [value]",
        "Set a runtime option (renderer, fog, outline, cartoon_*, focus_*, panel, seqbar, ...)",
@@ -4086,6 +4122,16 @@ void Application::registerCommands() {
         }
         if (opt == "verbose" || opt == "v")
             return {true, std::string("verbose = ") + (app.verbose() ? "on" : "off")};
+        if (opt == "transparency" || opt == "transp") {
+            auto obj = app.tabs().currentTab().currentObject();
+            if (!obj || obj->atomAlpha().empty())
+                return {true, "transparency = 0.0 (all atoms opaque)"};
+            int n = static_cast<int>(obj->atomAlpha().size());
+            int touched = 0;
+            for (float a : obj->atomAlpha()) if (a < 0.999f) ++touched;
+            return {true, "transparency: " + std::to_string(touched) +
+                          " / " + std::to_string(n) + " atoms have <1.0 alpha"};
+        }
 
         if (opt == "renderer" || opt == "render") {
             const char* n = "?";
@@ -5005,12 +5051,15 @@ void Application::registerCommands() {
                                                      offscreen.aspectYX());
             for (const auto& obj : tab.objects()) {
                 if (!obj->visible()) continue;
+                offscreen.setAlphaLUT(obj->atomAlpha().empty() ? nullptr
+                                                               : &obj->atomAlpha());
                 for (auto& [reprType, repr] : app.representations()) {
                     if (obj->reprVisible(reprType)) {
                         repr->render(*obj, tab.camera(), offscreen);
                     }
                 }
             }
+            offscreen.setAlphaLUT(nullptr);
         }
         app.restoreStereoCamera(savedScreenshotRot);
 

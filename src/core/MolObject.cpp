@@ -131,6 +131,30 @@ void MolObject::clearAtomColors() {
     atomColors_.clear();
 }
 
+void MolObject::setAtomAlpha(int idx, float alpha) {
+    if (idx < 0 || idx >= static_cast<int>(atoms_.size())) return;
+    if (atomAlpha_.size() != atoms_.size())
+        atomAlpha_.assign(atoms_.size(), 1.0f);
+    atomAlpha_[idx] = alpha;
+}
+
+void MolObject::setAtomAlphas(const std::vector<int>& indices, float alpha) {
+    if (atomAlpha_.size() != atoms_.size())
+        atomAlpha_.assign(atoms_.size(), 1.0f);
+    for (int idx : indices) {
+        if (idx >= 0 && idx < static_cast<int>(atoms_.size()))
+            atomAlpha_[idx] = alpha;
+    }
+}
+
+void MolObject::setAtomAlphaAll(float alpha) {
+    atomAlpha_.assign(atoms_.size(), alpha);
+}
+
+void MolObject::clearAtomAlpha() {
+    atomAlpha_.clear();
+}
+
 void MolObject::addState(std::vector<AtomData> atomState) {
     states_.push_back(std::move(atomState));
 }

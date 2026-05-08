@@ -31,6 +31,14 @@ public:
         return false;
     }
 
+    // Read-only depth test (no write). Used by alpha-blend draws so a
+    // transparent atom doesn't occlude content drawn later.
+    bool test(int x, int y, float depth) const {
+        if (x < 0 || x >= width_ || y < 0 || y >= height_) return false;
+        auto idx = static_cast<size_t>(y) * width_ + x;
+        return depth < buffer_[idx];
+    }
+
     float get(int x, int y) const {
         if (x < 0 || x >= width_ || y < 0 || y >= height_)
             return std::numeric_limits<float>::max();
