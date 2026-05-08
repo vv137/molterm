@@ -371,8 +371,17 @@ private:
     // {chain}, {name}, {element}, {restype} (1-letter AA code).
     std::string labelFormat_;
 
-    // Persistent measurements: pairs/triples/quads of atom indices + label
-    struct Measurement { std::vector<int> atoms; std::string label; };
+    // Persistent measurements: pairs/triples/quads of atom indices + label.
+    // `label` is the auto-formatted value ("5.85A" / "127.3°"); `caption` is
+    // the optional user string from `:measure ... = "..."` for figure prep.
+    struct Measurement {
+        std::vector<int> atoms;
+        std::string label;
+        std::string caption;
+        std::string displayLabel() const {
+            return caption.empty() ? label : label + " " + caption;
+        }
+    };
     std::vector<Measurement> measurements_;
 
 public:

@@ -457,10 +457,14 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   sel applies to both sides — e.g. confident domain only:
                                 "   :loadalign model_?.cif chain A+B
 :assembly [id|list]             " Generate biological assembly (default: 1)
-:measure [s1 s2]                " Distance (no args = pk1↔pk2 from last clicks)
-:angle [s1 s2 s3]               " Angle at s2 (no args = pk1-pk2-pk3)
-:dihedral [s1 s2 s3 s4]         " Dihedral (no args = pk1-pk4)
-                                " Args: serial number, pk1-pk4, or $selection
+:measure [s1 s2] [= "caption"]  " Distance (no args = pk1↔pk2 from last clicks).
+:angle [s1 s2 s3] [= "caption"] " Angle at s2 (no args = pk1-pk2-pk3).
+:dihedral [s1 s2 s3 s4] [= "..."] " Dihedral (no args = pk1-pk4).
+                                "   Args: serial number, pk1-pk4, or $selection.
+                                "   Persisted as a dashed line + value label
+                                "   (rendered into screenshots and exported as
+                                "   PyMOL distance/angle/dihedral with `label`
+                                "   carrying the optional caption).
 :label <selection>              " Show residue labels on viewport (text from
                                 "   :set label_format, default <resname><resseq>)
 :label <selection> = "<text>"   " Override the label text for matched atoms

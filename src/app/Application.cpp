@@ -338,6 +338,20 @@ std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi)
     }
     return out;
 }
+
+// Split args at literal "=" token. Returns (left, right_joined). When no "="
+// is present, right is empty and left is the original args vector. Used by
+// :label and the :measure/:angle/:dihedral caption parsers.
+std::pair<std::vector<std::string>, std::string>
+splitAtEqToken(const std::vector<std::string>& args) {
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "=") {
+            return {std::vector<std::string>(args.begin(), args.begin() + i),
+                    joinArgs(args, i + 1, args.size())};
+        }
+    }
+    return {args, ""};
+}
 }  // namespace
 
 void Application::logViewState(const ParsedCommand& cmd) const {
@@ -2004,18 +2018,19 @@ void Application::renderViewport() {
                     float sx1, sy1, d1, sx2, sy2, d2;
                     cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
                     cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                    std::string text = m.displayLabel();
                     if (isPixel) {
                         auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
                         if (pc) {
                             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
                             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
-                            pc->drawText(lx, ly, (d1 + d2) / 2.0f, m.label, kColorYellow);
+                            pc->drawText(lx, ly, (d1 + d2) / 2.0f, text, kColorYellow);
                         }
                     } else {
                         int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
                         int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
-                        if (mx >= 0 && mx < w - static_cast<int>(m.label.size()) && my >= 0 && my < h)
-                            win.printColored(my, mx, m.label, kColorYellow);
+                        if (mx >= 0 && mx < w - static_cast<int>(text.size()) && my >= 0 && my < h)
+                            win.printColored(my, mx, text, kColorYellow);
                     }
                 }
             }
@@ -2264,7 +2279,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
-            pc.drawText(lx, ly, (d1 + d2) / 2.0f, m.label, kColorYellow);
+            pc.drawText(lx, ly, (d1 + d2) / 2.0f, m.displayLabel(), kColorYellow);
         }
     }
 
@@ -4776,8 +4791,12 @@ void Application::registerCommands() {
 
         int vpW = app.layout().viewportWidth();
         int vpH = app.layout().viewportHeight();
+        std::vector<SessionExporter::Measurement> exportMs;
+        exportMs.reserve(app.measurements().size());
+        for (const auto& m : app.measurements())
+            exportMs.push_back({m.atoms, m.label, m.caption});
         std::string result = SessionExporter::exportPML(
-            path, tab, vpW, vpH, app.stereoMode(), app.stereoAngle());
+            path, tab, vpW, vpH, app.stereoMode(), app.stereoAngle(), exportMs);
         bool ok = result.find("Failed") == std::string::npos &&
                   result.find("Error") == std::string::npos;
         return {ok, result};
@@ -4964,16 +4983,10 @@ void Application::registerCommands() {
             return {true, "Labels cleared"};
         }
         // '=' splits selection from override text — same convention as :select.
-        int eqIdx = -1;
-        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
-            if (cmd.args[i] == "=") { eqIdx = i; break; }
-        }
-        size_t exprEnd = (eqIdx >= 0) ? static_cast<size_t>(eqIdx) : cmd.args.size();
-        std::string expr = joinArgs(cmd.args, 0, exprEnd);
+        auto [exprArgs, customText] = splitAtEqToken(cmd.args);
+        std::string expr = joinArgs(exprArgs, 0, exprArgs.size());
         if (expr.empty()) return {false, "Empty selection"};
-        bool hasCustom = (eqIdx >= 0);
-        std::string customText = hasCustom ? joinArgs(cmd.args, eqIdx + 1, cmd.args.size())
-                                           : std::string();
+        bool hasCustom = (exprArgs.size() != cmd.args.size());
         if (hasCustom && customText.empty())
             return {false, "Empty label text after '='"};
         auto sel = app.parseSelection(expr, *obj);
@@ -5145,25 +5158,26 @@ void Application::registerCommands() {
         return a.chainId + "/" + a.resName + std::to_string(a.resSeq) + "/" + a.name;
     };
 
+
     // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
     cmdRegistry_.registerCmd("measure", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
         int n = static_cast<int>(atoms.size());
+        auto [pos, caption] = splitAtEqToken(cmd.args);
 
         int i1, i2;
-        if (cmd.args.empty()) {
-            // Use pick registers pk1, pk2
+        if (pos.empty()) {
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
             if (i1 < 0 || i2 < 0) return {false, "Click two atoms first (pk1, pk2), then :measure"};
-        } else if (cmd.args.size() >= 2) {
-            i1 = resolveAtomIdx(app, cmd.args[0]);
-            i2 = resolveAtomIdx(app, cmd.args[1]);
-            if (i1 < 0) return {false, "Atom not found: serial " + cmd.args[0]};
-            if (i2 < 0) return {false, "Atom not found: serial " + cmd.args[1]};
+        } else if (pos.size() >= 2) {
+            i1 = resolveAtomIdx(app, pos[0]);
+            i2 = resolveAtomIdx(app, pos[1]);
+            if (i1 < 0) return {false, "Atom not found: serial " + pos[0]};
+            if (i2 < 0) return {false, "Atom not found: serial " + pos[1]};
         } else {
-            return {false, "Usage: :measure [serial1 serial2] (or click 2 atoms first)"};
+            return {false, "Usage: :measure [serial1 serial2] [= \"caption\"]"};
         }
         if (i1 >= n || i2 >= n) return {false, "Invalid atom index"};
 
@@ -5176,12 +5190,14 @@ void Application::registerCommands() {
         std::string shortLabel = std::string(dbuf) + "A";
         std::string msg = "Distance " + atomLabel(atoms[i1]) + " — " +
             atomLabel(atoms[i2]) + " = " + shortLabel;
-        app.measurements().push_back({{i1, i2}, shortLabel});
+        if (!caption.empty()) msg += "  \"" + caption + "\"";
+        app.measurements().push_back({{i1, i2}, shortLabel, caption});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":measure [s1 s2]",
-       "Measure a distance between two atoms (no args = use pk1, pk2 from last clicks)",
-       {":measure", ":measure pk1 pk2", ":measure 12 47"}, "Measurement");
+    }, ":measure [s1 s2] [= \"caption\"]",
+       "Measure a distance and persist a dashed line + value (optional caption for figures)",
+       {":measure", ":measure pk1 pk2",
+        ":measure 12 47 = \"Glu-OE1 ↔ Lys-Nζ\""}, "Measurement");
 
     // :angle [s1 s2 s3] — angle at vertex s2 (no args = pk1-pk2-pk3)
     cmdRegistry_.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -5189,20 +5205,21 @@ void Application::registerCommands() {
         if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
         int n = static_cast<int>(atoms.size());
+        auto [pos, caption] = splitAtEqToken(cmd.args);
 
         int i1, i2, i3;
-        if (cmd.args.empty()) {
+        if (pos.empty()) {
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1]; i3 = app.pickRegs_[2];
             if (i1 < 0 || i2 < 0 || i3 < 0) return {false, "Click three atoms first (pk1-pk3), then :angle"};
-        } else if (cmd.args.size() >= 3) {
-            i1 = resolveAtomIdx(app, cmd.args[0]);
-            i2 = resolveAtomIdx(app, cmd.args[1]);
-            i3 = resolveAtomIdx(app, cmd.args[2]);
-            if (i1 < 0) return {false, "Atom not found: serial " + cmd.args[0]};
-            if (i2 < 0) return {false, "Atom not found: serial " + cmd.args[1]};
-            if (i3 < 0) return {false, "Atom not found: serial " + cmd.args[2]};
+        } else if (pos.size() >= 3) {
+            i1 = resolveAtomIdx(app, pos[0]);
+            i2 = resolveAtomIdx(app, pos[1]);
+            i3 = resolveAtomIdx(app, pos[2]);
+            if (i1 < 0) return {false, "Atom not found: serial " + pos[0]};
+            if (i2 < 0) return {false, "Atom not found: serial " + pos[1]};
+            if (i3 < 0) return {false, "Atom not found: serial " + pos[2]};
         } else {
-            return {false, "Usage: :angle [s1 s2 s3] (or click 3 atoms first)"};
+            return {false, "Usage: :angle [s1 s2 s3] [= \"caption\"]"};
         }
         if (i1 >= n || i2 >= n || i3 >= n) return {false, "Invalid atom index"};
 
@@ -5220,12 +5237,13 @@ void Application::registerCommands() {
         std::string shortLabel = std::string(buf) + "°";
         std::string msg = "Angle " + atomLabel(atoms[i1]) + " — " +
             atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " = " + buf + " deg";
-        app.measurements().push_back({{i1, i2, i3}, shortLabel});
+        if (!caption.empty()) msg += "  \"" + caption + "\"";
+        app.measurements().push_back({{i1, i2, i3}, shortLabel, caption});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":angle [s1 s2 s3]",
-       "Measure the angle at s2 between (s1, s2, s3) (no args = pk1-pk2-pk3)",
-       {":angle", ":angle pk1 pk2 pk3"}, "Measurement");
+    }, ":angle [s1 s2 s3] [= \"caption\"]",
+       "Measure the angle at s2 between (s1, s2, s3); optional caption for figures",
+       {":angle", ":angle pk1 pk2 pk3 = \"φ1\""}, "Measurement");
 
     // :dihedral [s1 s2 s3 s4] — dihedral (no args = pk1-pk4)
     cmdRegistry_.registerCmd("dihedral", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -5233,24 +5251,25 @@ void Application::registerCommands() {
         if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
         int n = static_cast<int>(atoms.size());
+        auto [pos, caption] = splitAtEqToken(cmd.args);
 
         int i1, i2, i3, i4;
-        if (cmd.args.empty()) {
+        if (pos.empty()) {
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
             i3 = app.pickRegs_[2]; i4 = app.pickRegs_[3];
             if (i1 < 0 || i2 < 0 || i3 < 0 || i4 < 0)
                 return {false, "Click four atoms first (pk1-pk4), then :dihedral"};
-        } else if (cmd.args.size() >= 4) {
-            i1 = resolveAtomIdx(app, cmd.args[0]);
-            i2 = resolveAtomIdx(app, cmd.args[1]);
-            i3 = resolveAtomIdx(app, cmd.args[2]);
-            i4 = resolveAtomIdx(app, cmd.args[3]);
-            if (i1 < 0) return {false, "Atom not found: serial " + cmd.args[0]};
-            if (i2 < 0) return {false, "Atom not found: serial " + cmd.args[1]};
-            if (i3 < 0) return {false, "Atom not found: serial " + cmd.args[2]};
-            if (i4 < 0) return {false, "Atom not found: serial " + cmd.args[3]};
+        } else if (pos.size() >= 4) {
+            i1 = resolveAtomIdx(app, pos[0]);
+            i2 = resolveAtomIdx(app, pos[1]);
+            i3 = resolveAtomIdx(app, pos[2]);
+            i4 = resolveAtomIdx(app, pos[3]);
+            if (i1 < 0) return {false, "Atom not found: serial " + pos[0]};
+            if (i2 < 0) return {false, "Atom not found: serial " + pos[1]};
+            if (i3 < 0) return {false, "Atom not found: serial " + pos[2]};
+            if (i4 < 0) return {false, "Atom not found: serial " + pos[3]};
         } else {
-            return {false, "Usage: :dihedral [s1 s2 s3 s4] (or click 4 atoms first)"};
+            return {false, "Usage: :dihedral [s1 s2 s3 s4] [= \"caption\"]"};
         }
         if (i1 >= n || i2 >= n || i3 >= n || i4 >= n) return {false, "Invalid atom index"};
 
@@ -5266,12 +5285,13 @@ void Application::registerCommands() {
         std::string msg = "Dihedral " + atomLabel(atoms[i1]) + " — " +
             atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " — " +
             atomLabel(atoms[i4]) + " = " + buf + " deg";
-        app.measurements().push_back({{i1, i2, i3, i4}, shortLabel});
+        if (!caption.empty()) msg += "  \"" + caption + "\"";
+        app.measurements().push_back({{i1, i2, i3, i4}, shortLabel, caption});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":dihedral [s1 s2 s3 s4]",
-       "Measure a dihedral angle between four atoms (no args = pk1-pk4)",
-       {":dihedral", ":dihedral pk1 pk2 pk3 pk4"}, "Measurement");
+    }, ":dihedral [s1 s2 s3 s4] [= \"caption\"]",
+       "Measure a dihedral angle between four atoms; optional caption for figures",
+       {":dihedral", ":dihedral pk1 pk2 pk3 pk4 = \"χ1\""}, "Measurement");
 
     // :contactmap [cutoff] — toggle contact map panel
     cmdRegistry_.registerCmd("contactmap", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
