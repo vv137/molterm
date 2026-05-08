@@ -337,6 +337,13 @@ private:
 
     // Labels: atom indices to render text labels for
     std::vector<int> labelAtoms_;
+    // Per-atom override text. If absent for an atom in `labelAtoms_`,
+    // labelFormat_ (or the built-in default) supplies the text.
+    std::unordered_map<int, std::string> labelText_;
+    // Template applied when no per-atom override exists. Empty = built-in
+    // default ("{resname}{resseq}"). Tokens: {resname}, {resseq}/{seqid},
+    // {chain}, {name}, {element}, {restype} (1-letter AA code).
+    std::string labelFormat_;
 
     // Persistent measurements: pairs/triples/quads of atom indices + label
     struct Measurement { std::vector<int> atoms; std::string label; };
@@ -345,6 +352,12 @@ private:
 public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
     std::vector<int>& labelAtoms() { return labelAtoms_; }
+    std::unordered_map<int, std::string>& labelText() { return labelText_; }
+    const std::string& labelFormat() const { return labelFormat_; }
+    void setLabelFormat(std::string fmt) { labelFormat_ = std::move(fmt); }
+    // Resolve the displayed text for the label at `atomIdx` against the
+    // currently-loaded object: per-atom override → labelFormat_ → default.
+    std::string resolveLabel(int atomIdx) const;
     std::vector<Measurement>& measurements() { return measurements_; }
     bool overlayVisible_ = true;
 

@@ -289,6 +289,57 @@ Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool
     return result;
 }
 
+namespace {
+// Unknown tokens render as literal text ("{wat}" stays "{wat}") so a typo
+// in label_format never crashes a figure script — the user sees their typo.
+std::string expandLabelTemplate(const std::string& fmt, const AtomData& a) {
+    std::string out;
+    out.reserve(fmt.size() + 8);
+    for (size_t i = 0; i < fmt.size(); ) {
+        if (fmt[i] != '{') { out += fmt[i++]; continue; }
+        size_t close = fmt.find('}', i + 1);
+        if (close == std::string::npos) { out += fmt.substr(i); break; }
+        std::string tok = fmt.substr(i + 1, close - i - 1);
+        if      (tok == "resname")        out += a.resName;
+        else if (tok == "resseq" ||
+                 tok == "seqid")          out += std::to_string(a.resSeq);
+        else if (tok == "chain")          out += a.chainId;
+        else if (tok == "name")           out += a.name;
+        else if (tok == "element")        out += a.element;
+        else if (tok == "restype")        out += SeqBar::toOneLetter(a.resName);
+        else                              out += fmt.substr(i, close - i + 1);
+        i = close + 1;
+    }
+    return out;
+}
+
+// Join args[lo..hi) with single-space separators.
+std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi) {
+    std::string out;
+    for (size_t i = lo; i < hi && i < args.size(); ++i) {
+        if (i > lo) out += ' ';
+        out += args[i];
+    }
+    return out;
+}
+}  // namespace
+
+std::string Application::resolveLabel(int atomIdx) const {
+    auto obj = tabMgr_.currentTab().currentObject();
+    if (!obj) return {};
+    const auto& atoms = obj->atoms();
+    // labelAtoms_ may outlive an object swap; a stale idx is possible.
+    if (atomIdx < 0 || atomIdx >= static_cast<int>(atoms.size())) return {};
+    const auto& a = atoms[atomIdx];
+    // Common case: no overrides and no template — skip the hash lookup.
+    if (labelText_.empty() && labelFormat_.empty())
+        return a.resName + std::to_string(a.resSeq);
+    auto it = labelText_.find(atomIdx);
+    if (it != labelText_.end()) return it->second;
+    if (!labelFormat_.empty()) return expandLabelTemplate(labelFormat_, a);
+    return a.resName + std::to_string(a.resSeq);
+}
+
 void Application::initRepresentations() {
     representations_[ReprType::Wireframe] = std::make_unique<WireframeRepr>();
     representations_[ReprType::BallStick] = std::make_unique<BallStickRepr>();
@@ -1784,7 +1835,6 @@ void Application::renderViewport() {
         int scaleY = canvas_ ? canvas_->scaleY() : 1;
         auto obj = tabMgr_.currentTab().currentObject();
         if (obj && !labelAtoms_.empty()) {
-            const auto& atoms = obj->atoms();
             // Build fast lookup set from label list
             std::set<int> labelSet(labelAtoms_.begin(), labelAtoms_.end());
             for (const auto& pa : projCache_) {
@@ -1794,8 +1844,7 @@ void Application::renderViewport() {
                 int ty = pa.sy / scaleY;
                 if (tx < 0 || tx >= w - 6 || ty < 0 || ty >= h) continue;
 
-                const auto& a = atoms[pa.idx];
-                std::string lbl = a.resName + std::to_string(a.resSeq);
+                std::string lbl = resolveLabel(pa.idx);
                 if (isPixel) {
                     auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
                     if (pc) pc->drawText(pa.sx + scaleX, pa.sy, pa.depth,
@@ -2078,7 +2127,8 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
     int subH = pc.subH();
     int scaleX = pc.scaleX();
 
-    // Residue labels — `resN###` rendered in white next to each labeled atom.
+    // Residue labels — text rendered in white next to each labeled atom.
+    // Text comes from resolveLabel(): per-atom override > label_format > default.
     if (!labelAtoms_.empty()) {
         std::set<int> labelSet(labelAtoms_.begin(), labelAtoms_.end());
         for (int idx : labelSet) {
@@ -2089,7 +2139,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             int isx = static_cast<int>(fsx);
             int isy = static_cast<int>(fsy);
             if (isx < 0 || isx >= subW || isy < 0 || isy >= subH) continue;
-            std::string lbl = a.resName + std::to_string(a.resSeq);
+            std::string lbl = resolveLabel(idx);
             pc.drawText(isx + scaleX, isy, depth, lbl, kColorWhite);
         }
     }
@@ -3811,6 +3861,15 @@ void Application::registerCommands() {
             app.interfaceRepr_.setShowMask(app.interfaceShowMask_);
             return {true, "Interface show: " + formatInterfaceShowSpec(app.interfaceShowMask_)};
         }
+        if (opt == "label_format" || opt == "lf") {
+            if (cmd.args.size() < 2) {
+                app.setLabelFormat("");
+                return {true, "label_format cleared (default <resname><resseq>)"};
+            }
+            std::string fmt = joinArgs(cmd.args, 1, cmd.args.size());
+            app.setLabelFormat(fmt);
+            return {true, "label_format = " + fmt};
+        }
         return {false, "Unknown option: " + opt};
     }, ":set <option> [value]",
        "Set a runtime option (renderer, fog, outline, cartoon_*, focus_*, panel, seqbar, ...)",
@@ -3837,6 +3896,10 @@ void Application::registerCommands() {
         if (opt == "interface_show" || opt == "is")
             return {true, "interface_show = " +
                           formatInterfaceShowSpec(app.interfaceShowMask_)};
+        if (opt == "label_format" || opt == "lf")
+            return {true, "label_format = " +
+                          (app.labelFormat().empty() ? std::string("(default)")
+                                                     : app.labelFormat())};
 
         if (opt == "renderer" || opt == "render") {
             const char* n = "?";
@@ -4783,39 +4846,74 @@ void Application::registerCommands() {
     }, ":preset", "Apply smart default representations (cartoon for protein, ballstick for ligands)",
        {":preset"}, "Display");
 
-    // :label [selection] — add labels for atoms matching selection
     cmdRegistry_.registerCmd("label", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
-        if (cmd.args.empty()) return {false, "Usage: :label <selection> or :label clear"};
+        if (cmd.args.empty()) return {false, "Usage: :label <selection> [= \"text\"] or :label clear"};
         if (cmd.args[0] == "clear") {
             app.labelAtoms().clear();
+            app.labelText().clear();
             return {true, "Labels cleared"};
         }
-        std::string expr;
-        for (size_t i = 0; i < cmd.args.size(); ++i) {
-            if (i > 0) expr += " ";
-            expr += cmd.args[i];
+        // '=' splits selection from override text — same convention as :select.
+        int eqIdx = -1;
+        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
+            if (cmd.args[i] == "=") { eqIdx = i; break; }
         }
+        size_t exprEnd = (eqIdx >= 0) ? static_cast<size_t>(eqIdx) : cmd.args.size();
+        std::string expr = joinArgs(cmd.args, 0, exprEnd);
+        if (expr.empty()) return {false, "Empty selection"};
+        bool hasCustom = (eqIdx >= 0);
+        std::string customText = hasCustom ? joinArgs(cmd.args, eqIdx + 1, cmd.args.size())
+                                           : std::string();
+        if (hasCustom && customText.empty())
+            return {false, "Empty label text after '='"};
         auto sel = app.parseSelection(expr, *obj);
         if (sel.empty()) return {false, "No atoms match: " + expr};
-        // Add to label set (deduplicate)
         auto& labels = app.labelAtoms();
+        auto& textMap = app.labelText();
         for (int idx : sel.indices()) {
             bool found = false;
             for (int li : labels) { if (li == idx) { found = true; break; } }
             if (!found) labels.push_back(idx);
+            // Drop any prior override on the no-`=` path so re-labelling
+            // returns the atom to the template/default text.
+            if (hasCustom) textMap[idx] = customText;
+            else           textMap.erase(idx);
         }
+        if (hasCustom)
+            return {true, "Labeled " + std::to_string(sel.size()) +
+                          " atoms as \"" + customText + "\""};
         return {true, "Labeled " + std::to_string(sel.size()) + " atoms"};
-    }, ":label <selection|clear>", "Show residue labels on the viewport (or 'clear' to remove)",
-       {":label resi 50-60", ":label $sele", ":label clear"}, "Display");
+    }, ":label <selection|clear> [= \"text\"]",
+       "Show residue labels (default <resname><resseq>; '= text' overrides per-atom; 'clear' removes)",
+       {":label resi 50-60", ":label chain E and resi 1 = \"P1\"", ":label clear"}, "Display");
 
-    // :unlabel — remove all labels
-    cmdRegistry_.registerCmd("unlabel", [](Application& app, const ParsedCommand&) -> ExecResult {
-        app.labelAtoms().clear();
-        return {true, "Labels cleared"};
-    }, ":unlabel", "Remove all viewport labels (alias for :label clear)",
-       {":unlabel"}, "Display");
+    cmdRegistry_.registerCmd("unlabel", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) {
+            int n = static_cast<int>(app.labelAtoms().size());
+            app.labelAtoms().clear();
+            app.labelText().clear();
+            return {true, "Cleared " + std::to_string(n) + " label(s)"};
+        }
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+        std::string expr = joinArgs(cmd.args, 0, cmd.args.size());
+        auto sel = app.parseSelection(expr, *obj);
+        if (sel.empty()) return {false, "No atoms match: " + expr};
+        std::set<int> drop(sel.indices().begin(), sel.indices().end());
+        auto& labels = app.labelAtoms();
+        auto& textMap = app.labelText();
+        size_t before = labels.size();
+        labels.erase(std::remove_if(labels.begin(), labels.end(),
+                     [&](int idx) { return drop.count(idx) > 0; }),
+                     labels.end());
+        for (int idx : drop) textMap.erase(idx);
+        return {true, "Removed " + std::to_string(before - labels.size()) +
+                      " label(s)"};
+    }, ":unlabel [selection]",
+       "Remove labels (no arg: all; with selection: just those atoms)",
+       {":unlabel", ":unlabel chain E and resi 1"}, "Display");
 
     // :overlay on|off | :overlay clear
     cmdRegistry_.registerCmd("overlay", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -4827,6 +4925,7 @@ void Application::registerCommands() {
             int lc = static_cast<int>(app.labelAtoms().size());
             app.measurements().clear();
             app.labelAtoms().clear();
+            app.labelText().clear();
             return {true, "Cleared " + std::to_string(mc) + " measurements, " +
                    std::to_string(lc) + " labels"};
         }
