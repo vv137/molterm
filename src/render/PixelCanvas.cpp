@@ -552,15 +552,20 @@ void PixelCanvas::drawChar(int termX, int termY, float depth,
 }
 
 void PixelCanvas::drawText(int sx, int sy, float /* depth */,
-                           const std::string& text, int colorPair) {
+                           const std::string& text, int colorPair,
+                           int pixelHeight) {
     initFont();
     if (!font_ || !font_->ready) return;
     if (text.empty()) return;
 
     auto c = colorPairToRGB(colorPair);
 
-    // Scale font to match cell height (use ~60% of cell for ascender)
-    float fontHeight = static_cast<float>(cellPixH_) * 0.7f;
+    // pixelHeight overrides the cell-derived default — caller passes >0
+    // for overlay knobs (label/annotation font sizes). Default 0 keeps
+    // legacy behavior: ~60% of cell for ascender.
+    float fontHeight = pixelHeight > 0
+        ? static_cast<float>(pixelHeight)
+        : static_cast<float>(cellPixH_) * 0.7f;
     float scale = stbtt_ScaleForPixelHeight(&font_->info, fontHeight);
 
     int ascent = 0, descent = 0, lineGap = 0;

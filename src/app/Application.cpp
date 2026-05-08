@@ -1248,7 +1248,12 @@ void Application::handleAction(Action action) {
                     for (const auto& o : {"renderer", "backbone_thickness", "bt",
                                            "wireframe_thickness", "wt", "ball_radius", "br",
                                            "pan_speed", "ps", "fog", "outline", "outline_threshold", "ot",
-                                           "outline_darken", "od", "cartoon_helix", "ch",
+                                           "outline_darken", "od",
+                                           "label_font_size", "lfs",
+                                           "annotation_font_size", "anf",
+                                           "annotation_linewidth", "anlw",
+                                           "overlay_scale", "scale",
+                                           "cartoon_helix", "ch",
                                            "cartoon_sheet", "csh", "cartoon_loop", "cl",
                                            "cartoon_subdiv", "csd", "cartoon_aspect", "csa",
                                            "cartoon_helix_radial", "chr",
@@ -2034,7 +2039,8 @@ void Application::renderViewport() {
                 if (isPixel) {
                     auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
                     if (pc) pc->drawText(pa.sx + scaleX, pa.sy, pa.depth,
-                                         lbl, kColorWhite);
+                                         lbl, kColorWhite,
+                                         effectiveLabelFontSize());
                 } else {
                     int lx = std::min(tx + 1, w - static_cast<int>(lbl.size()));
                     win.printColored(ty, lx, lbl, kColorWhite);
@@ -2051,10 +2057,13 @@ void Application::renderViewport() {
     int scaleX = canvas_ ? canvas_->scaleX() : 1;
     int scaleY = canvas_ ? canvas_->scaleY() : 1;
 
-    // thickness: pixel-mode line thickness in sub-pixels (1-4), ignored in non-pixel
-    auto drawDashedLine = [&](float sx1, float sy1, float d1,
+    // thickness: pixel-mode line thickness in sub-pixels (driven by
+    // :set annotation_linewidth × overlay_scale); ignored in non-pixel.
+    int annoLineThick = effectiveAnnotationLineWidth();
+    auto drawDashedLine = [&, annoLineThick](float sx1, float sy1, float d1,
                               float sx2, float sy2, float d2,
-                              int color, int thickness = 2) {
+                              int color) {
+        const int thickness = annoLineThick;
         if (isPixel) {
             int isx1 = static_cast<int>(sx1), isy1 = static_cast<int>(sy1);
             int isx2 = static_cast<int>(sx2), isy2 = static_cast<int>(sy2);
@@ -2123,7 +2132,9 @@ void Application::renderViewport() {
                         if (pc) {
                             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
                             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
-                            pc->drawText(lx, ly, (d1 + d2) / 2.0f, text, kColorYellow);
+                            pc->drawText(lx, ly, (d1 + d2) / 2.0f, text,
+                                         kColorYellow,
+                                         effectiveAnnotationFontSize());
                         }
                     } else {
                         int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
@@ -2156,7 +2167,8 @@ void Application::renderViewport() {
             buildProjCache();
             const int ringR = isPixel
                 ? std::max(3, static_cast<int>(std::lround(
-                      4.0f * cameraZoomScale(tabMgr_.currentTab().camera().zoom()))))
+                      4.0f * cameraZoomScale(tabMgr_.currentTab().camera().zoom())
+                      * overlayScale_)))
                 : 0;
             // Walk projCache_ as the master cursor and advance two
             // sub-cursors (sele, pk) past anything below the current
@@ -2327,7 +2339,8 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             int isy = static_cast<int>(fsy);
             if (isx < 0 || isx >= subW || isy < 0 || isy >= subH) continue;
             std::string lbl = resolveLabel(idx);
-            pc.drawText(isx + scaleX, isy, depth, lbl, kColorWhite);
+            pc.drawText(isx + scaleX, isy, depth, lbl, kColorWhite,
+                        effectiveLabelFontSize());
         }
     }
 
@@ -2368,7 +2381,8 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
                 float sx1, sy1, d1, sx2, sy2, d2;
                 cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
                 cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
-                drawDash(sx1, sy1, d1, sx2, sy2, d2, kColorYellow, 2);
+                drawDash(sx1, sy1, d1, sx2, sy2, d2, kColorYellow,
+                         effectiveAnnotationLineWidth());
             }
             int a1 = m.atoms[0], a2 = m.atoms[1];
             if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
@@ -2378,7 +2392,8 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
-            pc.drawText(lx, ly, (d1 + d2) / 2.0f, m.displayLabel(), kColorYellow);
+            pc.drawText(lx, ly, (d1 + d2) / 2.0f, m.displayLabel(),
+                        kColorYellow, effectiveAnnotationFontSize());
         }
     }
 
@@ -2397,7 +2412,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
 
         if (selIdx || nPk > 0) {
             int ringR = std::max(3, static_cast<int>(std::lround(
-                4.0f * cameraZoomScale(cam.zoom()))));
+                4.0f * cameraZoomScale(cam.zoom()) * overlayScale_)));
             std::set<int> highlight;
             if (selIdx) highlight.insert(selIdx->begin(), selIdx->end());
             for (int i = 0; i < nPk; ++i) highlight.insert(pks[i]);
@@ -3744,6 +3759,34 @@ void Application::registerCommands() {
             app.setOutlineDarken(std::stof(cmd.args[1]));
             return {true, "Outline darken set to " + cmd.args[1]};
         }
+        if (opt == "label_font_size" || opt == "lfs") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set label_font_size <8..72>"};
+            int px = std::stoi(cmd.args[1]);
+            if (px < 8 || px > 72) return {false, "label_font_size out of range (8..72)"};
+            app.setLabelFontSize(px);
+            return {true, "label_font_size = " + std::to_string(px) + " px"};
+        }
+        if (opt == "annotation_font_size" || opt == "anf") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set annotation_font_size <8..72>"};
+            int px = std::stoi(cmd.args[1]);
+            if (px < 8 || px > 72) return {false, "annotation_font_size out of range (8..72)"};
+            app.setAnnotationFontSize(px);
+            return {true, "annotation_font_size = " + std::to_string(px) + " px"};
+        }
+        if (opt == "annotation_linewidth" || opt == "anlw") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set annotation_linewidth <1..8>"};
+            int px = std::stoi(cmd.args[1]);
+            if (px < 1 || px > 8) return {false, "annotation_linewidth out of range (1..8)"};
+            app.setAnnotationLineWidth(px);
+            return {true, "annotation_linewidth = " + std::to_string(px) + " px"};
+        }
+        if (opt == "overlay_scale" || opt == "scale") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set overlay_scale <0.5..4.0>"};
+            float s = std::stof(cmd.args[1]);
+            if (s < 0.5f || s > 4.0f) return {false, "overlay_scale out of range (0.5..4.0)"};
+            app.setOverlayScale(s);
+            return {true, "overlay_scale = " + cmd.args[1] + "x"};
+        }
         if (opt == "stereo") {
             if (cmd.args.size() < 2) return {false, "Usage: :set stereo off|walleye|crosseye|on"};
             const auto& val = cmd.args[1];
@@ -4176,6 +4219,14 @@ void Application::registerCommands() {
             return {true, "outline_threshold = " + std::to_string(app.outlineThreshold())};
         if (opt == "outline_darken" || opt == "od")
             return {true, "outline_darken = " + std::to_string(app.outlineDarken())};
+        if (opt == "label_font_size" || opt == "lfs")
+            return {true, "label_font_size = " + std::to_string(app.labelFontSize()) + " px"};
+        if (opt == "annotation_font_size" || opt == "anf")
+            return {true, "annotation_font_size = " + std::to_string(app.annotationFontSize()) + " px"};
+        if (opt == "annotation_linewidth" || opt == "anlw")
+            return {true, "annotation_linewidth = " + std::to_string(app.annotationLineWidth()) + " px"};
+        if (opt == "overlay_scale" || opt == "scale")
+            return {true, "overlay_scale = " + std::to_string(app.overlayScale()) + "x"};
         if (opt == "stereo") {
             const char* m = "off";
             if (app.stereoMode() == StereoMode::Walleye)  m = "walleye";

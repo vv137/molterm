@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
@@ -218,6 +220,29 @@ public:
     void setStereoMode(StereoMode m) { stereoMode_ = m; }
     float stereoAngle() const { return stereoAngle_; }
     void setStereoAngle(float deg) { stereoAngle_ = deg; }
+
+    // Overlay sizing — labels, measurement dashes/captions, selection rings.
+    // The cell-derived defaults render fine on small canvases but vanish at
+    // hi-DPI screenshot sizes (issue #25). Each knob has its own setting;
+    // overlayScale_ is a global multiplier applied on top.
+    int labelFontSize() const { return labelFontSize_; }
+    void setLabelFontSize(int px) { labelFontSize_ = px; }
+    int annotationFontSize() const { return annotationFontSize_; }
+    void setAnnotationFontSize(int px) { annotationFontSize_ = px; }
+    int annotationLineWidth() const { return annotationLineWidth_; }
+    void setAnnotationLineWidth(int px) { annotationLineWidth_ = px; }
+    float overlayScale() const { return overlayScale_; }
+    void setOverlayScale(float s) { overlayScale_ = s; }
+    // Pre-multiplied effective values used by the overlay renderer.
+    int effectiveLabelFontSize() const {
+        return std::max(4, static_cast<int>(std::lround(labelFontSize_ * overlayScale_)));
+    }
+    int effectiveAnnotationFontSize() const {
+        return std::max(4, static_cast<int>(std::lround(annotationFontSize_ * overlayScale_)));
+    }
+    int effectiveAnnotationLineWidth() const {
+        return std::max(1, static_cast<int>(std::lround(annotationLineWidth_ * overlayScale_)));
+    }
 
     // Recompute the inter-chain interface overlay against the current
     // object using the last-used cutoff. Returns false (and clears the
@@ -441,6 +466,10 @@ private:
     StereoMode stereoMode_ = StereoMode::Off;
     float stereoAngle_ = 6.0f;  // total parallax in degrees (eyes ±half)
     float outlineDarken_ = 0.15f;
+    int labelFontSize_ = 14;
+    int annotationFontSize_ = 14;
+    int annotationLineWidth_ = 2;
+    float overlayScale_ = 1.0f;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
 
