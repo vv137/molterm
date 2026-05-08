@@ -340,6 +340,14 @@ std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi)
 }
 }  // namespace
 
+void Application::applyBgMode(PixelCanvas& pc) const {
+    switch (bgMode_) {
+        case BgMode::Transparent: pc.setBackground(0,   0,   0,   true);  break;
+        case BgMode::White:       pc.setBackground(255, 255, 255, false); break;
+        case BgMode::Black:       pc.setBackground(0,   0,   0,   false); break;
+    }
+}
+
 std::string Application::expandScriptVars(const std::string& line) const {
     if (line.find_first_of("$\\") == std::string::npos) return line;
     std::string out;
@@ -1603,6 +1611,7 @@ void Application::renderViewport() {
 
     int w = win.width(), h = win.height();
     canvas_->resize(w, h);
+    if (auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get())) applyBgMode(*pc);
     canvas_->clear();
 
     auto& tab = tabMgr_.currentTab();
@@ -3920,6 +3929,16 @@ void Application::registerCommands() {
             app.setLabelFormat(fmt);
             return {true, "label_format = " + fmt};
         }
+        if (opt == "bg" || opt == "background_color") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set bg transparent|white|black"};
+            const std::string& v = cmd.args[1];
+            if      (v == "transparent" || v == "trans") app.setBgMode(BgMode::Transparent);
+            else if (v == "white")                        app.setBgMode(BgMode::White);
+            else if (v == "black")                        app.setBgMode(BgMode::Black);
+            else return {false, "Usage: :set bg transparent|white|black"};
+            return {true, "bg = " + v};
+        }
         return {false, "Unknown option: " + opt};
     }, ":set <option> [value]",
        "Set a runtime option (renderer, fog, outline, cartoon_*, focus_*, panel, seqbar, ...)",
@@ -3950,6 +3969,15 @@ void Application::registerCommands() {
             return {true, "label_format = " +
                           (app.labelFormat().empty() ? std::string("(default)")
                                                      : app.labelFormat())};
+        if (opt == "bg" || opt == "background_color") {
+            const char* n = "transparent";
+            switch (app.bgMode()) {
+                case BgMode::Transparent: n = "transparent"; break;
+                case BgMode::White:       n = "white";       break;
+                case BgMode::Black:       n = "black";       break;
+            }
+            return {true, std::string("bg = ") + n};
+        }
 
         if (opt == "renderer" || opt == "render") {
             const char* n = "?";
@@ -4784,7 +4812,8 @@ void Application::registerCommands() {
         };
 
         // If already in pixel mode and no explicit size was requested,
-        // grab the live framebuffer.
+        // grab the live framebuffer. The canvas already carries bgMode_
+        // since renderViewport() applies it before clear().
         if (app.rendererType() == RendererType::Pixel && reqPixW == 0) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
             if (pc && pc->savePNG(path, reqDpi))
@@ -4811,6 +4840,7 @@ void Application::registerCommands() {
             offscreen.resize(app.layout().viewportWidth(),
                              app.layout().viewportHeight());
         }
+        app.applyBgMode(offscreen);
         offscreen.clear();
 
         auto& tab = app.tabs().currentTab();
