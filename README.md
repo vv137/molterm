@@ -446,8 +446,12 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :angle [s1 s2 s3]               " Angle at s2 (no args = pk1-pk2-pk3)
 :dihedral [s1 s2 s3 s4]         " Dihedral (no args = pk1-pk4)
                                 " Args: serial number, pk1-pk4, or $selection
-:label <selection>              " Show residue labels on viewport
-:label clear                    " Remove all labels (also :unlabel)
+:label <selection>              " Show residue labels on viewport (text from
+                                "   :set label_format, default <resname><resseq>)
+:label <selection> = "<text>"   " Override the label text for matched atoms
+                                "   (e.g. :label name CA and resi 1 = "P1")
+:label clear                    " Remove all labels and overrides
+:unlabel [<selection>]          " Remove labels (no arg: all; with sel: just those)
 :overlay                        " Toggle overlay visibility (labels, measurements, sele)
 :overlay clear                  " Clear all measurements and labels
 :preset                         " Apply smart defaults (cartoon protein, ballstick ligands)
@@ -504,6 +508,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set fr|focus_radius <Å>         " Focus neighborhood cutoff (default: 5.0)
 :set fd|focus_dim <0-1>          " Focus dim strength for non-subject atoms (default: 0.55)
 :set fg|focus_granularity <g>    " residue|chain|sidechain — what gf+click expands to (default: residue)
+:set lf|label_format <fmt>       " Default :label text template (empty = <resname><resseq>)
+                                "   Tokens: {resname} {resseq}/{seqid} {chain} {name} {element} {restype}
+                                "   Example: :set lf "P{resseq}"   then  :label name CA and resi 1-10
+                                "   gives P1..P10. Per-atom :label sel = "text" overrides the template.
 :get <option>                    " Query current value of any :set option (for scripting)
 :info                           " Show atom/bond count
 :q                              " Quit
