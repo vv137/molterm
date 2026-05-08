@@ -340,6 +340,20 @@ std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi)
 }
 }  // namespace
 
+void Application::logViewState(const ParsedCommand& cmd) const {
+    if (!verbose_) return;
+    auto& tab = tabMgr_.currentTab();
+    const auto& cam = tab.camera();
+    auto obj = tab.currentObject();
+    int total = obj ? static_cast<int>(obj->atoms().size()) : 0;
+    // Width 7 = max(label_len)+1 (longest is "orient", 6) for column alignment.
+    std::fprintf(stderr,
+        "[view] %-7s -> center=(%.2f, %.2f, %.2f) zoom=%.3f pan=(%.2f, %.2f) total_atoms=%d\n",
+        cmd.name.c_str(),
+        cam.centerX(), cam.centerY(), cam.centerZ(),
+        cam.zoom(), cam.panXOffset(), cam.panYOffset(), total);
+}
+
 void Application::applyBgMode(PixelCanvas& pc) const {
     switch (bgMode_) {
         case BgMode::Transparent: pc.setBackground(0,   0,   0,   true);  break;
@@ -3317,6 +3331,7 @@ void Application::registerCommands() {
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
         std::string msg = "Centered on " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
+        app.logViewState(cmd);
         return {true, msg};
     }, ":center [selection]", "Center the view on a selection (or whole object)",
        {":center", ":center chain A", ":center resn HEM"}, "View");
@@ -3330,6 +3345,7 @@ void Application::registerCommands() {
         if (span > 0.0f) app.tabs().currentTab().camera().setZoom(40.0f / span);
         std::string msg = "Zoomed to " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
+        app.logViewState(cmd);
         return {true, msg};
     }, ":zoom [selection]", "Center and zoom to fit the selection (or whole object)",
        {":zoom", ":zoom chain A", ":zoom resi 50-80"}, "View");
@@ -3473,6 +3489,7 @@ void Application::registerCommands() {
 
         std::string msg = "Oriented " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
+        app.logViewState(cmd);
         return {true, msg};
     }, ":orient [view <vx> <vy> <vz>] [selection]",
        "Center, zoom, and align principal axes (default: view down shortest axis)",
@@ -3497,6 +3514,7 @@ void Application::registerCommands() {
         else if (axis == "y" || axis == "Y") cam.rotateY(deg);
         else if (axis == "z" || axis == "Z") cam.rotateZ(deg);
         else return {false, "Axis must be x, y, or z (got '" + axis + "')"};
+        app.logViewState(cmd);
         return {true, "Turned " + axis + " by " + std::to_string(deg) + " deg"};
     }, ":turn x|y|z <deg>", "Rotate camera around a screen axis (no PCA recompute)",
        {":turn y 90", ":turn x -45"}, "View");
@@ -3939,6 +3957,14 @@ void Application::registerCommands() {
             else return {false, "Usage: :set bg transparent|white|black"};
             return {true, "bg = " + v};
         }
+        if (opt == "verbose" || opt == "v") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set verbose on|off"};
+            auto b = parseBool(cmd.args[1]);
+            if (!b) return {false, "Usage: :set verbose on|off"};
+            app.setVerbose(*b);
+            return {true, std::string("verbose = ") + (*b ? "on" : "off")};
+        }
         return {false, "Unknown option: " + opt};
     }, ":set <option> [value]",
        "Set a runtime option (renderer, fog, outline, cartoon_*, focus_*, panel, seqbar, ...)",
@@ -3978,6 +4004,8 @@ void Application::registerCommands() {
             }
             return {true, std::string("bg = ") + n};
         }
+        if (opt == "verbose" || opt == "v")
+            return {true, std::string("verbose = ") + (app.verbose() ? "on" : "off")};
 
         if (opt == "renderer" || opt == "render") {
             const char* n = "?";
@@ -5368,6 +5396,7 @@ void Application::registerCommands() {
             (cmd.args[0] == "off" || cmd.args[0] == "none" || cmd.args[0] == "clear")) {
             if (!app.focusActive()) return {true, "Focus already off"};
             app.exitFocus();
+            app.logViewState(cmd);
             return {true, "Focus exited"};
         }
         auto obj = app.tabs().currentTab().currentObject();
@@ -5380,6 +5409,7 @@ void Application::registerCommands() {
         Selection sel = app.parseSelection(expr, *obj);
         if (sel.empty()) return {false, "Empty selection: " + expr};
         app.enterFocus(*obj, sel.indices(), expr);
+        app.logViewState(cmd);
         return {true, "Focus: " + std::to_string(sel.size()) +
                       " atoms (" + expr + ")"};
     }, ":focus <selection>|off",

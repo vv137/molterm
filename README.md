@@ -491,6 +491,10 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   transparent uses a touched-pixel mask, not a
                                 "   color heuristic, so labels and outline-darkened
                                 "   atoms stay opaque.
+:set v|verbose on|off           " Stream `[view] <cmd> -> ...` to stderr after
+                                "   :center / :zoom / :orient / :turn / :focus —
+                                "   useful for diagnosing empty-canvas screenshots
+                                "   from headless scripts.
 :set outline on|off             " Silhouette outlines
 :set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
 :set od|outline_darken <n>      " Outline darkness (default: 0.15, 0=black)

@@ -145,6 +145,11 @@ public:
     // Push the current bgMode onto a PixelCanvas before clear()/savePNG().
     void applyBgMode(class PixelCanvas& pc) const;
 
+    bool verbose() const { return verbose_; }
+    void setVerbose(bool v) { verbose_ = v; }
+    // Helps diagnose empty-canvas screenshots from headless scripts.
+    void logViewState(const struct ParsedCommand& cmd) const;
+
     // Renderer switching
     void setRenderer(RendererType type);
     RendererType rendererType() const { return rendererType_; }
@@ -354,6 +359,7 @@ private:
     std::unordered_map<std::string, std::string> scriptEnv_;
 
     BgMode bgMode_ = BgMode::Transparent;
+    bool verbose_ = false;
 
     // Labels: atom indices to render text labels for
     std::vector<int> labelAtoms_;
