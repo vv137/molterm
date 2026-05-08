@@ -292,6 +292,21 @@ comment, not two commands. `;` (outside a comment) separates commands on
 one line, useful for `:setenv`-style preamble or piping with `molterm -s -`.
 A `#` inside `"..."` or `'...'` is preserved as part of the quoted argument.
 
+**Env-var substitution:** `${NAME}` is expanded against in-process vars set
+via `:setenv NAME value`, falling through to the OS environment, with
+empty-string on unset. Use `\$` to write a literal dollar.
+
+```text
+:setenv WS  /store/casp17/H2324
+:setenv TGT H2324
+:run ${WS}/scripts/00_setup.mt
+:load ${WS}/models/top1_bt2.cif
+:screenshot ${WS}/figures/${TGT}-overview.png 1280 960
+```
+
+Expansion happens *after* `;` splits, so `:setenv X foo; :load ${X}/y` works
+in one line. `:setenv NAME` (no value) unsets; bare `:setenv` lists all.
+
 The optional 4th `screenshot` arg stamps a PNG `pHYs` chunk so LaTeX,
 Word, and image viewers know the intended physical print size — pixel
 count is unchanged, only metadata. Pick pixels = inches × DPI: a
