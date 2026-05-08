@@ -57,7 +57,8 @@ static std::string dirOfPath(const std::string& filepath) {
 std::string SessionExporter::exportPML(const std::string& filepath, const Tab& tab,
                                        int /*viewportW*/, int /*viewportH*/,
                                        StereoMode stereoMode,
-                                       float stereoAngle) {
+                                       float stereoAngle,
+                                       const std::vector<Measurement>& measurements) {
     std::ofstream out(filepath);
     if (!out.is_open())
         return "Cannot open file: " + filepath;
@@ -229,6 +230,50 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
         cx,   cy,    cz,
         50.0f, 500.0f, -1.0f);  // -1 = ortho ON
     out << buf;
+
+    // Atom indices are into the first object (PyMOL `id N` uses PDB serials).
+    if (!measurements.empty() && !tab.objects().empty()) {
+        // Escape user caption for PyMOL's "..."-quoted label argument.
+        auto escapeLabel = [](const std::string& s) {
+            std::string out;
+            out.reserve(s.size());
+            for (char c : s) {
+                if      (c == '\\') out += "\\\\";
+                else if (c == '"')  out += "\\\"";
+                else if (c == '\n' || c == '\r') out += ' ';
+                else                out += c;
+            }
+            return out;
+        };
+        const auto& obj = tab.objects().front();
+        const auto& atoms = obj->atoms();
+        const std::string& objName = obj->name();
+        out << "\n# Persistent annotations from :measure / :angle / :dihedral\n";
+        int idx = 1;
+        for (const auto& m : measurements) {
+            std::vector<int> serials;
+            bool ok = true;
+            for (int aidx : m.atoms) {
+                if (aidx < 0 || aidx >= static_cast<int>(atoms.size())) { ok = false; break; }
+                serials.push_back(atoms[aidx].serial);
+            }
+            if (!ok) continue;
+            const char* kind = nullptr;
+            if      (m.atoms.size() == 2) kind = "distance";
+            else if (m.atoms.size() == 3) kind = "angle";
+            else if (m.atoms.size() == 4) kind = "dihedral";
+            else continue;
+            out << kind << " m" << idx << ", ";
+            for (size_t i = 0; i < serials.size(); ++i) {
+                if (i) out << ", ";
+                out << objName << " and id " << serials[i];
+            }
+            out << "\n";
+            if (!m.caption.empty())
+                out << "label m" << idx << ", \"" << escapeLabel(m.caption) << "\"\n";
+            ++idx;
+        }
+    }
 
     out.close();
 
