@@ -255,8 +255,28 @@ Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool
         }
         return true;
     };
+    // Strip a trailing '#' comment, respecting single/double quotes so a '#'
+    // inside a quoted argument (e.g. a label string) is preserved.
+    auto stripComment = [](std::string& s) {
+        bool inQuote = false;
+        char qc = '\0';
+        for (size_t i = 0; i < s.size(); ++i) {
+            char c = s[i];
+            if (inQuote) {
+                if (c == qc) inQuote = false;
+            } else if (c == '"' || c == '\'') {
+                inQuote = true; qc = c;
+            } else if (c == '#') {
+                s.resize(i);
+                return;
+            }
+        }
+    };
     std::string line;
     while (std::getline(in, line)) {
+        // Strip '#' line/inline comments BEFORE splitting on ';' so a ';' inside
+        // a comment is not interpreted as a command separator.
+        stripComment(line);
         // Split on ';' so multiple commands fit on one line (shell-style).
         size_t pos = 0;
         while (pos <= line.size()) {
