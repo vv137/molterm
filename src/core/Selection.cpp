@@ -675,6 +675,38 @@ private:
                 return Selection::all(totalAtoms_);
             return Selection({}, "obj " + objName);  // empty if no match
         }
+        if (kwLower == "imgt") {
+            // imgt <region> — IMGT-canonical CDR/FR ranges (issue #36).
+            // Assumes the chain is already IMGT-numbered (e.g. by an
+            // upstream ANARCI pass). Combine with `chain X` to scope to
+            // a single chain: `chain A and imgt cdr3`.
+            //
+            // Standard IMGT numbering (imgt.org):
+            //   FR1   1-26      CDR1  27-38     FR2   39-55
+            //   CDR2  56-65     FR3   66-104    CDR3  105-117
+            //   FR4   118-128
+            // CDR ranges cover both heavy/light antibody chains and
+            // TCR α/β chains identically.
+            std::string region;
+            if (current_.type == Token::Word) {
+                region = current_.value;
+                std::transform(region.begin(), region.end(), region.begin(), ::tolower);
+                advance();
+            }
+            int lo = 0, hi = 0;
+            if      (region == "fr1")  { lo = 1;   hi = 26;  }
+            else if (region == "cdr1") { lo = 27;  hi = 38;  }
+            else if (region == "fr2")  { lo = 39;  hi = 55;  }
+            else if (region == "cdr2") { lo = 56;  hi = 65;  }
+            else if (region == "fr3")  { lo = 66;  hi = 104; }
+            else if (region == "cdr3") { lo = 105; hi = 117; }
+            else if (region == "fr4")  { lo = 118; hi = 128; }
+            else return Selection({}, "imgt " + region);  // unknown region → empty
+            return Selection::fromPredicate(mol_,
+                [lo, hi](int, const AtomData& a) {
+                    return a.resSeq >= lo && a.resSeq <= hi;
+                }, "imgt " + region);
+        }
         if (kwLower == "within" || kwLower == "exwithin") {
             // within N of <subselection>   — atoms within N Å of subselection
             // exwithin N of <subselection> — same, minus the subselection
