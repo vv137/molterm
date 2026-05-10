@@ -653,6 +653,115 @@ void PixelCanvas::drawTextRGB(int sx, int sy, float /* depth */,
     }
 }
 
+void PixelCanvas::drawTextOutlinedRGB(int sx, int sy, float /* depth */,
+                                      const std::string& text,
+                                      uint8_t fr, uint8_t fg, uint8_t fb,
+                                      uint8_t outR, uint8_t outG, uint8_t outB,
+                                      int outlineThickness,
+                                      int pixelHeight) {
+    if (outlineThickness <= 0) {
+        drawTextRGB(sx, sy, 0.0f, text, fr, fg, fb, pixelHeight);
+        return;
+    }
+    initFont();
+    if (!font_ || !font_->ready) return;
+    if (text.empty()) return;
+
+    float fontHeight = pixelHeight > 0
+        ? static_cast<float>(pixelHeight)
+        : static_cast<float>(cellPixH_) * 0.7f;
+    float scale = stbtt_ScaleForPixelHeight(&font_->info, fontHeight);
+
+    int ascent = 0, descent = 0, lineGap = 0;
+    stbtt_GetFontVMetrics(&font_->info, &ascent, &descent, &lineGap);
+    int baseline = sy + static_cast<int>(static_cast<float>(ascent) * scale);
+
+    float xpos = static_cast<float>(sx);
+    const int t = outlineThickness;
+
+    auto blitPixel = [&](int px, int py, uint8_t cr, uint8_t cg, uint8_t cb,
+                         unsigned char alpha) {
+        if (alpha == 0 || !inBounds(px, py)) return;
+        size_t idx = (static_cast<size_t>(py) * pixW_ + px) * 3;
+        if (alpha >= 240) {
+            rgb_[idx]     = cr;
+            rgb_[idx + 1] = cg;
+            rgb_[idx + 2] = cb;
+        } else {
+            float a = static_cast<float>(alpha) / 255.0f;
+            float inv = 1.0f - a;
+            rgb_[idx]     = static_cast<uint8_t>(cr * a + rgb_[idx]     * inv);
+            rgb_[idx + 1] = static_cast<uint8_t>(cg * a + rgb_[idx + 1] * inv);
+            rgb_[idx + 2] = static_cast<uint8_t>(cb * a + rgb_[idx + 2] * inv);
+        }
+    };
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        int ch = static_cast<unsigned char>(text[i]);
+
+        int advance = 0, lsb = 0;
+        stbtt_GetCodepointHMetrics(&font_->info, ch, &advance, &lsb);
+
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        stbtt_GetCodepointBitmapBox(&font_->info, ch, scale, scale, &x0, &y0, &x1, &y1);
+
+        int gw = x1 - x0, gh = y1 - y0;
+        if (gw > 0 && gh > 0) {
+            std::vector<unsigned char> bitmap(static_cast<size_t>(gw) * gh);
+            stbtt_MakeCodepointBitmap(&font_->info, bitmap.data(), gw, gh, gw,
+                                       scale, scale, ch);
+
+            // Halo pass: dilate the glyph alpha by `t` (Chebyshev). For
+            // each output pixel inside the dilated bbox, take max alpha
+            // within the t-neighborhood; that's the rim intensity.
+            // Subtract the body alpha so we don't double-paint where
+            // the main glyph is about to land — keeps the body color
+            // crisp instead of muddied by halo color.
+            int gx = static_cast<int>(xpos) + x0;
+            int gy = baseline + y0;
+            for (int row = -t; row < gh + t; ++row) {
+                for (int col = -t; col < gw + t; ++col) {
+                    unsigned char dilated = 0;
+                    for (int dy = -t; dy <= t && dilated < 255; ++dy) {
+                        int sr = row + dy;
+                        if (sr < 0 || sr >= gh) continue;
+                        for (int dx = -t; dx <= t; ++dx) {
+                            int sc = col + dx;
+                            if (sc < 0 || sc >= gw) continue;
+                            unsigned char a = bitmap[sr * gw + sc];
+                            if (a > dilated) dilated = a;
+                        }
+                    }
+                    if (dilated == 0) continue;
+                    unsigned char body = 0;
+                    if (row >= 0 && row < gh && col >= 0 && col < gw)
+                        body = bitmap[row * gw + col];
+                    if (dilated > body) {
+                        blitPixel(gx + col, gy + row, outR, outG, outB,
+                                  static_cast<unsigned char>(dilated - body));
+                    }
+                }
+            }
+            // Body pass: paint the glyph in its native color on top.
+            for (int row = 0; row < gh; ++row) {
+                for (int col = 0; col < gw; ++col) {
+                    unsigned char a = bitmap[row * gw + col];
+                    if (a == 0) continue;
+                    blitPixel(gx + col, gy + row, fr, fg, fb, a);
+                }
+            }
+        }
+
+        xpos += static_cast<float>(advance) * scale;
+
+        if (i + 1 < text.size()) {
+            int kern = stbtt_GetCodepointKernAdvance(&font_->info, ch,
+                static_cast<unsigned char>(text[i + 1]));
+            xpos += static_cast<float>(kern) * scale;
+        }
+    }
+}
+
 // ── Post-processing ─────────────────────────────────────────────────────────
 
 void PixelCanvas::applyOutline(float threshold, float darken,
