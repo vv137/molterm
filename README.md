@@ -619,6 +619,35 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   annotation_linewidth, and the $sele/pk yellow rings
                                 "   (default: 1.0, range: 0.5..4.0). Quick toggle between
                                 "   rough (1.0) and hi-DPI (2.0) renders.
+:set label_color <c>            " Color for :label text. Accepts named (red, white,
+                                "   black, salmon, slate, …), hex (#RRGGBB / #RGB),
+                                "   or rgb(R,G,B). Default: white. Set to `default`
+                                "   (or `clear` / `auto` / `off`) to revert.
+                                "   Pixel mode only — ncurses fallback uses palette.
+:set annotation_color <c>       " Color for :measure / :angle / :dihedral captions.
+                                "   Same color spec as label_color. Default: yellow.
+:set measurement_line_color <c>  " Color for :measure / :angle / :dihedral dashed lines.
+                                "   Same color spec. Default: yellow. Independent of
+                                "   the caption color so a dim line + bright caption
+                                "   pairing (or vice versa) is one knob away.
+:set outline_color <c>          " Color used by silhouette / both outline modes.
+                                "   Same color spec. Default: black (which is what
+                                "   `darken` happens to converge to). Honored by
+                                "   silhouette + both modes; ignored by edge mode.
+:set outline_mode edge|silhouette|both
+                                " Outline post-pass behavior:
+                                "     edge        — legacy behavior; darken edge pixels
+                                "                   by `outline_darken`. Works on light
+                                "                   bg; invisible on dark bg (darken-
+                                "                   of-black is still black).
+                                "     silhouette  — paint silhouette pixels a fixed
+                                "                   color (outline_color). Closes the
+                                "                   dark-bg gap — pair with a light
+                                "                   outline_color for a Mariuzza-style
+                                "                   light rim on a dark hero figure.
+                                "     both        — silhouette paint + edge darken;
+                                "                   colored rim with subtle interior
+                                "                   depth-edge darkening on top.
 :get <option>                    " Query current value of any :set option (for scripting)
 :set / :set all                  " (no value) Print every queryable option's
                                 "   current value, one per line — Vim parity for

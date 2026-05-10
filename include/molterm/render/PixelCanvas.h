@@ -3,6 +3,7 @@
 #include "molterm/render/Canvas.h"
 #include "molterm/render/DepthBuffer.h"
 #include "molterm/render/GraphicsEncoder.h"
+#include "molterm/render/OutlineMode.h"
 
 #include <cstdint>
 #include <memory>
@@ -62,6 +63,17 @@ public:
     void drawText(int sx, int sy, float depth,
                   const std::string& text, int colorPair,
                   int pixelHeight = 0);
+    // Same as drawText but paints with an explicit RGB instead of looking
+    // up a palette pair — used by overlay knobs that accept arbitrary
+    // colors (`:set label_color "#222"`, etc., issue #30).
+    void drawTextRGB(int sx, int sy, float depth,
+                     const std::string& text,
+                     uint8_t r, uint8_t g, uint8_t b,
+                     int pixelHeight = 0);
+    // Direct-RGB twin of drawDot — for overlay primitives that accept
+    // arbitrary colors (`:set measurement_line_color`).
+    void drawDotRGB(int sx, int sy, float depth,
+                    uint8_t r, uint8_t g, uint8_t b);
 
     // Access framebuffer (for post-processing like depth fog)
     uint8_t* rgbData() { return rgb_.data(); }
@@ -72,8 +84,12 @@ public:
     // Depth buffer access (for post-processing)
     const DepthBuffer& depthBuffer() const { return zbuf_; }
 
-    // Apply silhouette outline: darken pixels at depth discontinuities
-    void applyOutline(float threshold = 0.3f, float darken = 0.15f);
+    // Apply silhouette outline: darken pixels at depth discontinuities.
+    // See molterm::OutlineMode in render/OutlineMode.h for mode semantics.
+    // (r,g,b) ignored when mode == OutlineMode::Edge.
+    void applyOutline(float threshold = 0.3f, float darken = 0.15f,
+                      OutlineMode mode = OutlineMode::Edge,
+                      uint8_t r = 0, uint8_t g = 0, uint8_t b = 0);
 
     // Apply depth fog: blend pixels toward fogColor based on depth.
     void applyDepthFog(float strength = 0.35f,
@@ -177,7 +193,10 @@ private:
     // Set a pixel in the RGB buffer
     void setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b);
 
-    // Color pair → RGB conversion
+public:
+    // Color pair → RGB conversion. Public so :set label_color /
+    // annotation_color etc. can resolve named colors via the same table
+    // the renderer uses internally.
     struct RGB { uint8_t r, g, b; };
     static RGB colorPairToRGB(int colorPair);
 };

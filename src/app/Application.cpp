@@ -365,6 +365,11 @@ inline constexpr const char* kSetOptionsLong[] = {
     "outline",
     "outline_threshold",
     "outline_darken",
+    "outline_mode",
+    "outline_color",
+    "label_color",
+    "annotation_color",
+    "measurement_line_color",
     "label_font_size",
     "annotation_font_size",
     "annotation_linewidth",
@@ -483,6 +488,21 @@ std::optional<std::array<uint8_t, 3>> parseHexColor(std::string s) {
         return std::array<uint8_t, 3>{static_cast<uint8_t>((rh << 4) | rl),
                                       static_cast<uint8_t>((gh << 4) | gl),
                                       static_cast<uint8_t>((bh << 4) | bl)};
+    }
+    return std::nullopt;
+}
+
+// Resolve a color spec — named ("red", "white"), hex ("#RRGGBB", "#RGB"),
+// or rgb(R,G,B) — to an RGB triple. Used by :set label_color /
+// annotation_color / measurement_line_color / outline_color so all four
+// share one accept-list and stay in sync.
+std::optional<std::array<uint8_t, 3>> parseColorSpec(const std::string& s) {
+    if (s.empty()) return std::nullopt;
+    if (auto rgb = parseHexColor(s)) return rgb;
+    int pair = ColorMapper::colorByName(s);
+    if (pair > 0) {
+        auto rgb = PixelCanvas::colorPairToRGB(pair);
+        return std::array<uint8_t, 3>{rgb.r, rgb.g, rgb.b};
     }
     return std::nullopt;
 }
@@ -1930,7 +1950,11 @@ void Application::renderViewport() {
     if (rendererType_ == RendererType::Pixel) {
         auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
         if (pc) {
-            if (outlineEnabled_) pc->applyOutline(outlineThreshold_, outlineDarken_);
+            if (outlineEnabled_) {
+                uint8_t r = 0, g = 0, b = 0;
+                if (outlineColor_) { r = (*outlineColor_)[0]; g = (*outlineColor_)[1]; b = (*outlineColor_)[2]; }
+                pc->applyOutline(outlineThreshold_, outlineDarken_, outlineMode_, r, g, b);
+            }
             if (fogStrength_ > 0.0f) pc->applyDepthFog(fogStrength_);
 
             // Focus-dim: prefer the interface mask when active, fall back
@@ -2167,9 +2191,17 @@ void Application::renderViewport() {
                 std::string lbl = resolveLabel(pa.idx);
                 if (isPixel) {
                     auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
-                    if (pc) pc->drawText(pa.sx + scaleX, pa.sy, pa.depth,
+                    if (pc) {
+                        if (auto& lc = labelColor_) {
+                            pc->drawTextRGB(pa.sx + scaleX, pa.sy, pa.depth,
+                                            lbl, (*lc)[0], (*lc)[1], (*lc)[2],
+                                            effectiveLabelFontSize());
+                        } else {
+                            pc->drawText(pa.sx + scaleX, pa.sy, pa.depth,
                                          lbl, kColorWhite,
                                          effectiveLabelFontSize());
+                        }
+                    }
                 } else {
                     int lx = std::min(tx + 1, w - static_cast<int>(lbl.size()));
                     win.printColored(ty, lx, lbl, kColorWhite);
@@ -2189,6 +2221,10 @@ void Application::renderViewport() {
     // thickness: pixel-mode line thickness in sub-pixels (driven by
     // :set annotation_linewidth × overlay_scale); ignored in non-pixel.
     int annoLineThick = effectiveAnnotationLineWidth();
+    // measurementLineColor_ overrides the legacy palette color in pixel
+    // mode (issue #30); ncurses fallback always uses the palette `color`.
+    PixelCanvas* pixelCanvas = isPixel ? dynamic_cast<PixelCanvas*>(canvas_.get()) : nullptr;
+    const std::optional<ColorRGB>& mlc = measurementLineColor_;
     auto drawDashedLine = [&, annoLineThick](float sx1, float sy1, float d1,
                               float sx2, float sy2, float d2,
                               int color) {
@@ -2211,7 +2247,11 @@ void Application::renderViewport() {
                         for (int dx = 0; dx < thickness; ++dx) {
                             int px = x + dx - thickness / 2;
                             int py = y + dy - thickness / 2;
-                            if (px >= 0 && px < subW && py >= 0 && py < subH)
+                            if (px < 0 || px >= subW || py < 0 || py >= subH) continue;
+                            if (mlc && pixelCanvas)
+                                pixelCanvas->drawDotRGB(px, py, depth,
+                                                        (*mlc)[0], (*mlc)[1], (*mlc)[2]);
+                            else
                                 canvas_->drawDot(px, py, depth, color);
                         }
                     }
@@ -2261,9 +2301,13 @@ void Application::renderViewport() {
                         if (pc) {
                             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
                             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
-                            pc->drawText(lx, ly, (d1 + d2) / 2.0f, text,
-                                         kColorYellow,
-                                         effectiveAnnotationFontSize());
+                            float depth = (d1 + d2) / 2.0f;
+                            int fsize = effectiveAnnotationFontSize();
+                            if (auto& ac = annotationColor_)
+                                pc->drawTextRGB(lx, ly, depth, text,
+                                                (*ac)[0], (*ac)[1], (*ac)[2], fsize);
+                            else
+                                pc->drawText(lx, ly, depth, text, kColorYellow, fsize);
                         }
                     } else {
                         int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
@@ -2468,13 +2512,19 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             int isy = static_cast<int>(fsy);
             if (isx < 0 || isx >= subW || isy < 0 || isy >= subH) continue;
             std::string lbl = resolveLabel(idx);
-            pc.drawText(isx + scaleX, isy, depth, lbl, kColorWhite,
-                        effectiveLabelFontSize());
+            if (auto& lc = labelColor_)
+                pc.drawTextRGB(isx + scaleX, isy, depth, lbl,
+                               (*lc)[0], (*lc)[1], (*lc)[2],
+                               effectiveLabelFontSize());
+            else
+                pc.drawText(isx + scaleX, isy, depth, lbl, kColorWhite,
+                            effectiveLabelFontSize());
         }
     }
 
     // Measurement dashed lines + midpoint distance/angle/dihedral labels.
     if (!measurements_.empty()) {
+        const auto& mlc = measurementLineColor_;
         auto drawDash = [&](float sx1, float sy1, float d1,
                             float sx2, float sy2, float d2,
                             int color, int thickness) {
@@ -2493,8 +2543,10 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
                         for (int dx = 0; dx < thickness; ++dx) {
                             int px = x + dx - thickness / 2;
                             int py = y + dy - thickness / 2;
-                            if (px >= 0 && px < subW && py >= 0 && py < subH)
-                                pc.drawDot(px, py, depth, color);
+                            if (px < 0 || px >= subW || py < 0 || py >= subH) continue;
+                            if (mlc) pc.drawDotRGB(px, py, depth,
+                                                   (*mlc)[0], (*mlc)[1], (*mlc)[2]);
+                            else     pc.drawDot(px, py, depth, color);
                         }
                     }
                 }
@@ -2521,8 +2573,13 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
-            pc.drawText(lx, ly, (d1 + d2) / 2.0f, m.displayLabel(),
-                        kColorYellow, effectiveAnnotationFontSize());
+            float depth = (d1 + d2) / 2.0f;
+            int fsize = effectiveAnnotationFontSize();
+            if (auto& ac = annotationColor_)
+                pc.drawTextRGB(lx, ly, depth, m.displayLabel(),
+                               (*ac)[0], (*ac)[1], (*ac)[2], fsize);
+            else
+                pc.drawText(lx, ly, depth, m.displayLabel(), kColorYellow, fsize);
         }
     }
 
@@ -3937,6 +3994,48 @@ void Application::registerCommands() {
             app.setOverlayScale(s);
             return {true, "overlay_scale = " + cmd.args[1] + "x"};
         }
+        // ── Overlay color knobs (issues #30, #31) ──
+        // Each takes a color spec (named, #hex, or rgb(R,G,B)). Setting
+        // to "default" / "auto" / "" clears the override so the renderer
+        // falls back to the legacy constant (white for labels, yellow
+        // for annotation captions / measurement lines, depth darken for
+        // outlines).
+        auto applyColorOpt = [&](const char* name,
+                                 void (Application::*setter)(std::optional<Application::ColorRGB>))
+            -> std::optional<ExecResult> {
+            if (opt != name) return std::nullopt;
+            if (cmd.args.size() < 2)
+                return ExecResult{false, std::string("Usage: :set ") + name + " <named|#RRGGBB|rgb(R,G,B)|default>"};
+            // Rejoin in case rgb(R,G,B) was comma-split by the parser.
+            std::string v;
+            for (size_t i = 1; i < cmd.args.size(); ++i) {
+                if (i > 1) v += ',';
+                v += cmd.args[i];
+            }
+            if (v == "default" || v == "auto" || v == "off" || v == "clear") {
+                (app.*setter)(std::nullopt);
+                return ExecResult{true, std::string(name) + " reset to default"};
+            }
+            auto rgb = parseColorSpec(v);
+            if (!rgb) return ExecResult{false, std::string("Bad color: ") + v};
+            (app.*setter)(*rgb);
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "#%02X%02X%02X", (*rgb)[0], (*rgb)[1], (*rgb)[2]);
+            return ExecResult{true, std::string(name) + " = " + buf};
+        };
+        if (auto r = applyColorOpt("label_color",            &Application::setLabelColor))           return *r;
+        if (auto r = applyColorOpt("annotation_color",       &Application::setAnnotationColor))      return *r;
+        if (auto r = applyColorOpt("measurement_line_color", &Application::setMeasurementLineColor)) return *r;
+        if (auto r = applyColorOpt("outline_color",          &Application::setOutlineColor))         return *r;
+        if (opt == "outline_mode") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set outline_mode edge|silhouette|both"};
+            const std::string& v = cmd.args[1];
+            if      (v == "edge")       app.setOutlineMode(OutlineMode::Edge);
+            else if (v == "silhouette") app.setOutlineMode(OutlineMode::Silhouette);
+            else if (v == "both")       app.setOutlineMode(OutlineMode::Both);
+            else return {false, "Usage: :set outline_mode edge|silhouette|both"};
+            return {true, "outline_mode = " + v};
+        }
         if (opt == "stereo") {
             if (cmd.args.size() < 2) return {false, "Usage: :set stereo off|walleye|crosseye|on"};
             const auto& val = cmd.args[1];
@@ -4396,6 +4495,26 @@ void Application::registerCommands() {
             return {true, "annotation_linewidth = " + std::to_string(app.annotationLineWidth()) + " px"};
         if (opt == "overlay_scale" || opt == "scale")
             return {true, "overlay_scale = " + std::to_string(app.overlayScale()) + "x"};
+        auto fmtColor = [](const std::optional<Application::ColorRGB>& c, const char* dflt) {
+            if (!c) return std::string(dflt);
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "#%02X%02X%02X", (*c)[0], (*c)[1], (*c)[2]);
+            return std::string(buf);
+        };
+        if (opt == "label_color")
+            return {true, "label_color = " + fmtColor(app.labelColor(), "default (white)")};
+        if (opt == "annotation_color")
+            return {true, "annotation_color = " + fmtColor(app.annotationColor(), "default (yellow)")};
+        if (opt == "measurement_line_color")
+            return {true, "measurement_line_color = " + fmtColor(app.measurementLineColor(), "default (yellow)")};
+        if (opt == "outline_color")
+            return {true, "outline_color = " + fmtColor(app.outlineColor(), "default (depth-darken)")};
+        if (opt == "outline_mode") {
+            const char* m = "edge";
+            if (app.outlineMode() == OutlineMode::Silhouette) m = "silhouette";
+            if (app.outlineMode() == OutlineMode::Both)       m = "both";
+            return {true, std::string("outline_mode = ") + m};
+        }
         if (opt == "stereo") {
             const char* m = "off";
             if (app.stereoMode() == StereoMode::Walleye)  m = "walleye";
@@ -5407,7 +5526,12 @@ void Application::registerCommands() {
         }
         app.restoreStereoCamera(savedScreenshotRot);
 
-        if (app.outlineEnabled()) offscreen.applyOutline(app.outlineThreshold(), app.outlineDarken());
+        if (app.outlineEnabled()) {
+            uint8_t r = 0, g = 0, b = 0;
+            if (auto& oc = app.outlineColor()) { r = (*oc)[0]; g = (*oc)[1]; b = (*oc)[2]; }
+            offscreen.applyOutline(app.outlineThreshold(), app.outlineDarken(),
+                                   app.outlineMode(), r, g, b);
+        }
         if (app.fogStrength() > 0.0f)
             offscreen.applyDepthFog(app.fogStrength());
 

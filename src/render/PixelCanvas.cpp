@@ -157,6 +157,17 @@ void PixelCanvas::drawDot(int sx, int sy, float depth, int colorPair) {
     claimPixel(static_cast<size_t>(sy) * pixW_ + sx, colorPair, activeAtomIdx_, activeAlpha_);
 }
 
+void PixelCanvas::drawDotRGB(int sx, int sy, float depth,
+                             uint8_t r, uint8_t g, uint8_t b) {
+    if (!inBounds(sx, sy)) return;
+    if (!depthOk(sx, sy, depth)) return;
+    if (depth < zMin_) zMin_ = depth;
+    if (depth > zMax_) zMax_ = depth;
+    writePixel(sx, sy, r, g, b);
+    // No colorIds_ claim — overlay primitives shouldn't participate in
+    // outline/fog post-passes (they'd self-darken the dashed line).
+}
+
 void PixelCanvas::drawLine(int x0, int y0, float d0,
                             int x1, int y1, float d1, int colorPair) {
     // Shaded line: interpolate depth along line, apply subtle intensity variation.
@@ -551,14 +562,22 @@ void PixelCanvas::drawChar(int termX, int termY, float depth,
     drawText(sx, sy, depth, buf, colorPair);
 }
 
-void PixelCanvas::drawText(int sx, int sy, float /* depth */,
+void PixelCanvas::drawText(int sx, int sy, float depth,
                            const std::string& text, int colorPair,
                            int pixelHeight) {
+    auto c = colorPairToRGB(colorPair);
+    drawTextRGB(sx, sy, depth, text, c.r, c.g, c.b, pixelHeight);
+}
+
+void PixelCanvas::drawTextRGB(int sx, int sy, float /* depth */,
+                              const std::string& text,
+                              uint8_t r, uint8_t g, uint8_t b,
+                              int pixelHeight) {
     initFont();
     if (!font_ || !font_->ready) return;
     if (text.empty()) return;
 
-    auto c = colorPairToRGB(colorPair);
+    RGB c{r, g, b};
 
     // pixelHeight overrides the cell-derived default — caller passes >0
     // for overlay knobs (label/annotation font sizes). Default 0 keeps
@@ -636,9 +655,13 @@ void PixelCanvas::drawText(int sx, int sy, float /* depth */,
 
 // ── Post-processing ─────────────────────────────────────────────────────────
 
-void PixelCanvas::applyOutline(float threshold, float darken) {
+void PixelCanvas::applyOutline(float threshold, float darken,
+                               OutlineMode mode,
+                               uint8_t silR, uint8_t silG, uint8_t silB) {
     if (pixW_ <= 0 || pixH_ <= 0) return;
     if (zMax_ <= zMin_) return;
+    const bool doSilhouette = (mode == OutlineMode::Silhouette || mode == OutlineMode::Both);
+    const bool doDarken     = (mode == OutlineMode::Edge       || mode == OutlineMode::Both);
 
     float range = zMax_ - zMin_;
     // Two thresholds: strong edges (silhouette) and subtle edges (nearby overlap)
@@ -690,6 +713,13 @@ void PixelCanvas::applyOutline(float threshold, float darken) {
 
             if (maxLevel > 0) {
                 size_t pi = idx * 3;
+                // Silhouette: paint strong-edge centers with the fixed
+                // color so dark backgrounds get a visible rim.
+                if (doSilhouette && onEdge && maxLevel == 2) {
+                    rgb_[pi] = silR; rgb_[pi + 1] = silG; rgb_[pi + 2] = silB;
+                    continue;
+                }
+                if (!doDarken) continue;
                 float d;
                 if (onEdge && maxLevel == 2)
                     d = darken;                          // strong edge center: darkest
