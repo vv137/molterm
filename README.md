@@ -306,6 +306,7 @@ syntax only; scripts pass each line straight to the command registry:
 # render.mt — example settings file
 screenshot out.png 2048 2048       # up to 8192×8192
 screenshot out.png 1800 1200 300   # 6×4 in @ 300 DPI for journals
+set sm relative                    # rough/final renders match (issue #48)
 set csd 24                         # cartoon spline subdivisions  (def 14)
 set ch  1.6                        # helix half-width  Å           (def 1.30)
 set csh 1.8                        # sheet half-width  Å           (def 1.50)
@@ -666,6 +667,38 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   annotation_linewidth, and the $sele/pk yellow rings
                                 "   (default: 1.0, range: 0.5..4.0). Quick toggle between
                                 "   rough (1.0) and hi-DPI (2.0) renders.
+:set sm|size_mode <mode>         " How label / annotation / arrow sizes scale across
+                                "   different render resolutions:
+                                "     pixels    — (default) raw screen pixels. lfs 22 is
+                                "                 always 22 px; rough vs final renders look
+                                "                 like different figures because labels
+                                "                 occupy a different fraction of the canvas.
+                                "                 Back-compatible.
+                                "     physical  — interpret sizes as point sizes (1 pt =
+                                "                 live_dpi/72 px). :screenshot W H DPI
+                                "                 then auto-rescales by DPI/live_dpi so
+                                "                 lfs 22 prints at ~22 pt regardless of
+                                "                 the screenshot's DPI metadata. Closer to
+                                "                 how scientific journals expect figure
+                                "                 sizing to work.
+                                "     relative  — interpret sizes as "pixels at
+                                "                 reference_canvas_height tall canvas".
+                                "                 :screenshot W H rescales by
+                                "                 canvasH/refH so labels stay the same
+                                "                 fraction of the figure across resolutions
+                                "                 — a 1280x960 rough render and a 2400x1800
+                                "                 final render show the same figure.
+                                "   Recommended workflow: set once near the top of a
+                                "   figure script (e.g. :set sm relative) and keep the
+                                "   same lfs / anf for both rough and final :screenshot.
+:set reference_canvas_height <h> " Canvas height (px) at which `lfs N`/`anf N` mean N
+                                "   pixels under size_mode = relative. Default: 1080
+                                "   (range: 240..8192). Larger value = labels shrink
+                                "   relative to the figure at the same lfs.
+:set live_dpi <d>                " DPI assumed for the live render under
+                                "   size_mode = physical. Default: 96 (range: 36..600).
+                                "   Affects only the auto-rescale ratio; live label
+                                "   pixel size is still lfs * overlay_scale.
 :set label_color <c>            " Color for :label text. Accepts named (red, white,
                                 "   black, salmon, slate, …), hex (#RRGGBB / #RGB),
                                 "   or rgb(R,G,B). Default: white. Set to `default`
