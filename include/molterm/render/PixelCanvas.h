@@ -70,6 +70,18 @@ public:
                      const std::string& text,
                      uint8_t r, uint8_t g, uint8_t b,
                      int pixelHeight = 0);
+    // Outlined variant: paints a contrasting halo around each glyph
+    // before the body color, so labels stay legible against varied
+    // foregrounds (issue #49). The halo is computed by per-glyph alpha
+    // dilation (Chebyshev) of radius `outlineThickness`, blitted in
+    // (outR,outG,outB) at the rim's effective alpha. With
+    // outlineThickness <= 0 this degrades to a plain drawTextRGB call.
+    void drawTextOutlinedRGB(int sx, int sy, float depth,
+                             const std::string& text,
+                             uint8_t fr, uint8_t fg, uint8_t fb,
+                             uint8_t outR, uint8_t outG, uint8_t outB,
+                             int outlineThickness,
+                             int pixelHeight = 0);
     // Direct-RGB twin of drawDot — for overlay primitives that accept
     // arbitrary colors (`:set measurement_line_color`).
     void drawDotRGB(int sx, int sy, float depth,

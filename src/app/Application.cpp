@@ -372,6 +372,12 @@ inline constexpr const char* kSetOptionsLong[] = {
     "annotation_color",
     "measurement_line_color",
     "arrow_color",
+    "label_outline",
+    "label_outline_color",
+    "label_outline_thickness",
+    "annotation_outline",
+    "annotation_outline_color",
+    "annotation_outline_thickness",
     "arrow_thickness",
     "arrow_head_size",
     "label_font_size",
@@ -2267,17 +2273,7 @@ void Application::renderViewport() {
                 std::string lbl = resolveLabel(pa.idx);
                 if (isPixel) {
                     auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
-                    if (pc) {
-                        if (auto& lc = labelColor_) {
-                            pc->drawTextRGB(pa.sx + scaleX, pa.sy, pa.depth,
-                                            lbl, (*lc)[0], (*lc)[1], (*lc)[2],
-                                            effectiveLabelFontSize());
-                        } else {
-                            pc->drawText(pa.sx + scaleX, pa.sy, pa.depth,
-                                         lbl, kColorWhite,
-                                         effectiveLabelFontSize());
-                        }
-                    }
+                    if (pc) paintLabelText(*pc, pa.sx + scaleX, pa.sy, pa.depth, lbl);
                 } else {
                     int lx = std::min(tx + 1, w - static_cast<int>(lbl.size()));
                     win.printColored(ty, lx, lbl, kColorWhite);
@@ -2378,12 +2374,7 @@ void Application::renderViewport() {
                             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
                             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
                             float depth = (d1 + d2) / 2.0f;
-                            int fsize = effectiveAnnotationFontSize();
-                            if (auto& ac = annotationColor_)
-                                pc->drawTextRGB(lx, ly, depth, text,
-                                                (*ac)[0], (*ac)[1], (*ac)[2], fsize);
-                            else
-                                pc->drawText(lx, ly, depth, text, kColorYellow, fsize);
+                            paintAnnotationText(*pc, lx, ly, depth, text);
                         }
                     } else {
                         int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
@@ -2586,7 +2577,6 @@ void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
         }
     };
 
-    int captionFsize = effectiveAnnotationFontSize();
     for (const auto& arr : arrows_) {
         float fxa, fya, fda, fxb, fyb, fdb;
         cam.projectCached(arr.a[0], arr.a[1], arr.a[2], fxa, fya, fda);
@@ -2638,12 +2628,7 @@ void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
         if (!arr.caption.empty()) {
             int mx = (x1 + x2) / 2;
             int my = (y1 + y2) / 2;
-            if (auto& ac = annotationColor_)
-                pc.drawTextRGB(mx, my, (fda + fdb) * 0.5f, arr.caption,
-                               (*ac)[0], (*ac)[1], (*ac)[2], captionFsize);
-            else
-                pc.drawText(mx, my, (fda + fdb) * 0.5f, arr.caption,
-                            kColorYellow, captionFsize);
+            paintAnnotationText(pc, mx, my, (fda + fdb) * 0.5f, arr.caption);
         }
     }
 }
@@ -2655,11 +2640,7 @@ void Application::drawFreeLabelsPixel(PixelCanvas& pc, int subW, int subH,
     // Inset corner labels by one font-height so they don't kiss the edge.
     int inset = std::max(4, fsize / 2);
     auto paint = [&](int sx, int sy, float depth, const std::string& text) {
-        if (auto& lc = labelColor_)
-            pc.drawTextRGB(sx, sy, depth, text,
-                           (*lc)[0], (*lc)[1], (*lc)[2], fsize);
-        else
-            pc.drawText(sx, sy, depth, text, kColorWhite, fsize);
+        paintLabelText(pc, sx, sy, depth, text);
     };
     for (const auto& fl : freeLabels_) {
         int sx = 0, sy = 0;
@@ -2697,6 +2678,36 @@ void Application::drawFreeLabelsPixel(PixelCanvas& pc, int subW, int subH,
     }
 }
 
+void Application::paintLabelText(PixelCanvas& pc, int sx, int sy, float depth,
+                                  const std::string& text) {
+    uint8_t r = 255, g = 255, b = 255;          // default white
+    if (labelColor_) { r = (*labelColor_)[0]; g = (*labelColor_)[1]; b = (*labelColor_)[2]; }
+    int fsize = effectiveLabelFontSize();
+    if (!labelOutline_ || labelOutlineThickness_ <= 0) {
+        pc.drawTextRGB(sx, sy, depth, text, r, g, b, fsize);
+        return;
+    }
+    auto oc = labelOutlineColor_.value_or(autoOutlineColor(r, g, b));
+    pc.drawTextOutlinedRGB(sx, sy, depth, text, r, g, b,
+                           oc[0], oc[1], oc[2],
+                           labelOutlineThickness_, fsize);
+}
+
+void Application::paintAnnotationText(PixelCanvas& pc, int sx, int sy, float depth,
+                                       const std::string& text) {
+    uint8_t r = 255, g = 255, b = 50;           // default yellow
+    if (annotationColor_) { r = (*annotationColor_)[0]; g = (*annotationColor_)[1]; b = (*annotationColor_)[2]; }
+    int fsize = effectiveAnnotationFontSize();
+    if (!annotationOutline_ || annotationOutlineThickness_ <= 0) {
+        pc.drawTextRGB(sx, sy, depth, text, r, g, b, fsize);
+        return;
+    }
+    auto oc = annotationOutlineColor_.value_or(autoOutlineColor(r, g, b));
+    pc.drawTextOutlinedRGB(sx, sy, depth, text, r, g, b,
+                           oc[0], oc[1], oc[2],
+                           annotationOutlineThickness_, fsize);
+}
+
 void Application::drawPixelOverlay(PixelCanvas& pc) {
     if (!overlayVisible_) return;
     auto& tab = tabMgr_.currentTab();
@@ -2728,13 +2739,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             int isy = static_cast<int>(fsy);
             if (isx < 0 || isx >= subW || isy < 0 || isy >= subH) continue;
             std::string lbl = resolveLabel(idx);
-            if (auto& lc = labelColor_)
-                pc.drawTextRGB(isx + scaleX, isy, depth, lbl,
-                               (*lc)[0], (*lc)[1], (*lc)[2],
-                               effectiveLabelFontSize());
-            else
-                pc.drawText(isx + scaleX, isy, depth, lbl, kColorWhite,
-                            effectiveLabelFontSize());
+            paintLabelText(pc, isx + scaleX, isy, depth, lbl);
         }
     }
 
@@ -2790,12 +2795,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
             float depth = (d1 + d2) / 2.0f;
-            int fsize = effectiveAnnotationFontSize();
-            if (auto& ac = annotationColor_)
-                pc.drawTextRGB(lx, ly, depth, m.displayLabel(),
-                               (*ac)[0], (*ac)[1], (*ac)[2], fsize);
-            else
-                pc.drawText(lx, ly, depth, m.displayLabel(), kColorYellow, fsize);
+            paintAnnotationText(pc, lx, ly, depth, m.displayLabel());
         }
     }
 
@@ -4212,11 +4212,50 @@ void Application::registerCommands() {
             std::snprintf(buf, sizeof(buf), "#%02X%02X%02X", (*rgb)[0], (*rgb)[1], (*rgb)[2]);
             return ExecResult{true, std::string(name) + " = " + buf};
         };
-        if (auto r = applyColorOpt("label_color",            &Application::setLabelColor))           return *r;
-        if (auto r = applyColorOpt("annotation_color",       &Application::setAnnotationColor))      return *r;
-        if (auto r = applyColorOpt("measurement_line_color", &Application::setMeasurementLineColor)) return *r;
-        if (auto r = applyColorOpt("outline_color",          &Application::setOutlineColor))         return *r;
-        if (auto r = applyColorOpt("arrow_color",            &Application::setArrowColor))           return *r;
+        if (auto r = applyColorOpt("label_color",                &Application::setLabelColor))             return *r;
+        if (auto r = applyColorOpt("annotation_color",           &Application::setAnnotationColor))        return *r;
+        if (auto r = applyColorOpt("measurement_line_color",     &Application::setMeasurementLineColor))   return *r;
+        if (auto r = applyColorOpt("outline_color",              &Application::setOutlineColor))           return *r;
+        if (auto r = applyColorOpt("arrow_color",                &Application::setArrowColor))             return *r;
+        if (auto r = applyColorOpt("label_outline_color",        &Application::setLabelOutlineColor))      return *r;
+        if (auto r = applyColorOpt("annotation_outline_color",   &Application::setAnnotationOutlineColor)) return *r;
+        // ── Text outline / halo (issue #49) ──
+        // on/off toggle + thickness for the contrasting halo around
+        // label and annotation glyphs. Auto-color picks white-on-dark /
+        // black-on-light against the body color when *outline_color is
+        // unset, so the toggle alone is usually enough.
+        if (opt == "label_outline") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set label_outline on|off"};
+            auto on = parseBool(cmd.args[1]);
+            if (!on) return {false, "Usage: :set label_outline on|off"};
+            app.setLabelOutline(*on);
+            return {true, std::string("label_outline = ") + (*on ? "on" : "off")};
+        }
+        if (opt == "label_outline_thickness") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set label_outline_thickness <1..6>"};
+            int t = std::stoi(cmd.args[1]);
+            if (t < 1 || t > 6)
+                return {false, "label_outline_thickness out of range (1..6)"};
+            app.setLabelOutlineThickness(t);
+            return {true, "label_outline_thickness = " + std::to_string(t)};
+        }
+        if (opt == "annotation_outline") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set annotation_outline on|off"};
+            auto on = parseBool(cmd.args[1]);
+            if (!on) return {false, "Usage: :set annotation_outline on|off"};
+            app.setAnnotationOutline(*on);
+            return {true, std::string("annotation_outline = ") + (*on ? "on" : "off")};
+        }
+        if (opt == "annotation_outline_thickness") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set annotation_outline_thickness <1..6>"};
+            int t = std::stoi(cmd.args[1]);
+            if (t < 1 || t > 6)
+                return {false, "annotation_outline_thickness out of range (1..6)"};
+            app.setAnnotationOutlineThickness(t);
+            return {true, "annotation_outline_thickness = " + std::to_string(t)};
+        }
         if (opt == "arrow_thickness" || opt == "at") {
             if (cmd.args.size() < 2) return {false, "Usage: :set arrow_thickness <1..10>"};
             int t = std::stoi(cmd.args[1]);
@@ -4725,6 +4764,18 @@ void Application::registerCommands() {
             return {true, "outline_color = " + fmtColor(app.outlineColor(), "default (depth-darken)")};
         if (opt == "arrow_color")
             return {true, "arrow_color = " + fmtColor(app.arrowColor(), "default (yellow)")};
+        if (opt == "label_outline")
+            return {true, std::string("label_outline = ") + (app.labelOutline() ? "on" : "off")};
+        if (opt == "label_outline_thickness")
+            return {true, "label_outline_thickness = " + std::to_string(app.labelOutlineThickness())};
+        if (opt == "label_outline_color")
+            return {true, "label_outline_color = " + fmtColor(app.labelOutlineColor(), "auto (contrast)")};
+        if (opt == "annotation_outline")
+            return {true, std::string("annotation_outline = ") + (app.annotationOutline() ? "on" : "off")};
+        if (opt == "annotation_outline_thickness")
+            return {true, "annotation_outline_thickness = " + std::to_string(app.annotationOutlineThickness())};
+        if (opt == "annotation_outline_color")
+            return {true, "annotation_outline_color = " + fmtColor(app.annotationOutlineColor(), "auto (contrast)")};
         if (opt == "arrow_thickness" || opt == "at")
             return {true, "arrow_thickness = " + std::to_string(app.arrowThickness())};
         if (opt == "arrow_head_size" || opt == "ahs")

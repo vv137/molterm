@@ -276,19 +276,43 @@ public:
     // bogus, so callers don't have to special-case those.
     float computeRenderScale(int canvasHeight, int dpi) const;
 
+    // Text outline / halo for label and annotation legibility (issue #49).
+    // When enabled, drawTextOutlinedRGB paints a `*OutlineThickness_`-wide
+    // halo around each glyph in `*OutlineColor_` before the body color, so
+    // text reads cleanly against any background. Auto color (nullopt)
+    // picks white-on-dark / black-on-light against the body color.
+    bool labelOutline() const { return labelOutline_; }
+    void setLabelOutline(bool on) { labelOutline_ = on; }
+    int labelOutlineThickness() const { return labelOutlineThickness_; }
+    void setLabelOutlineThickness(int t) { labelOutlineThickness_ = t; }
+    bool annotationOutline() const { return annotationOutline_; }
+    void setAnnotationOutline(bool on) { annotationOutline_ = on; }
+    int annotationOutlineThickness() const { return annotationOutlineThickness_; }
+    void setAnnotationOutlineThickness(int t) { annotationOutlineThickness_ = t; }
+
     // Custom overlay colors (issue #30, #31). Each is std::optional —
     // unset means "use the legacy default color constant" (white for
     // labels, yellow for annotation captions / measurement lines, plain
     // darken for outlines). Set via :set <kind>_color <named|#hex|rgb()>.
     using ColorRGB = std::array<uint8_t, 3>;
-    const std::optional<ColorRGB>& labelColor()           const { return labelColor_; }
-    const std::optional<ColorRGB>& annotationColor()      const { return annotationColor_; }
-    const std::optional<ColorRGB>& measurementLineColor() const { return measurementLineColor_; }
-    const std::optional<ColorRGB>& outlineColor()         const { return outlineColor_; }
-    void setLabelColor(std::optional<ColorRGB> c)           { labelColor_           = c; }
-    void setAnnotationColor(std::optional<ColorRGB> c)      { annotationColor_      = c; }
-    void setMeasurementLineColor(std::optional<ColorRGB> c) { measurementLineColor_ = c; }
-    void setOutlineColor(std::optional<ColorRGB> c)         { outlineColor_         = c; }
+    const std::optional<ColorRGB>& labelColor()                 const { return labelColor_; }
+    const std::optional<ColorRGB>& annotationColor()            const { return annotationColor_; }
+    const std::optional<ColorRGB>& measurementLineColor()       const { return measurementLineColor_; }
+    const std::optional<ColorRGB>& outlineColor()               const { return outlineColor_; }
+    const std::optional<ColorRGB>& labelOutlineColor()          const { return labelOutlineColor_; }
+    const std::optional<ColorRGB>& annotationOutlineColor()     const { return annotationOutlineColor_; }
+    void setLabelColor(std::optional<ColorRGB> c)             { labelColor_             = c; }
+    void setAnnotationColor(std::optional<ColorRGB> c)        { annotationColor_        = c; }
+    void setMeasurementLineColor(std::optional<ColorRGB> c)   { measurementLineColor_   = c; }
+    void setOutlineColor(std::optional<ColorRGB> c)           { outlineColor_           = c; }
+    void setLabelOutlineColor(std::optional<ColorRGB> c)      { labelOutlineColor_      = c; }
+    void setAnnotationOutlineColor(std::optional<ColorRGB> c) { annotationOutlineColor_ = c; }
+    // Pick the auto outline color from a body color: white on dark
+    // bodies, black on light bodies. Used when *OutlineColor_ is unset.
+    static ColorRGB autoOutlineColor(uint8_t r, uint8_t g, uint8_t b) {
+        int luma = (r * 299 + g * 587 + b * 114) / 1000;
+        return luma < 128 ? ColorRGB{255, 255, 255} : ColorRGB{0, 0, 0};
+    }
     OutlineMode outlineMode() const { return outlineMode_; }
     void setOutlineMode(OutlineMode m) { outlineMode_ = m; }
     // Pre-multiplied effective values used by the overlay renderer. The
@@ -636,6 +660,12 @@ private:
     std::optional<std::array<uint8_t, 3>> annotationColor_;
     std::optional<std::array<uint8_t, 3>> measurementLineColor_;
     std::optional<std::array<uint8_t, 3>> outlineColor_;
+    std::optional<std::array<uint8_t, 3>> labelOutlineColor_;
+    std::optional<std::array<uint8_t, 3>> annotationOutlineColor_;
+    bool labelOutline_ = false;
+    int  labelOutlineThickness_ = 2;
+    bool annotationOutline_ = false;
+    int  annotationOutlineThickness_ = 2;
     OutlineMode outlineMode_ = OutlineMode::Edge;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
@@ -669,6 +699,14 @@ private:
     // pixel branch and by `:screenshot` so offscreen exports include the
     // same overlays the user sees on screen. Camera projection must be
     // prepared for `pc`'s pixel space before calling.
+    // Label/annotation text dispatch — resolves color (override or default
+    // white/yellow), outline (labelOutline_ / annotationOutline_), and
+    // font size in one place so the half-dozen overlay call sites don't
+    // each re-implement the if-color-else-default + outline branch.
+    void paintLabelText(class PixelCanvas& pc, int sx, int sy, float depth,
+                        const std::string& text);
+    void paintAnnotationText(class PixelCanvas& pc, int sx, int sy, float depth,
+                             const std::string& text);
     void drawPixelOverlay(class PixelCanvas& pc);
     // Render free-position labels (corner / screen / world anchors). Split
     // out so the object-less early-return in drawPixelOverlay can still

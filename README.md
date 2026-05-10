@@ -714,6 +714,32 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   Same color spec. Default: black (which is what
                                 "   `darken` happens to converge to). Honored by
                                 "   silhouette + both modes; ignored by edge mode.
+:set label_outline on|off        " Halo (text outline) for :label glyphs (issue #49,
+                                "   default off). When on, drawTextOutlinedRGB
+                                "   paints a contrasting rim around each glyph
+                                "   before the body color, so labels stay legible
+                                "   against any local pixel — coloured atoms,
+                                "   ribbon interior, dark/light bg. Pixel mode
+                                "   only — ncurses fallback ignores it.
+:set label_outline_color <c>    " Halo color. Same spec as label_color (named,
+                                "   #RRGGBB, rgb(R,G,B), or `default` to clear).
+                                "   When unset (default), molterm picks
+                                "   white-on-dark / black-on-light against the
+                                "   body color so the toggle alone is usually
+                                "   enough.
+:set label_outline_thickness <px>
+                                " Halo radius in pixels (default: 2, range: 1..6).
+                                "   Computed as a Chebyshev (square) dilation of
+                                "   the glyph alpha mask, so thickness 1 reads
+                                "   as a one-pixel ring even on small text.
+:set annotation_outline on|off   " Halo for :measure / :angle / :dihedral
+                                "   captions and arrow captions (default off).
+                                "   Same auto-color logic as label_outline.
+:set annotation_outline_color <c>
+                                " Halo color for annotation glyphs. Same spec.
+:set annotation_outline_thickness <px>
+                                " Halo radius for annotation glyphs (default: 2,
+                                "   range: 1..6).
 :set outline_mode edge|silhouette|both
                                 " Outline post-pass behavior:
                                 "     edge        — legacy behavior; darken edge pixels
