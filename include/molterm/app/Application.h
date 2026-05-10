@@ -434,6 +434,15 @@ public:
     // currently-loaded object: per-atom override → labelFormat_ → default.
     std::string resolveLabel(int atomIdx) const;
     std::vector<Measurement>& measurements() { return measurements_; }
+    // Drop every per-atom label + every measurement/angle/dihedral entry.
+    // Shared by `:overlay clear` and `:run --fresh`; keeping them in lockstep
+    // here means a future overlay-list addition (e.g. arrows, axes) is wired
+    // into both call sites by editing one method instead of two.
+    void clearOverlayAnnotations() {
+        measurements_.clear();
+        labelAtoms_.clear();
+        labelText_.clear();
+    }
     bool overlayVisible_ = true;
 
     // Wipe both transient selection overlays at once: `$sele` and the
