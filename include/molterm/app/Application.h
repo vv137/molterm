@@ -22,6 +22,7 @@
 #include "molterm/input/KeymapManager.h"
 #include "molterm/render/Canvas.h"
 #include "molterm/render/ColorMapper.h"
+#include "molterm/render/OutlineMode.h"
 #include "molterm/render/ProtocolPicker.h"
 #include "molterm/render/StereoMode.h"
 #include "molterm/render/ZoomGate.h"
@@ -72,6 +73,8 @@ enum class RendererType {
 //                 `:set bg "rgb(R,G,B)"`. Always opaque; for transparency
 //                 use BgMode::Transparent.
 enum class BgMode { Transparent, White, Black, Custom };
+// OutlineMode lives in molterm/render/OutlineMode.h — included via Canvas.h
+// transitively. App-layer code uses the unqualified name `OutlineMode`.
 
 class Application {
 public:
@@ -250,6 +253,22 @@ public:
     void setAnnotationLineWidth(int px) { annotationLineWidth_ = px; }
     float overlayScale() const { return overlayScale_; }
     void setOverlayScale(float s) { overlayScale_ = s; }
+
+    // Custom overlay colors (issue #30, #31). Each is std::optional —
+    // unset means "use the legacy default color constant" (white for
+    // labels, yellow for annotation captions / measurement lines, plain
+    // darken for outlines). Set via :set <kind>_color <named|#hex|rgb()>.
+    using ColorRGB = std::array<uint8_t, 3>;
+    const std::optional<ColorRGB>& labelColor()           const { return labelColor_; }
+    const std::optional<ColorRGB>& annotationColor()      const { return annotationColor_; }
+    const std::optional<ColorRGB>& measurementLineColor() const { return measurementLineColor_; }
+    const std::optional<ColorRGB>& outlineColor()         const { return outlineColor_; }
+    void setLabelColor(std::optional<ColorRGB> c)           { labelColor_           = c; }
+    void setAnnotationColor(std::optional<ColorRGB> c)      { annotationColor_      = c; }
+    void setMeasurementLineColor(std::optional<ColorRGB> c) { measurementLineColor_ = c; }
+    void setOutlineColor(std::optional<ColorRGB> c)         { outlineColor_         = c; }
+    OutlineMode outlineMode() const { return outlineMode_; }
+    void setOutlineMode(OutlineMode m) { outlineMode_ = m; }
     // Pre-multiplied effective values used by the overlay renderer.
     int effectiveLabelFontSize() const {
         return std::max(4, static_cast<int>(std::lround(labelFontSize_ * overlayScale_)));
@@ -497,6 +516,11 @@ private:
     int annotationFontSize_ = 14;
     int annotationLineWidth_ = 2;
     float overlayScale_ = 1.0f;
+    std::optional<std::array<uint8_t, 3>> labelColor_;
+    std::optional<std::array<uint8_t, 3>> annotationColor_;
+    std::optional<std::array<uint8_t, 3>> measurementLineColor_;
+    std::optional<std::array<uint8_t, 3>> outlineColor_;
+    OutlineMode outlineMode_ = OutlineMode::Edge;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
 
