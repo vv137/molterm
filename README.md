@@ -242,8 +242,15 @@ the call and let USalign do the matching.
 After `:loadalign` (or any multi-load), per-object commands (`:color`,
 `:show`, `:hide`, the hotkey repr toggles, `:zoom`, `:center`, `:orient`)
 fan out across **every loaded object** by default. PyMOL semantics: a
-bare selection is interpreted per-object; narrow with `obj <name>` or
-the slash form `/objname/...`.
+bare selection is interpreted per-object; narrow it with one of:
+
+- **`obj <name>` keyword** — `chain E and obj model` (anywhere in the expression).
+- **Slash form** `/objname/chain/resi/name` — `:color red /1abc/A//CA` (legacy).
+- **Object-qualified parens** `<objname>/(<expr>)` (issue #37) — most readable
+  for nested expressions: `:zoom 1ubq/(chain A and resi 50-80)`. Wildcard form
+  `all/(<expr>)` and `*/(<expr>)` is symmetric to a bare `(<expr>)` but explicit
+  about the intent. PDB-style digit-led names (`1ubq`, `7tcr`) work as the
+  object qualifier without quoting.
 
 `:zoom` / `:center` / `:orient` also skip `:disable`d objects in
 broadcast mode — a disabled crystal reference loaded alongside a model
@@ -255,7 +262,10 @@ disabled object explicitly.
 :loadalign relaxed_model_*.pdb              " load + superpose 5 models
 :color rainbow                              " all 5 colored rainbow
 :color red, obj 1ubq                        " just one object
-:color blue, /relaxed_model_3/A//           " chain A of one specific model
+:color blue, /relaxed_model_3/A//           " chain A of one specific model (slash form)
+:show ballstick model/(chain E)             " obj-qualified parens — only the named object
+:hide cartoon crystal/(chain *)             " hide cartoon for everything in `crystal`
+:color magenta model/(chain E and resi 7)   " arbitrary expression inside the parens
 :zoom chain A                               " camera frames the union of chain A across all 5
 ```
 

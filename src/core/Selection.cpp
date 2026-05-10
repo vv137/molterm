@@ -144,6 +144,26 @@ class Tokenizer {
 public:
     explicit Tokenizer(const std::string& input) : input_(input), pos_(0) {}
 
+    // Save / restore lookahead state so the parser can probe a multi-
+    // token pattern (e.g. <word>/<lparen> for object-qualified forms)
+    // and back out cheaply when it doesn't match.
+    struct Pos { size_t pos; size_t lastStart; };
+    Pos savePos() const { return {pos_, lastStart_}; }
+    void rewind(Pos p) { pos_ = p.pos; lastStart_ = p.lastStart; }
+
+    // True iff the current bareword (digit-led names like "1ubq" included)
+    // is immediately followed by "/(". Used by the obj/(...) form because
+    // "1ubq" splits into Number+Word and a token-level peek would only
+    // see the Word, missing the slash beyond.
+    bool peekObjSlashLParen() const {
+        size_t p = lastStart_;
+        while (p < input_.size() &&
+               (std::isalnum(static_cast<unsigned char>(input_[p])) ||
+                input_[p] == '_' || input_[p] == '*' ||
+                input_[p] == '-' || input_[p] == '.')) ++p;
+        return p + 1 < input_.size() && input_[p] == '/' && input_[p + 1] == '(';
+    }
+
     Token next() {
         skipWhitespace();
         lastStart_ = pos_;
@@ -410,6 +430,26 @@ private:
         if (current_.type == Token::Slash) {
             advance();
             return parseSlash();
+        }
+
+        // Object-qualified parenthesized form: <objname>/(<expr>) (issue #37).
+        // Reads more naturally than `(<expr>) and obj <name>` for figure
+        // scripts that need to disambiguate two objects sharing chain ids.
+        // Wildcard "all/(<expr>)" / "*/(<expr>)" matches every loaded object.
+        // Use the input-level peek (peekObjSlashLParen) because PDB-style
+        // names like "1ubq" tokenize as Number "1" + Word "ubq" — the
+        // token-level lookahead would only see the Word and miss the slash.
+        if ((current_.type == Token::Word || current_.type == Token::Number) &&
+            tokenizer_.peekObjSlashLParen()) {
+            std::string objName = tokenizer_.readObjName();
+            advance();   // refresh current_ — should be Slash
+            advance();   // consume Slash → LParen
+            advance();   // consume LParen
+            Selection inner = parseOr();
+            match(Token::RParen);
+            bool wildcard = (objName == "all" || objName == "*");
+            if (wildcard || mol_.name() == objName) return inner;
+            return Selection({}, objName + "/(...)");
         }
 
         // Parentheses
