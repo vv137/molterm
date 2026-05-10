@@ -518,6 +518,25 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   without picking a specific atom.
                                 "   All free-label forms honor :set label_color and
                                 "   :set label_font_size; supported in pixel mode.
+
+" ── Persistent solid arrows / axes (issue #38) ───────────────────
+" Distinct from :measure (dashed + auto distance) — a solid arrow with
+" a triangular head reads as "this is an axis vector", which is what
+" you want for the principal axis of a domain, the V-V axis of a TCR,
+" or any directional annotation. Endpoints persist as world coords;
+" atom-anchored arrows resolve once and don't re-track if atoms move
+" (re-issue after :align).
+:arrow <s1> <s2> [= "text"]      " Arrow from atom serial s1 to s2.
+:arrow $regA $regB [= "text"]    " Arrow between two vec3-typed registers
+                                "   (set via :let — see #32, #35).
+:axis $pcaReg [= "text"]         " Major axis (axis1) of a pca-result
+                                "   register, centered on its centroid,
+                                "   length = ±1σ (√eigval) along that axis.
+                                "   Composes naturally with `:let G = pca(<sel>)`.
+:set arrow_color <c>             " Same color spec as label_color. Default: yellow.
+:set arrow_thickness|at <n>      " Shaft pixel thickness, 1..10 (default: 2).
+:set arrow_head_size|ahs <n>     " Arrowhead length in pixels, 2..32 (default: 8).
+                                "   All three knobs scale by :set overlay_scale.
 :label <selection> = "<text>"   " Override the label text for matched atoms
                                 "   (e.g. :label name CA and resi 1 = "P1")
 :label clear                    " Remove all labels and overrides
