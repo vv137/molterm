@@ -468,6 +468,25 @@ private:
     };
     std::vector<Measurement> measurements_;
 
+    // Free-position labels — text not anchored to an atom (issue #34).
+    // Three anchor modes:
+    //   Corner : pinned to a viewport corner with a small inset.
+    //   Screen : normalised viewport coords (fx, fy) ∈ [0, 1].
+    //   World  : explicit 3D position projected through the camera each
+    //            frame so the label tracks rotation/zoom.
+public:
+    enum class FreeLabelAnchor { Corner, Screen, World };
+    enum class FreeLabelCorner { TopLeft, TopRight, BottomLeft, BottomRight };
+    struct FreeLabel {
+        FreeLabelAnchor anchor = FreeLabelAnchor::Corner;
+        FreeLabelCorner corner = FreeLabelCorner::TopLeft;
+        float fx = 0.0f, fy = 0.0f;
+        float wx = 0.0f, wy = 0.0f, wz = 0.0f;
+        std::string text;
+    };
+private:
+    std::vector<FreeLabel> freeLabels_;
+
 public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
     std::vector<int>& labelAtoms() { return labelAtoms_; }
@@ -478,6 +497,11 @@ public:
     // currently-loaded object: per-atom override → labelFormat_ → default.
     std::string resolveLabel(int atomIdx) const;
     std::vector<Measurement>& measurements() { return measurements_; }
+    // Free-label storage — type defined above near `freeLabels_` so the
+    // member declaration order satisfies "use after declaration" inside
+    // the class body.
+    std::vector<FreeLabel>& freeLabels() { return freeLabels_; }
+    const std::vector<FreeLabel>& freeLabels() const { return freeLabels_; }
     // Drop every per-atom label + every measurement/angle/dihedral entry.
     // Shared by `:overlay clear` and `:run --fresh`; keeping them in lockstep
     // here means a future overlay-list addition (e.g. arrows, axes) is wired
@@ -486,6 +510,7 @@ public:
         measurements_.clear();
         labelAtoms_.clear();
         labelText_.clear();
+        freeLabels_.clear();
     }
     bool overlayVisible_ = true;
 
@@ -561,6 +586,12 @@ private:
     // same overlays the user sees on screen. Camera projection must be
     // prepared for `pc`'s pixel space before calling.
     void drawPixelOverlay(class PixelCanvas& pc);
+    // Render free-position labels (corner / screen / world anchors). Split
+    // out so the object-less early-return in drawPixelOverlay can still
+    // emit them, and so the screenshot path picks them up via the same
+    // call. Uses labelColor_ + effectiveLabelFontSize() like atom labels.
+    void drawFreeLabelsPixel(class PixelCanvas& pc, int subW, int subH,
+                             class Camera& cam);
 
     // Set up the camera + projection for one eye of a stereoscopic render.
     // eyePass = 0 → left half, 1 → right half. With stereoMode_ == Off it

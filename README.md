@@ -506,6 +506,18 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   carrying the optional caption).
 :label <selection>              " Show residue labels on viewport (text from
                                 "   :set label_format, default <resname><resseq>)
+:label corner <pos> = "text"     " Free-position label pinned to a viewport corner.
+                                "   <pos>: topleft|topright|bottomleft|bottomright
+                                "   (or short tl/tr/bl/br). Inset by ~half the label
+                                "   font height from the edge.
+:label screen <fx> <fy> = "text" " Free label at normalised viewport coords
+                                "   (0,0) = top-left, (1,1) = bottom-right.
+:label world <x> <y> <z> = "text" " Free label at an explicit 3D position; tracks
+                                "   the camera so the label rotates with the model.
+                                "   Useful for annotating an active site location
+                                "   without picking a specific atom.
+                                "   All free-label forms honor :set label_color and
+                                "   :set label_font_size; supported in pixel mode.
 :label <selection> = "<text>"   " Override the label text for matched atoms
                                 "   (e.g. :label name CA and resi 1 = "P1")
 :label clear                    " Remove all labels and overrides

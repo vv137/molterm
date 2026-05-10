@@ -2536,15 +2536,69 @@ void Application::restoreStereoCamera(const std::array<float, 9>& savedRot) {
     tabMgr_.currentTab().camera().setRotation(savedRot);
 }
 
+void Application::drawFreeLabelsPixel(PixelCanvas& pc, int subW, int subH,
+                                       Camera& cam) {
+    if (freeLabels_.empty()) return;
+    int fsize = effectiveLabelFontSize();
+    // Inset corner labels by one font-height so they don't kiss the edge.
+    int inset = std::max(4, fsize / 2);
+    auto paint = [&](int sx, int sy, float depth, const std::string& text) {
+        if (auto& lc = labelColor_)
+            pc.drawTextRGB(sx, sy, depth, text,
+                           (*lc)[0], (*lc)[1], (*lc)[2], fsize);
+        else
+            pc.drawText(sx, sy, depth, text, kColorWhite, fsize);
+    };
+    for (const auto& fl : freeLabels_) {
+        int sx = 0, sy = 0;
+        // Depth = 0 places free labels in front of all geometry (smaller
+        // depth wins under reverse-z; matches how atom labels are layered
+        // after fog/dim post-passes).
+        float depth = 0.0f;
+        switch (fl.anchor) {
+            case FreeLabelAnchor::Corner: {
+                int approxW = static_cast<int>(fl.text.size()) * fsize / 2;
+                switch (fl.corner) {
+                    case FreeLabelCorner::TopLeft:     sx = inset;            sy = inset;          break;
+                    case FreeLabelCorner::TopRight:    sx = subW - inset - approxW; sy = inset;    break;
+                    case FreeLabelCorner::BottomLeft:  sx = inset;            sy = subH - inset - fsize; break;
+                    case FreeLabelCorner::BottomRight: sx = subW - inset - approxW; sy = subH - inset - fsize; break;
+                }
+                break;
+            }
+            case FreeLabelAnchor::Screen:
+                sx = static_cast<int>(fl.fx * subW);
+                sy = static_cast<int>(fl.fy * subH);
+                break;
+            case FreeLabelAnchor::World: {
+                float fsx, fsy, fdepth;
+                cam.projectCached(fl.wx, fl.wy, fl.wz, fsx, fsy, fdepth);
+                sx = static_cast<int>(fsx);
+                sy = static_cast<int>(fsy);
+                depth = fdepth;
+                break;
+            }
+        }
+        if (sx < -static_cast<int>(fl.text.size()) * fsize ||
+            sy < -fsize || sx >= subW || sy >= subH) continue;
+        paint(sx, sy, depth, fl.text);
+    }
+}
+
 void Application::drawPixelOverlay(PixelCanvas& pc) {
     if (!overlayVisible_) return;
     auto& tab = tabMgr_.currentTab();
+    int subW = pc.subW();
+    int subH = pc.subH();
+
+    // Free-position labels first — they don't need an object loaded, so a
+    // figure with only a corner caption still renders.
+    drawFreeLabelsPixel(pc, subW, subH, tab.camera());
+
     auto obj = tab.currentObject();
     if (!obj || !obj->visible()) return;
     auto& cam = tab.camera();
     const auto& atoms = obj->atoms();
-    int subW = pc.subW();
-    int subH = pc.subH();
     int scaleX = pc.scaleX();
 
     // Residue labels — text rendered in white next to each labeled atom.
@@ -5749,14 +5803,56 @@ void Application::registerCommands() {
        {":preset"}, "Display");
 
     cmdRegistry_.registerCmd("label", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
-        if (cmd.args.empty()) return {false, "Usage: :label <selection> [= \"text\"] or :label clear"};
+        if (cmd.args.empty())
+            return {false, "Usage: :label <sel|corner CORNER|screen FX FY|world X Y Z> [= \"text\"] or :label clear"};
         if (cmd.args[0] == "clear") {
             app.labelAtoms().clear();
             app.labelText().clear();
+            app.freeLabels().clear();
             return {true, "Labels cleared"};
         }
+        // Free-position labels (issue #34): three anchor modes that don't
+        // bind to an atom. All three use the `= "text"` convention to
+        // separate anchor args from the label string.
+        if (cmd.args[0] == "corner" || cmd.args[0] == "screen" || cmd.args[0] == "world") {
+            auto [anchorArgs, text] = splitAtEqToken(cmd.args);
+            if (text.empty())
+                return {false, "Free-position labels require '= \"text\"' suffix"};
+            FreeLabel fl;
+            fl.text = text;
+            const std::string& mode = anchorArgs[0];
+            if (mode == "corner") {
+                if (anchorArgs.size() < 2)
+                    return {false, "Usage: :label corner topleft|topright|bottomleft|bottomright = \"text\""};
+                fl.anchor = FreeLabelAnchor::Corner;
+                const std::string& which = anchorArgs[1];
+                if      (which == "topleft" || which == "tl")     fl.corner = FreeLabelCorner::TopLeft;
+                else if (which == "topright" || which == "tr")    fl.corner = FreeLabelCorner::TopRight;
+                else if (which == "bottomleft" || which == "bl")  fl.corner = FreeLabelCorner::BottomLeft;
+                else if (which == "bottomright" || which == "br") fl.corner = FreeLabelCorner::BottomRight;
+                else return {false, "Bad corner: " + which};
+            } else if (mode == "screen") {
+                if (anchorArgs.size() < 3)
+                    return {false, "Usage: :label screen <fx> <fy> = \"text\""};
+                fl.anchor = FreeLabelAnchor::Screen;
+                try { fl.fx = std::stof(anchorArgs[1]); fl.fy = std::stof(anchorArgs[2]); }
+                catch (...) { return {false, "Bad screen coords"}; }
+            } else {  // world
+                if (anchorArgs.size() < 4)
+                    return {false, "Usage: :label world <x> <y> <z> = \"text\""};
+                fl.anchor = FreeLabelAnchor::World;
+                try {
+                    fl.wx = std::stof(anchorArgs[1]);
+                    fl.wy = std::stof(anchorArgs[2]);
+                    fl.wz = std::stof(anchorArgs[3]);
+                } catch (...) { return {false, "Bad world coords"}; }
+            }
+            app.freeLabels().push_back(std::move(fl));
+            return {true, "Added free-position label"};
+        }
+        // Atom-anchored labels (legacy default).
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
         // '=' splits selection from override text — same convention as :select.
         auto [exprArgs, customText] = splitAtEqToken(cmd.args);
         std::string expr = joinArgs(exprArgs, 0, exprArgs.size());
