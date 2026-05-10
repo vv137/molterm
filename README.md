@@ -529,11 +529,18 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                  "   crosseye = the user crosses their eyes.
 :set stereo_angle <deg>         " Parallax angle (total, eyes ±half), default 6
 :set fog <0-1>                  " Depth fog strength (default: 0.35)
-:set bg|background_color <m>    " transparent (default) | white | black
+:set bg|background_color <m>    " transparent (default) | white | black |
+                                "   "#RRGGBB" | "#RGB" | "rgb(R,G,B)"
+                                "   Named modes (transparent/white/black) and
+                                "   arbitrary opaque RGB triples are both accepted —
+                                "   a slate-grey publication background is
+                                "   `:set bg "#202020"` or `:set bg "rgb(32,32,32)"`.
                                 "   Honored in --no-tui and stable across sizes;
                                 "   transparent uses a touched-pixel mask, not a
                                 "   color heuristic, so labels and outline-darkened
-                                "   atoms stay opaque.
+                                "   atoms stay opaque. Custom RGB is always opaque;
+                                "   for a transparent custom color, use the
+                                "   transparent mode and post-process the PNG.
 :set v|verbose on|off           " Stream diagnostic lines to stderr after each
                                 "   command (off by default):
                                 "     [view]   :center/:zoom/:orient/:turn/:focus
@@ -613,6 +620,26 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   (default: 1.0, range: 0.5..4.0). Quick toggle between
                                 "   rough (1.0) and hi-DPI (2.0) renders.
 :get <option>                    " Query current value of any :set option (for scripting)
+:set / :set all                  " (no value) Print every queryable option's
+                                "   current value, one per line — Vim parity for
+                                "   `:set all`. The list is the canonical option
+                                "   table, so a freshly-added knob shows up here
+                                "   automatically. Use this to discover option
+                                "   names before scripting `:get <opt>`.
+:camera                          " Print the current camera state (rotation 3x3,
+                                "   center XYZ, zoom, pan XY) as a key=value blob
+                                "   suitable for pasting into a script.
+:camera save <file>              " Write the camera state to <file>. The file
+                                "   is forward-compatible: a `# molterm camera v1`
+                                "   header version-tags it, and unknown keys are
+                                "   silently ignored on load.
+:camera load <file>              " Restore camera state from a file written by
+                                "   `:camera save`. Makes figure scripts
+                                "   bit-reproducible — without this, every render
+                                "   starts from a freshly-PCA'd pose and tiny
+                                "   structural changes silently shift the camera.
+:camera reset                    " Reset to the default identity-rotation /
+                                "   zoom-1.0 / pan-0,0 pose.
 :info                           " Show atom/bond count
 :q                              " Quit
 ```
