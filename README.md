@@ -779,6 +779,35 @@ with a digit (`1ubq`, `7bz5`) are accepted as a single token:
 :show cartoon, obj 2def and chain A   " combine with other predicates
 ```
 
+**IMGT-canonical CDR / FR regions** (issue #36) — `imgt <region>` selects
+the standard IMGT residue range for an antibody / TCR variable domain.
+Assumes the chain is **already IMGT-numbered** (e.g. by an upstream
+ANARCI pass — molterm doesn't compute the renumbering itself). Combine
+with `chain X` to scope to a single chain. Region names and residue
+ranges (per imgt.org):
+
+| keyword | residue range |
+|---|---|
+| `fr1`  | 1-26    |
+| `cdr1` | 27-38   |
+| `fr2`  | 39-55   |
+| `cdr2` | 56-65   |
+| `fr3`  | 66-104  |
+| `cdr3` | 105-117 |
+| `fr4`  | 118-128 |
+
+```vim
+:select cdr3a = chain A and imgt cdr3        " TCR α-chain CDR3
+:select cdr3b = chain B and imgt cdr3        " TCR β-chain CDR3
+:show ballstick chain A and imgt cdr3
+:color magenta chain B and imgt cdr3
+```
+
+The same ranges work for antibody heavy/light chain CDRs since IMGT
+numbering is unified across V-domain types. Unknown region names
+return an empty selection rather than failing — keeps batch scripts
+robust against typos in domain-specific keywords.
+
 **Spatial proximity** — `within N of <expr>` selects atoms ≤ N Å from any
 atom matching the inner expression; `exwithin` is the same minus the
 inner set itself (useful for finding "neighbors not including self"):
