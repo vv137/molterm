@@ -63,7 +63,15 @@ enum class RendererType {
 // PNG / pixel-canvas background. `Transparent` writes alpha=0 for untouched
 // pixels (deterministic, via canvas-tracked clear color + colorIds_ mask —
 // not the legacy "RGB==(0,0,0)" heuristic that flipped between canvas sizes).
-enum class BgMode { Transparent, White, Black };
+// Background color modes for screenshots and the live canvas.
+//   Transparent : touched-pixel mask → PNG alpha channel
+//   White       : flat 255,255,255 (publication light theme)
+//   Black       : flat 0,0,0       (publication dark theme)
+//   Custom      : user-supplied RGB triple stored in bgCustomR/G/B_ on
+//                 Application — set via `:set bg "#RRGGBB"` or
+//                 `:set bg "rgb(R,G,B)"`. Always opaque; for transparency
+//                 use BgMode::Transparent.
+enum class BgMode { Transparent, White, Black, Custom };
 
 class Application {
 public:
@@ -144,6 +152,15 @@ public:
 
     BgMode bgMode() const { return bgMode_; }
     void setBgMode(BgMode m) { bgMode_ = m; }
+    // Custom bg RGB used when bgMode_ == BgMode::Custom. Setter also
+    // flips the mode so callers don't have to remember to.
+    void setBgCustomRGB(uint8_t r, uint8_t g, uint8_t b) {
+        bgCustomR_ = r; bgCustomG_ = g; bgCustomB_ = b;
+        bgMode_ = BgMode::Custom;
+    }
+    uint8_t bgCustomR() const { return bgCustomR_; }
+    uint8_t bgCustomG() const { return bgCustomG_; }
+    uint8_t bgCustomB() const { return bgCustomB_; }
     // Push the current bgMode onto a PixelCanvas before clear()/savePNG().
     void applyBgMode(class PixelCanvas& pc) const;
 
@@ -399,6 +416,7 @@ private:
     std::unordered_map<std::string, std::string> scriptEnv_;
 
     BgMode bgMode_ = BgMode::Transparent;
+    uint8_t bgCustomR_ = 0, bgCustomG_ = 0, bgCustomB_ = 0;
     bool verbose_ = false;
 
     // Labels: atom indices to render text labels for

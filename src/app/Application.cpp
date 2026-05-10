@@ -353,13 +353,138 @@ splitAtEqToken(const std::vector<std::string>& args) {
     return {args, ""};
 }
 
+// Canonical option names enumerated by `:set` (no args) / `:set all` AND
+// by tab-completion (which extends with kSetOptionsShort below). Long
+// forms only — listing should not double-print under each alias.
+// Adding a new knob: append here so the listing surfaces it; if the knob
+// has a short alias, append that to kSetOptionsShort too.
+inline constexpr const char* kSetOptionsLong[] = {
+    "renderer",
+    "bg",
+    "fog",
+    "outline",
+    "outline_threshold",
+    "outline_darken",
+    "label_font_size",
+    "annotation_font_size",
+    "annotation_linewidth",
+    "overlay_scale",
+    "label_format",
+    "verbose",
+    "backbone_thickness",
+    "wireframe_thickness",
+    "ball_radius",
+    "pan_speed",
+    "cartoon_helix",
+    "cartoon_sheet",
+    "cartoon_loop",
+    "cartoon_subdiv",
+    "cartoon_aspect",
+    "cartoon_helix_radial",
+    "cartoon_tubular_helix",
+    "cartoon_tubular_radius",
+    "nucleic_backbone",
+    "bs_units",
+    "bs_factor",
+    "spacefill_scale",
+    "lod_medium",
+    "lod_low",
+    "backbone_cutoff",
+    "auto_center",
+    "panel",
+    "seqbar",
+    "seqwrap",
+    "interface_color",
+    "interface_thickness",
+    "interface_classify",
+    "interface_sidechains",
+    "interface_show",
+    "stereo",
+    "stereo_angle",
+    "scope",
+    "focus_radius",
+    "focus_extra",
+    "focus_min_radius",
+    "focus_dim",
+    "focus_granularity",
+};
+
+// Short aliases for tab-completion only — not iterated by `:set` listing
+// (would print the same value twice). Pair-wise alignment with kSetOptionsLong
+// is not enforced; the alias->long mapping lives in the per-option
+// if/else cascade inside the `:set` handler.
+inline constexpr const char* kSetOptionsShort[] = {
+    "bt", "wt", "br", "ps", "ot", "od",
+    "lfs", "anf", "anlw", "scale",
+    "ch", "csh", "cl", "csd", "csa", "chr", "cth", "ctr", "nb",
+    "bsf", "sfs",
+    "ic", "it", "iclass", "isc", "is",
+    "sa", "v", "lf", "transp",
+    "fr", "fe", "fmr", "fd", "fg",
+};
+
 const char* bgModeName(BgMode m) {
     switch (m) {
         case BgMode::Transparent: return "transparent";
         case BgMode::White:       return "white";
         case BgMode::Black:       return "black";
+        case BgMode::Custom:      return "custom";
     }
     return "transparent";
+}
+
+// Parse a bg color spec into (r,g,b). Accepts "#RGB", "#RRGGBB", and
+// "rgb(R,G,B)" — the parser is forgiving on whitespace and case so that
+// `:set bg "#202020"`, `:set bg "rgb(32,32,32)"`, and PyMOL-style
+// `bg "#FFF"` all round-trip. Returns std::nullopt on malformed input;
+// callers fall back to the named-mode parser before erroring out.
+std::optional<std::array<uint8_t, 3>> parseHexColor(std::string s) {
+    auto trim = [](std::string& v) {
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.erase(v.begin());
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back())))  v.pop_back();
+    };
+    trim(s);
+    if (s.empty()) return std::nullopt;
+
+    // rgb(R,G,B) form: optional whitespace inside, decimal channels 0..255.
+    if (s.size() > 4 &&
+        (s[0] == 'r' || s[0] == 'R') && (s[1] == 'g' || s[1] == 'G') &&
+        (s[2] == 'b' || s[2] == 'B') && s[3] == '(' && s.back() == ')') {
+        std::string body = s.substr(4, s.size() - 5);
+        int r = -1, g = -1, b = -1;
+        if (std::sscanf(body.c_str(), " %d , %d , %d ", &r, &g, &b) != 3) return std::nullopt;
+        if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) return std::nullopt;
+        return std::array<uint8_t, 3>{static_cast<uint8_t>(r),
+                                      static_cast<uint8_t>(g),
+                                      static_cast<uint8_t>(b)};
+    }
+
+    // #RGB / #RRGGBB form.
+    if (s[0] != '#') return std::nullopt;
+    std::string hex = s.substr(1);
+    auto fromHex = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+        if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+        return -1;
+    };
+    if (hex.size() == 3) {
+        int r = fromHex(hex[0]), g = fromHex(hex[1]), b = fromHex(hex[2]);
+        if (r < 0 || g < 0 || b < 0) return std::nullopt;
+        return std::array<uint8_t, 3>{static_cast<uint8_t>(r * 17),
+                                      static_cast<uint8_t>(g * 17),
+                                      static_cast<uint8_t>(b * 17)};
+    }
+    if (hex.size() == 6) {
+        int rh = fromHex(hex[0]), rl = fromHex(hex[1]);
+        int gh = fromHex(hex[2]), gl = fromHex(hex[3]);
+        int bh = fromHex(hex[4]), bl = fromHex(hex[5]);
+        if (rh < 0 || rl < 0 || gh < 0 || gl < 0 || bh < 0 || bl < 0) return std::nullopt;
+        return std::array<uint8_t, 3>{static_cast<uint8_t>((rh << 4) | rl),
+                                      static_cast<uint8_t>((gh << 4) | gl),
+                                      static_cast<uint8_t>((bh << 4) | bl)};
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -464,6 +589,7 @@ void Application::applyBgMode(PixelCanvas& pc) const {
         case BgMode::Transparent: pc.setBackground(0,   0,   0,   true);  break;
         case BgMode::White:       pc.setBackground(255, 255, 255, false); break;
         case BgMode::Black:       pc.setBackground(0,   0,   0,   false); break;
+        case BgMode::Custom:      pc.setBackground(bgCustomR_, bgCustomG_, bgCustomB_, false); break;
     }
 }
 
@@ -1270,36 +1396,14 @@ void Application::handleAction(Action action) {
                         if (cs.find(partial) == 0) candidates.push_back(cs);
                     }
                 } else if (cmdName == "set" || cmdName == "get") {
-                    for (const auto& o : {"renderer", "backbone_thickness", "bt",
-                                           "wireframe_thickness", "wt", "ball_radius", "br",
-                                           "pan_speed", "ps", "fog", "outline", "outline_threshold", "ot",
-                                           "outline_darken", "od",
-                                           "label_font_size", "lfs",
-                                           "annotation_font_size", "anf",
-                                           "annotation_linewidth", "anlw",
-                                           "overlay_scale", "scale",
-                                           "cartoon_helix", "ch",
-                                           "cartoon_sheet", "csh", "cartoon_loop", "cl",
-                                           "cartoon_subdiv", "csd", "cartoon_aspect", "csa",
-                                           "cartoon_helix_radial", "chr",
-                                           "cartoon_tubular_helix", "cth",
-                                           "cartoon_tubular_radius", "ctr",
-                                           "nucleic_backbone", "nb",
-                                           "bs_units", "bs_factor", "bsf",
-                                           "spacefill_scale", "sfs",
-                                           "lod_medium", "lod_low",
-                                           "backbone_cutoff", "auto_center", "panel",
-                                           "seqbar", "seqwrap",
-                                           "interface_color", "ic",
-                                           "interface_thickness", "it",
-                                           "interface_classify", "iclass",
-                                           "interface_sidechains", "isc",
-                                           "interface_show", "is",
-                                           "stereo", "stereo_angle", "sa",
-                                           "scope"}) {
+                    // Single source of truth: kSetOptionsLong (iterated by
+                    // `:set` listing too) + kSetOptionsShort (aliases-only).
+                    auto offer = [&](const char* o) {
                         std::string os(o);
-                        if (os.find(partial) == 0) candidates.push_back(os);
-                    }
+                        if (os.find(partial) == 0) candidates.push_back(std::move(os));
+                    };
+                    for (const char* o : kSetOptionsLong)  offer(o);
+                    for (const char* o : kSetOptionsShort) offer(o);
                 }
 
                 if (candidates.size() == 1) {
@@ -3684,7 +3788,28 @@ void Application::registerCommands() {
 
     // :set <option> [value]
     cmdRegistry_.registerCmd("set", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        if (cmd.args.empty()) return {false, "Usage: :set <option> [value]"};
+        if (cmd.args.empty() || cmd.args[0] == "all") {
+            // Vim-style `:set` / `:set all` — print every queryable option's
+            // current value, one line each. Each option's formatting stays
+            // in the `:get` handler; we look it up once and reuse its handler
+            // directly to skip per-option string tokenization.
+            const auto* getCmd = app.cmdRegistry().lookup("get");
+            if (!getCmd) return {false, "internal: :get command missing"};
+            std::string out;
+            ParsedCommand pc;
+            pc.name = "get";
+            pc.args.resize(1);
+            for (const char* o : kSetOptionsLong) {
+                pc.args[0] = o;
+                auto r = getCmd->handler(app, pc);
+                if (r.ok) {
+                    if (!out.empty()) out += '\n';
+                    out += r.msg;
+                }
+            }
+            if (out.empty()) return {true, "(no options)"};
+            return {true, out};
+        }
         const auto& opt = cmd.args[0];
         if (opt == "panel") {
             if (cmd.args.size() < 2) return {false, "Usage: :set panel on|off"};
@@ -4139,13 +4264,25 @@ void Application::registerCommands() {
             return {true, "label_format = " + fmt};
         }
         if (opt == "bg" || opt == "background_color") {
+            // Accept: transparent | white | black | "#RRGGBB" | "#RGB" |
+            //         "rgb(R,G,B)". Custom forms route through parseHexColor
+            //         and set BgMode::Custom + the rgb triple.
             if (cmd.args.size() < 2)
-                return {false, "Usage: :set bg transparent|white|black"};
-            const std::string& v = cmd.args[1];
+                return {false, "Usage: :set bg transparent|white|black|#RRGGBB|rgb(R,G,B)"};
+            // Args may have been split on commas/whitespace by the parser
+            // (e.g. `rgb(32,32,32)` → `rgb(32` `32` `32)`); rejoin everything
+            // after the option name into a single value string for parseHexColor.
+            std::string v;
+            for (size_t i = 1; i < cmd.args.size(); ++i) {
+                if (i > 1) v += ',';   // commas were stripped during split
+                v += cmd.args[i];
+            }
             if      (v == "transparent" || v == "trans") app.setBgMode(BgMode::Transparent);
             else if (v == "white")                        app.setBgMode(BgMode::White);
             else if (v == "black")                        app.setBgMode(BgMode::Black);
-            else return {false, "Usage: :set bg transparent|white|black"};
+            else if (auto rgb = parseHexColor(v))         app.setBgCustomRGB((*rgb)[0], (*rgb)[1], (*rgb)[2]);
+            else return {false, "Bad bg value: " + v +
+                                " (expected transparent|white|black|#RRGGBB|rgb(R,G,B))"};
             return {true, "bg = " + v};
         }
         if (opt == "verbose" || opt == "v") {
@@ -4214,8 +4351,15 @@ void Application::registerCommands() {
             return {true, "label_format = " +
                           (app.labelFormat().empty() ? std::string("(default)")
                                                      : app.labelFormat())};
-        if (opt == "bg" || opt == "background_color")
+        if (opt == "bg" || opt == "background_color") {
+            if (app.bgMode() == BgMode::Custom) {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "#%02X%02X%02X",
+                              app.bgCustomR(), app.bgCustomG(), app.bgCustomB());
+                return {true, std::string("bg = ") + buf};
+            }
             return {true, std::string("bg = ") + bgModeName(app.bgMode())};
+        }
         if (opt == "verbose" || opt == "v")
             return {true, std::string("verbose = ") + (app.verbose() ? "on" : "off")};
         if (opt == "transparency" || opt == "transp") {
@@ -4461,6 +4605,99 @@ void Application::registerCommands() {
                std::to_string(obj->bonds().size()) + " bonds"};
     }, ":info", "Show atom/bond counts and metadata for the current object",
        {":info"}, "Session");
+
+    // :camera — print | save <file> | load <file> | reset
+    //
+    // The 15-float camera state (rotation 3x3, center XYZ, zoom, pan XY) is
+    // serialized as a small key=value text file so figure scripts can be
+    // bit-reproducible across renders. Without this, every re-render starts
+    // from a freshly-PCA'd pose and tiny structural changes silently shift
+    // the camera (issue #39c). File format is line-oriented and forgiving
+    // about whitespace; the version header lets future revisions stay
+    // backwards-compatible.
+    cmdRegistry_.registerCmd("camera", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto& cam = app.tabs().currentTab().camera();
+        auto formatState = [&]() {
+            char buf[512];
+            const auto& r = cam.rotation();
+            std::snprintf(buf, sizeof(buf),
+                "# molterm camera v1\n"
+                "center = %.6f %.6f %.6f\n"
+                "zoom = %.6f\n"
+                "pan = %.6f %.6f\n"
+                "rot = %.6f %.6f %.6f  %.6f %.6f %.6f  %.6f %.6f %.6f\n",
+                cam.centerX(), cam.centerY(), cam.centerZ(),
+                cam.zoom(), cam.panXOffset(), cam.panYOffset(),
+                r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]);
+            return std::string(buf);
+        };
+
+        if (cmd.args.empty()) {
+            // Print current state to the command line — handy for quick
+            // copy/paste into a script as a fixed-camera snapshot.
+            return {true, formatState()};
+        }
+
+        const std::string& sub = cmd.args[0];
+
+        if (sub == "reset") {
+            cam.reset();
+            return {true, "Camera reset"};
+        }
+
+        if (sub == "save") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :camera save <file>"};
+            const std::string& path = cmd.args[1];
+            std::ofstream out(path);
+            if (!out) return {false, "Cannot write " + path};
+            out << formatState();
+            return {true, "Camera saved to " + path};
+        }
+
+        if (sub == "load") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :camera load <file>"};
+            const std::string& path = cmd.args[1];
+            std::ifstream in(path);
+            if (!in) return {false, "Cannot read " + path};
+            float cx = cam.centerX(), cy = cam.centerY(), cz = cam.centerZ();
+            float zoom = cam.zoom();
+            float panX = cam.panXOffset(), panY = cam.panYOffset();
+            std::array<float, 9> rot = cam.rotation();
+            std::string line;
+            while (std::getline(in, line)) {
+                // Strip leading whitespace + skip blanks/comments.
+                size_t s = line.find_first_not_of(" \t");
+                if (s == std::string::npos || line[s] == '#') continue;
+                std::string content = line.substr(s);
+                auto eq = content.find('=');
+                if (eq == std::string::npos) continue;
+                std::string key = content.substr(0, eq);
+                std::string val = content.substr(eq + 1);
+                while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) key.pop_back();
+                if      (key == "center") std::sscanf(val.c_str(), " %f %f %f", &cx, &cy, &cz);
+                else if (key == "zoom")   std::sscanf(val.c_str(), " %f", &zoom);
+                else if (key == "pan")    std::sscanf(val.c_str(), " %f %f", &panX, &panY);
+                else if (key == "rot")    std::sscanf(val.c_str(),
+                    " %f %f %f %f %f %f %f %f %f",
+                    &rot[0], &rot[1], &rot[2], &rot[3], &rot[4],
+                    &rot[5], &rot[6], &rot[7], &rot[8]);
+                // Unknown keys silently ignored — keeps forward-compat
+                // when newer files add fields the current binary doesn't
+                // recognize.
+            }
+            cam.setCenter(cx, cy, cz);
+            cam.setZoom(zoom);
+            cam.setPan(panX, panY);
+            cam.setRotation(rot);
+            return {true, "Camera loaded from " + path};
+        }
+
+        return {false, "Usage: :camera | :camera save <file> | :camera load <file> | :camera reset"};
+    }, ":camera [save|load|reset] [file]",
+       "Save/load/reset the camera (15-float state: rotation 3x3, center XYZ, zoom, pan XY) — bit-reproducible figures",
+       {":camera", ":camera save fig30.cam", ":camera load fig30.cam", ":camera reset"}, "View");
 
     // :select <expression>
     cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
