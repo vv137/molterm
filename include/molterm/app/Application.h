@@ -255,6 +255,27 @@ public:
     float overlayScale() const { return overlayScale_; }
     void setOverlayScale(float s) { overlayScale_ = s; }
 
+    // Per-render auto-scale model (issue #48). With Pixels (default), the
+    // *_font_size knobs are interpreted as raw screen pixels — what they
+    // were before #48 — so existing scripts still render identically.
+    // Physical treats them as point sizes (1 pt = liveDpi_/72 px live)
+    // and rescales by the screenshot's DPI so a `:screenshot W H 300`
+    // looks like the same figure printed at 300 dpi. Relative interprets
+    // them as "pixels at referenceCanvasHeight_ tall canvas" and rescales
+    // by canvasH/refH so a rough 1280x960 render and a final 2400x1800
+    // render show labels at the same fraction of the canvas.
+    enum class OverlaySizeMode { Pixels, Physical, Relative };
+    OverlaySizeMode overlaySizeMode() const { return overlaySizeMode_; }
+    void setOverlaySizeMode(OverlaySizeMode m) { overlaySizeMode_ = m; }
+    int referenceCanvasHeight() const { return referenceCanvasHeight_; }
+    void setReferenceCanvasHeight(int h) { referenceCanvasHeight_ = h; }
+    int liveDpi() const { return liveDpi_; }
+    void setLiveDpi(int dpi) { liveDpi_ = dpi; }
+    // Compute the auto-scale multiplier for the given render context.
+    // Returns 1.0 in Pixels mode (back-compat) or when canvas/dpi look
+    // bogus, so callers don't have to special-case those.
+    float computeRenderScale(int canvasHeight, int dpi) const;
+
     // Custom overlay colors (issue #30, #31). Each is std::optional —
     // unset means "use the legacy default color constant" (white for
     // labels, yellow for annotation captions / measurement lines, plain
@@ -270,16 +291,42 @@ public:
     void setOutlineColor(std::optional<ColorRGB> c)         { outlineColor_         = c; }
     OutlineMode outlineMode() const { return outlineMode_; }
     void setOutlineMode(OutlineMode m) { outlineMode_ = m; }
-    // Pre-multiplied effective values used by the overlay renderer.
+    // Pre-multiplied effective values used by the overlay renderer. The
+    // renderScaleHint_ factor is set transiently by the render entry
+    // points (live and screenshot) based on overlaySizeMode_ + the
+    // current canvas size + DPI — see computeRenderScale().
     int effectiveLabelFontSize() const {
-        return std::max(4, static_cast<int>(std::lround(labelFontSize_ * overlayScale_)));
+        return std::max(4, static_cast<int>(std::lround(labelFontSize_ * overlayScale_ * renderScaleHint_)));
     }
     int effectiveAnnotationFontSize() const {
-        return std::max(4, static_cast<int>(std::lround(annotationFontSize_ * overlayScale_)));
+        return std::max(4, static_cast<int>(std::lround(annotationFontSize_ * overlayScale_ * renderScaleHint_)));
     }
     int effectiveAnnotationLineWidth() const {
-        return std::max(1, static_cast<int>(std::lround(annotationLineWidth_ * overlayScale_)));
+        return std::max(1, static_cast<int>(std::lround(annotationLineWidth_ * overlayScale_ * renderScaleHint_)));
     }
+    int effectiveArrowThickness() const {
+        return std::max(1, static_cast<int>(std::lround(arrowThickness_ * overlayScale_ * renderScaleHint_)));
+    }
+    int effectiveArrowHeadSize() const {
+        return std::max(2, static_cast<int>(std::lround(arrowHeadSize_ * overlayScale_ * renderScaleHint_)));
+    }
+    // Set/clear the transient hint. Use the RAII helper below instead of
+    // calling these directly so the previous value is always restored.
+    float renderScaleHint() const { return renderScaleHint_; }
+    void setRenderScaleHint(float s) { renderScaleHint_ = s; }
+    struct RenderScaleScope {
+        Application& app;
+        float saved;
+        RenderScaleScope(Application& a, int canvasH, int dpi)
+            : app(a), saved(a.renderScaleHint_) {
+            a.renderScaleHint_ = a.computeRenderScale(canvasH, dpi);
+        }
+        ~RenderScaleScope() { app.renderScaleHint_ = saved; }
+        RenderScaleScope(const RenderScaleScope&)            = delete;
+        RenderScaleScope& operator=(const RenderScaleScope&) = delete;
+        RenderScaleScope(RenderScaleScope&&)                 = delete;
+        RenderScaleScope& operator=(RenderScaleScope&&)      = delete;
+    };
 
     // Recompute the inter-chain interface overlay against the current
     // object using the last-used cutoff. Returns false (and clears the
@@ -578,6 +625,13 @@ private:
     int annotationFontSize_ = 14;
     int annotationLineWidth_ = 2;
     float overlayScale_ = 1.0f;
+    OverlaySizeMode overlaySizeMode_ = OverlaySizeMode::Pixels;
+    int referenceCanvasHeight_ = 1080;
+    int liveDpi_ = 96;
+    // Set transiently by RenderScaleScope at the top of each render pass.
+    // Lives outside overlayScale_ so the user-visible scale knob isn't
+    // mutated by screenshot dispatch.
+    float renderScaleHint_ = 1.0f;
     std::optional<std::array<uint8_t, 3>> labelColor_;
     std::optional<std::array<uint8_t, 3>> annotationColor_;
     std::optional<std::array<uint8_t, 3>> measurementLineColor_;

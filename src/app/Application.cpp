@@ -378,6 +378,9 @@ inline constexpr const char* kSetOptionsLong[] = {
     "annotation_font_size",
     "annotation_linewidth",
     "overlay_scale",
+    "size_mode",
+    "reference_canvas_height",
+    "live_dpi",
     "label_format",
     "verbose",
     "backbone_thickness",
@@ -424,7 +427,7 @@ inline constexpr const char* kSetOptionsLong[] = {
 // if/else cascade inside the `:set` handler.
 inline constexpr const char* kSetOptionsShort[] = {
     "bt", "wt", "br", "ps", "ot", "od",
-    "lfs", "anf", "anlw", "scale",
+    "lfs", "anf", "anlw", "scale", "sm",
     "ch", "csh", "cl", "csd", "csa", "chr", "cth", "ctr", "nb",
     "bsf", "sfs",
     "ic", "it", "iclass", "isc", "is",
@@ -606,6 +609,24 @@ void Application::logRenderStats(int pixW, int pixH, int dpi,
         " bg=%s outline=%s fog=%.2f elapsed=%.2fs visible_atoms=%d\n",
         bgModeName(bgMode_), outlineEnabled_ ? "on" : "off", fogStrength_,
         elapsedSec, visibleAtoms);
+}
+
+float Application::computeRenderScale(int canvasHeight, int dpi) const {
+    switch (overlaySizeMode_) {
+        case OverlaySizeMode::Pixels:
+            return 1.0f;
+        case OverlaySizeMode::Physical: {
+            int eff = (dpi > 0) ? dpi : liveDpi_;
+            if (eff <= 0 || liveDpi_ <= 0) return 1.0f;
+            return static_cast<float>(eff) / static_cast<float>(liveDpi_);
+        }
+        case OverlaySizeMode::Relative: {
+            if (canvasHeight <= 0 || referenceCanvasHeight_ <= 0) return 1.0f;
+            return static_cast<float>(canvasHeight) /
+                   static_cast<float>(referenceCanvasHeight_);
+        }
+    }
+    return 1.0f;
 }
 
 void Application::applyBgMode(PixelCanvas& pc) const {
@@ -2203,6 +2224,10 @@ void Application::renderViewport() {
 
   if (overlayVisible_) {
     bool isPixel = (rendererType_ == RendererType::Pixel);
+    // Auto-scale overlay sizes for the live canvas (issue #48). Pixels
+    // mode = no-op; relative/physical adjust effective*() for this pass.
+    int liveCanvasH = canvas_ ? canvas_->subH() : 0;
+    Application::RenderScaleScope renderScale(*this, liveCanvasH, /*dpi*/ 0);
 
     // Stereo + pixel: drawPixelOverlay encapsulates labels, measurements,
     // and sele/pk rings against whatever projection the camera currently
@@ -2392,7 +2417,7 @@ void Application::renderViewport() {
             const int ringR = isPixel
                 ? std::max(3, static_cast<int>(std::lround(
                       4.0f * cameraZoomScale(tabMgr_.currentTab().camera().zoom())
-                      * overlayScale_)))
+                      * overlayScale_ * renderScaleHint_)))
                 : 0;
             // Walk projCache_ as the master cursor and advance two
             // sub-cursors (sele, pk) past anything below the current
@@ -2542,10 +2567,8 @@ void Application::restoreStereoCamera(const std::array<float, 9>& savedRot) {
 void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
                                    Camera& cam) {
     if (arrows_.empty()) return;
-    int thickness = std::max(1, static_cast<int>(std::lround(
-        arrowThickness_ * overlayScale_)));
-    int headSize  = std::max(2, static_cast<int>(std::lround(
-        arrowHeadSize_  * overlayScale_)));
+    int thickness = effectiveArrowThickness();
+    int headSize  = effectiveArrowHeadSize();
     uint8_t r = 255, g = 255, b = 50;          // default yellow
     if (arrowColor_) { r = (*arrowColor_)[0]; g = (*arrowColor_)[1]; b = (*arrowColor_)[2]; }
 
@@ -2791,7 +2814,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
 
         if (selIdx || nPk > 0) {
             int ringR = std::max(3, static_cast<int>(std::lround(
-                4.0f * cameraZoomScale(cam.zoom()) * overlayScale_)));
+                4.0f * cameraZoomScale(cam.zoom()) * overlayScale_ * renderScaleHint_)));
             std::set<int> highlight;
             if (selIdx) highlight.insert(selIdx->begin(), selIdx->end());
             for (int i = 0; i < nPk; ++i) highlight.insert(pks[i]);
@@ -4132,6 +4155,34 @@ void Application::registerCommands() {
             app.setOverlayScale(s);
             return {true, "overlay_scale = " + cmd.args[1] + "x"};
         }
+        if (opt == "size_mode" || opt == "sm") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set size_mode pixels|physical|relative"};
+            const std::string& v = cmd.args[1];
+            if      (v == "pixels"   || v == "px")  app.setOverlaySizeMode(Application::OverlaySizeMode::Pixels);
+            else if (v == "physical" || v == "pt")  app.setOverlaySizeMode(Application::OverlaySizeMode::Physical);
+            else if (v == "relative" || v == "rel") app.setOverlaySizeMode(Application::OverlaySizeMode::Relative);
+            else return {false, "Usage: :set size_mode pixels|physical|relative"};
+            return {true, "size_mode = " + v};
+        }
+        if (opt == "reference_canvas_height") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set reference_canvas_height <240..8192>"};
+            int h = std::stoi(cmd.args[1]);
+            if (h < 240 || h > 8192)
+                return {false, "reference_canvas_height out of range (240..8192)"};
+            app.setReferenceCanvasHeight(h);
+            return {true, "reference_canvas_height = " + std::to_string(h) + " px"};
+        }
+        if (opt == "live_dpi") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set live_dpi <36..600>"};
+            int d = std::stoi(cmd.args[1]);
+            if (d < 36 || d > 600)
+                return {false, "live_dpi out of range (36..600)"};
+            app.setLiveDpi(d);
+            return {true, "live_dpi = " + std::to_string(d)};
+        }
         // ── Overlay color knobs (issues #30, #31) ──
         // Each takes a color spec (named, #hex, or rgb(R,G,B)). Setting
         // to "default" / "auto" / "" clears the override so the renderer
@@ -4648,6 +4699,16 @@ void Application::registerCommands() {
             return {true, "annotation_linewidth = " + std::to_string(app.annotationLineWidth()) + " px"};
         if (opt == "overlay_scale" || opt == "scale")
             return {true, "overlay_scale = " + std::to_string(app.overlayScale()) + "x"};
+        if (opt == "size_mode" || opt == "sm") {
+            const char* m = "pixels";
+            if (app.overlaySizeMode() == Application::OverlaySizeMode::Physical) m = "physical";
+            if (app.overlaySizeMode() == Application::OverlaySizeMode::Relative) m = "relative";
+            return {true, std::string("size_mode = ") + m};
+        }
+        if (opt == "reference_canvas_height")
+            return {true, "reference_canvas_height = " + std::to_string(app.referenceCanvasHeight()) + " px"};
+        if (opt == "live_dpi")
+            return {true, "live_dpi = " + std::to_string(app.liveDpi())};
         auto fmtColor = [](const std::optional<Application::ColorRGB>& c, const char* dflt) {
             if (!c) return std::string(dflt);
             char buf[16];
@@ -5880,13 +5941,19 @@ void Application::registerCommands() {
         // Match the live render's overlay layer: residue labels,
         // measurement dashed lines + values, $sele/pk highlight rings.
         // Drawn after fog/dim so labels stay legible against dimmed atoms.
-        for (int eye = 0; eye < app.stereoEyeCount(); ++eye) {
-            savedScreenshotRot = app.setupStereoEye(
-                eye, offscreen.subW(), offscreen.subH(),
-                offscreen.aspectYX());
-            app.drawPixelOverlay(offscreen);
+        // RenderScaleScope auto-scales label/annotation sizes for the
+        // screenshot resolution / DPI per :set size_mode (issue #48).
+        {
+            Application::RenderScaleScope screenshotScale(
+                app, offscreen.pixelHeight(), reqDpi);
+            for (int eye = 0; eye < app.stereoEyeCount(); ++eye) {
+                savedScreenshotRot = app.setupStereoEye(
+                    eye, offscreen.subW(), offscreen.subH(),
+                    offscreen.aspectYX());
+                app.drawPixelOverlay(offscreen);
+            }
+            app.restoreStereoCamera(savedScreenshotRot);
         }
-        app.restoreStereoCamera(savedScreenshotRot);
 
         // Restore projection for the active canvas
         auto* canvas = app.canvas();
