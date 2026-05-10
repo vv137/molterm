@@ -487,6 +487,27 @@ public:
 private:
     std::vector<FreeLabel> freeLabels_;
 
+    // Persistent solid arrows / axes (issue #38). Distinct from :measure
+    // (dashed line + numeric distance caption) — solid arrow with a
+    // triangular head at endpoint B is the "this is an axis" primitive.
+    // Endpoints stored in world coordinates: atom-anchored creates resolve
+    // once at :arrow time and don't re-track if atoms move (re-issue if
+    // you re-align). Two construction paths today:
+    //   :arrow <serial1> <serial2> [= "label"]
+    //   :arrow $regA $regB [= "label"]      (vec3 / point registers)
+    //   :axis  $pcaReg [= "label"]          (centered, axis1, ±2σ)
+public:
+    struct ArrowOverlay {
+        std::array<float, 3> a{};
+        std::array<float, 3> b{};
+        std::string caption;
+    };
+private:
+    std::vector<ArrowOverlay> arrows_;
+    std::optional<std::array<uint8_t, 3>> arrowColor_;
+    int arrowThickness_ = 2;
+    int arrowHeadSize_  = 8;
+
 public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
     std::vector<int>& labelAtoms() { return labelAtoms_; }
@@ -502,6 +523,14 @@ public:
     // the class body.
     std::vector<FreeLabel>& freeLabels() { return freeLabels_; }
     const std::vector<FreeLabel>& freeLabels() const { return freeLabels_; }
+    std::vector<ArrowOverlay>& arrows() { return arrows_; }
+    const std::vector<ArrowOverlay>& arrows() const { return arrows_; }
+    const std::optional<ColorRGB>& arrowColor() const { return arrowColor_; }
+    void setArrowColor(std::optional<ColorRGB> c) { arrowColor_ = c; }
+    int arrowThickness() const { return arrowThickness_; }
+    void setArrowThickness(int t) { arrowThickness_ = t; }
+    int arrowHeadSize() const { return arrowHeadSize_; }
+    void setArrowHeadSize(int s) { arrowHeadSize_ = s; }
     // Drop every per-atom label + every measurement/angle/dihedral entry.
     // Shared by `:overlay clear` and `:run --fresh`; keeping them in lockstep
     // here means a future overlay-list addition (e.g. arrows, axes) is wired
@@ -511,6 +540,7 @@ public:
         labelAtoms_.clear();
         labelText_.clear();
         freeLabels_.clear();
+        arrows_.clear();
     }
     bool overlayVisible_ = true;
 
@@ -592,6 +622,12 @@ private:
     // call. Uses labelColor_ + effectiveLabelFontSize() like atom labels.
     void drawFreeLabelsPixel(class PixelCanvas& pc, int subW, int subH,
                              class Camera& cam);
+    // Render persistent solid arrows + captions (issue #38). Solid line
+    // with a triangular arrowhead at endpoint B. Style follows
+    // arrow_color / arrow_thickness / arrow_head_size; caption uses
+    // annotation_color + effectiveAnnotationFontSize().
+    void drawArrowsPixel(class PixelCanvas& pc, int subW, int subH,
+                         class Camera& cam);
 
     // Set up the camera + projection for one eye of a stereoscopic render.
     // eyePass = 0 → left half, 1 → right half. With stereoMode_ == Off it

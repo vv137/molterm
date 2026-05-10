@@ -371,6 +371,9 @@ inline constexpr const char* kSetOptionsLong[] = {
     "label_color",
     "annotation_color",
     "measurement_line_color",
+    "arrow_color",
+    "arrow_thickness",
+    "arrow_head_size",
     "label_font_size",
     "annotation_font_size",
     "annotation_linewidth",
@@ -2536,6 +2539,92 @@ void Application::restoreStereoCamera(const std::array<float, 9>& savedRot) {
     tabMgr_.currentTab().camera().setRotation(savedRot);
 }
 
+void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
+                                   Camera& cam) {
+    if (arrows_.empty()) return;
+    int thickness = std::max(1, static_cast<int>(std::lround(
+        arrowThickness_ * overlayScale_)));
+    int headSize  = std::max(2, static_cast<int>(std::lround(
+        arrowHeadSize_  * overlayScale_)));
+    uint8_t r = 255, g = 255, b = 50;          // default yellow
+    if (arrowColor_) { r = (*arrowColor_)[0]; g = (*arrowColor_)[1]; b = (*arrowColor_)[2]; }
+
+    // Plot a thickness × thickness pixel block at (x, y, depth). Re-uses
+    // PixelCanvas::drawDotRGB to skip the colorIds_ tag (overlays don't
+    // participate in outline / fog post-passes).
+    auto plot = [&](int x, int y, float depth) {
+        for (int dy = 0; dy < thickness; ++dy) {
+            for (int dx = 0; dx < thickness; ++dx) {
+                int px = x + dx - thickness / 2;
+                int py = y + dy - thickness / 2;
+                if (px < 0 || px >= subW || py < 0 || py >= subH) continue;
+                pc.drawDotRGB(px, py, depth, r, g, b);
+            }
+        }
+    };
+
+    int captionFsize = effectiveAnnotationFontSize();
+    for (const auto& arr : arrows_) {
+        float fxa, fya, fda, fxb, fyb, fdb;
+        cam.projectCached(arr.a[0], arr.a[1], arr.a[2], fxa, fya, fda);
+        cam.projectCached(arr.b[0], arr.b[1], arr.b[2], fxb, fyb, fdb);
+        int x1 = static_cast<int>(fxa), y1 = static_cast<int>(fya);
+        int x2 = static_cast<int>(fxb), y2 = static_cast<int>(fyb);
+        int steps = std::max(std::abs(x2 - x1), std::abs(y2 - y1));
+        if (steps == 0) continue;
+        // Solid shaft (vs :measure's dashed pattern).
+        for (int s = 0; s <= steps; ++s) {
+            float t = static_cast<float>(s) / static_cast<float>(steps);
+            int x = x1 + static_cast<int>((x2 - x1) * t);
+            int y = y1 + static_cast<int>((y2 - y1) * t);
+            float depth = fda + (fdb - fda) * t;
+            plot(x, y, depth);
+        }
+        // Triangular arrowhead at endpoint B. Compute the unit shaft
+        // direction in screen space, then fill a triangle whose apex is
+        // at (x2, y2) and whose base is `headSize` pixels back along the
+        // shaft, perpendicular spread = headSize/2.
+        float dxs = static_cast<float>(x2 - x1);
+        float dys = static_cast<float>(y2 - y1);
+        float L = std::sqrt(dxs*dxs + dys*dys);
+        if (L > 1e-3f) {
+            float ux = dxs / L, uy = dys / L;
+            // Perpendicular (90° CCW in screen coords).
+            float px = -uy, py = ux;
+            float baseX = x2 - ux * headSize;
+            float baseY = y2 - uy * headSize;
+            float halfBase = headSize * 0.5f;
+            // Scan the triangle by stepping from apex back to base, widening
+            // linearly. Cheap rasterizer; arrowheads are tiny.
+            for (int i = 0; i <= headSize; ++i) {
+                float ti = static_cast<float>(i) / static_cast<float>(headSize);
+                float cx = x2 + (baseX - x2) * ti;
+                float cy = y2 + (baseY - y2) * ti;
+                float halfWidth = halfBase * ti;
+                int wHalf = static_cast<int>(halfWidth);
+                for (int j = -wHalf; j <= wHalf; ++j) {
+                    int hx = static_cast<int>(cx + px * j);
+                    int hy = static_cast<int>(cy + py * j);
+                    if (hx < 0 || hx >= subW || hy < 0 || hy >= subH) continue;
+                    pc.drawDotRGB(hx, hy, fdb, r, g, b);
+                }
+            }
+        }
+        // Caption at midpoint, slightly offset perpendicular so it doesn't
+        // overlap the shaft.
+        if (!arr.caption.empty()) {
+            int mx = (x1 + x2) / 2;
+            int my = (y1 + y2) / 2;
+            if (auto& ac = annotationColor_)
+                pc.drawTextRGB(mx, my, (fda + fdb) * 0.5f, arr.caption,
+                               (*ac)[0], (*ac)[1], (*ac)[2], captionFsize);
+            else
+                pc.drawText(mx, my, (fda + fdb) * 0.5f, arr.caption,
+                            kColorYellow, captionFsize);
+        }
+    }
+}
+
 void Application::drawFreeLabelsPixel(PixelCanvas& pc, int subW, int subH,
                                        Camera& cam) {
     if (freeLabels_.empty()) return;
@@ -2591,9 +2680,11 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
     int subW = pc.subW();
     int subH = pc.subH();
 
-    // Free-position labels first — they don't need an object loaded, so a
-    // figure with only a corner caption still renders.
+    // Free-position labels + arrows first — they don't need an object
+    // loaded, so a figure with only an axis arrow + corner caption
+    // still renders.
     drawFreeLabelsPixel(pc, subW, subH, tab.camera());
+    drawArrowsPixel(pc, subW, subH, tab.camera());
 
     auto obj = tab.currentObject();
     if (!obj || !obj->visible()) return;
@@ -4074,6 +4165,21 @@ void Application::registerCommands() {
         if (auto r = applyColorOpt("annotation_color",       &Application::setAnnotationColor))      return *r;
         if (auto r = applyColorOpt("measurement_line_color", &Application::setMeasurementLineColor)) return *r;
         if (auto r = applyColorOpt("outline_color",          &Application::setOutlineColor))         return *r;
+        if (auto r = applyColorOpt("arrow_color",            &Application::setArrowColor))           return *r;
+        if (opt == "arrow_thickness" || opt == "at") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set arrow_thickness <1..10>"};
+            int t = std::stoi(cmd.args[1]);
+            if (t < 1 || t > 10) return {false, "arrow_thickness out of range (1..10)"};
+            app.setArrowThickness(t);
+            return {true, "arrow_thickness = " + std::to_string(t)};
+        }
+        if (opt == "arrow_head_size" || opt == "ahs") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set arrow_head_size <2..32>"};
+            int s = std::stoi(cmd.args[1]);
+            if (s < 2 || s > 32) return {false, "arrow_head_size out of range (2..32)"};
+            app.setArrowHeadSize(s);
+            return {true, "arrow_head_size = " + std::to_string(s)};
+        }
         if (opt == "outline_mode") {
             if (cmd.args.size() < 2) return {false, "Usage: :set outline_mode edge|silhouette|both"};
             const std::string& v = cmd.args[1];
@@ -4556,6 +4662,12 @@ void Application::registerCommands() {
             return {true, "measurement_line_color = " + fmtColor(app.measurementLineColor(), "default (yellow)")};
         if (opt == "outline_color")
             return {true, "outline_color = " + fmtColor(app.outlineColor(), "default (depth-darken)")};
+        if (opt == "arrow_color")
+            return {true, "arrow_color = " + fmtColor(app.arrowColor(), "default (yellow)")};
+        if (opt == "arrow_thickness" || opt == "at")
+            return {true, "arrow_thickness = " + std::to_string(app.arrowThickness())};
+        if (opt == "arrow_head_size" || opt == "ahs")
+            return {true, "arrow_head_size = " + std::to_string(app.arrowHeadSize())};
         if (opt == "outline_mode") {
             const char* m = "edge";
             if (app.outlineMode() == OutlineMode::Silhouette) m = "silhouette";
@@ -6076,7 +6188,78 @@ void Application::registerCommands() {
        {":measure", ":measure pk1 pk2",
         ":measure 12 47 = \"Glu-OE1 ↔ Lys-Nζ\""}, "Measurement");
 
-    // :angle [s1 s2 s3] — angle at vertex s2 (no args = pk1-pk2-pk3)
+    // :arrow — solid arrow with caption (issue #38). Distinct from :measure
+    // (dashed + auto distance) because the visual semantics matter: a solid
+    // arrow reads as "this is an axis vector", not "the author measured
+    // here". Two endpoint forms:
+    //   :arrow <serial1> <serial2> [= "label"]   # atom-to-atom, resolved once
+    //   :arrow $regA $regB         [= "label"]   # vec3 / point register endpoints
+    cmdRegistry_.registerCmd("arrow", [resolveAtomIdx](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto [pos, caption] = splitAtEqToken(cmd.args);
+        if (pos.size() < 2) return {false, "Usage: :arrow <s1> <s2> [= \"label\"] | :arrow $regA $regB"};
+        ArrowOverlay arr;
+        arr.caption = caption;
+        // Resolve a single endpoint to world coords. `$reg` looks up a
+        // Vec3 / Point register; bare token is treated as an atom serial
+        // against the current object.
+        auto resolveEndpoint = [&](const std::string& tok, std::array<float, 3>& out) -> std::string {
+            if (!tok.empty() && tok[0] == '$') {
+                auto it = app.registers().find(tok.substr(1));
+                if (it == app.registers().end()) return "no such register: " + tok;
+                if (it->second.kind != Register::Kind::Vec3)
+                    return "register is not a vec3: " + tok;
+                out[0] = static_cast<float>(it->second.vec[0]);
+                out[1] = static_cast<float>(it->second.vec[1]);
+                out[2] = static_cast<float>(it->second.vec[2]);
+                return "";
+            }
+            int idx = resolveAtomIdx(app, tok);
+            if (idx < 0) return "atom not found: " + tok;
+            auto obj = app.tabs().currentTab().currentObject();
+            if (!obj) return "no current object";
+            const auto& a = obj->atoms()[idx];
+            out = {a.x, a.y, a.z};
+            return "";
+        };
+        if (auto err = resolveEndpoint(pos[0], arr.a); !err.empty()) return {false, err};
+        if (auto err = resolveEndpoint(pos[1], arr.b); !err.empty()) return {false, err};
+        app.arrows().push_back(std::move(arr));
+        return {true, "Arrow added"};
+    }, ":arrow <s1> <s2> [= \"label\"]",
+       "Persistent solid arrow + caption between two atoms / vec3 registers (use $reg for non-atom endpoints)",
+       {":arrow pk1 pk2 = \"V-V axis\"",
+        ":arrow $p1 $p2 = \"helix axis\""}, "Measurement");
+
+    // :axis $reg [= "label"] — render the principal axis of a PCA register
+    // as an arrow centered on its `center`, length proportional to the
+    // square root of the eigenvalue (≈ 1σ along that axis). Provides the
+    // natural composition over `:let G = pca(...); :axis $G`.
+    cmdRegistry_.registerCmd("axis", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto [pos, caption] = splitAtEqToken(cmd.args);
+        if (pos.empty() || pos[0].empty() || pos[0][0] != '$')
+            return {false, "Usage: :axis $pcaRegister [= \"label\"]"};
+        auto it = app.registers().find(pos[0].substr(1));
+        if (it == app.registers().end()) return {false, "no such register: " + pos[0]};
+        if (it->second.kind != Register::Kind::Pca)
+            return {false, "register is not a pca-result: " + pos[0]};
+        const auto& p = it->second.pca;
+        // Length: ±1σ along the longest axis, where σ ≈ √eigval (covariance
+        // eigenvalue is variance). 2× total span renders well at typical zoom;
+        // use min length 1 Å so a perfectly-spherical input still draws.
+        float halfLen = std::max(1.0f, static_cast<float>(std::sqrt(std::max(0.0, p.eigvals[0]))));
+        ArrowOverlay arr;
+        arr.caption = caption;
+        for (int i = 0; i < 3; ++i) {
+            float c = static_cast<float>(p.center[i]);
+            float d = static_cast<float>(p.axis1[i]);
+            arr.a[i] = c - halfLen * d;
+            arr.b[i] = c + halfLen * d;
+        }
+        app.arrows().push_back(std::move(arr));
+        return {true, "Axis added"};
+    }, ":axis $pcaReg [= \"label\"]",
+       "Draw the major axis (axis1) of a pca-result register as an arrow of length ±1σ centered on its centroid",
+       {":axis $G = \"groove axis\""}, "Measurement");
     cmdRegistry_.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
