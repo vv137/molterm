@@ -1,8 +1,39 @@
 #pragma once
 
+#include <array>
 #include <cmath>
+#include <vector>
 
 namespace molterm::geom {
+
+// Principal component analysis result for a set of 3D points.
+//
+//   axis1 / axis2 / axis3 : eigenvectors sorted by descending eigenvalue.
+//                           axis1 = longest axis, axis3 = shortest. All
+//                           unit-length, right-handed (axis3 == axis1×axis2).
+//   eigvals               : matching eigenvalues, sorted descending.
+//   center                : centroid of the input points.
+//
+// Used by `:orient` to align the camera and by `:let G = pca(<sel>)`
+// to expose the PCA frame to scripts (issue #33).
+struct PcaResult {
+    std::array<double, 3> axis1{};
+    std::array<double, 3> axis2{};
+    std::array<double, 3> axis3{};
+    std::array<double, 3> eigvals{};
+    std::array<double, 3> center{};
+    bool valid = false;  // false if input had < 2 points
+};
+
+// Compute PCA of N parallel-array 3D points (xs[i], ys[i], zs[i]).
+// Returns PcaResult with `valid=false` when n < 2 (degenerate).
+// Implementation: covariance matrix → Jacobi eigen-decomposition →
+// sort eigenvalues descending → enforce right-handed frame.
+PcaResult pcaOf(const std::vector<float>& xs,
+                const std::vector<float>& ys,
+                const std::vector<float>& zs);
+
+
 
 // Signed dihedral angle in degrees, [-180, +180], for four 3D points.
 // Uses the standard atan2 convention (no IUPAC sign flip): callers that

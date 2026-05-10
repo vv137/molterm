@@ -15,6 +15,7 @@
 #include "molterm/app/TabManager.h"
 #include "molterm/app/TabViewState.h"
 #include "molterm/cmd/CommandRegistry.h"
+#include "molterm/cmd/Register.h"
 #include "molterm/cmd/UndoStack.h"
 #include "molterm/core/ObjectStore.h"
 #include "molterm/core/Selection.h"
@@ -329,6 +330,12 @@ private:
 
     // Named selections
     std::unordered_map<std::string, Selection> namedSelections_;
+    // Typed registers populated by `:let <name> = <expr>` (#32, #33, #35).
+    std::unordered_map<std::string, Register> registers_;
+public:
+    std::unordered_map<std::string, Register>& registers() { return registers_; }
+    const std::unordered_map<std::string, Register>& registers() const { return registers_; }
+private:
 
     // Command scope (`:set scope all|current`, default all). The optional
     // override slot is set by the `:!` bang-prefix dispatcher around a
