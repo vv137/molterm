@@ -610,6 +610,31 @@ void Application::quit(bool force) {
 std::string Application::loadFile(const std::string& path) {
     MLOG_INFO("Loading file: %s", path.c_str());
 
+    // Re-runnable scripts call `:load same.cif` repeatedly; without dedup,
+    // each call would silently create same_1, same_2, … and stack visible
+    // copies (issue #27). Skip if a loaded object already points at the
+    // same canonical path. To force a refresh, :delete the existing object
+    // first.
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path want = fs::weakly_canonical(path, ec);
+    if (!ec && !want.empty()) {
+        for (const auto& [name, obj] : store_) {
+            if (!obj || obj->sourcePath().empty()) continue;
+            fs::path have = fs::weakly_canonical(obj->sourcePath(), ec);
+            if (ec) { ec.clear(); continue; }
+            if (have == want) {
+                // Keep "Loaded " prefix so :loadalign/:fetch ok-detection
+                // (which sniffs `result.rfind("Loaded ", 0) == 0`) still
+                // treats this as success.
+                std::string msg = "Loaded " + name + " (cached, same path)";
+                MLOG_INFO("%s", msg.c_str());
+                cmdLine_.setMessage(msg);
+                return msg;
+            }
+        }
+    }
+
     // Show loading message immediately
     cmdLine_.setMessage("Loading " + path + "...");
     if (!isHeadless()) {
@@ -5280,9 +5305,7 @@ void Application::registerCommands() {
         if (cmd.args[0] == "clear") {
             int mc = static_cast<int>(app.measurements().size());
             int lc = static_cast<int>(app.labelAtoms().size());
-            app.measurements().clear();
-            app.labelAtoms().clear();
-            app.labelText().clear();
+            app.clearOverlayAnnotations();
             return {true, "Cleared " + std::to_string(mc) + " measurements, " +
                    std::to_string(lc) + " labels"};
         }
@@ -5293,18 +5316,24 @@ void Application::registerCommands() {
     }, ":overlay on|off | clear", "Toggle overlay visibility (labels, measurements, $sele) or clear them",
        {":overlay on", ":overlay off", ":overlay clear"}, "Display");
 
-    // :run [--strict] <script.mt> — execute a command script
+    // :run [--strict] [--fresh] <script.mt> — execute a command script
     cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        if (cmd.args.empty()) return {false, "Usage: :run [--strict] <script.mt>"};
-        bool strict = false;
+        if (cmd.args.empty()) return {false, "Usage: :run [--strict] [--fresh] <script.mt>"};
+        bool strict = false, fresh = false;
         std::string path;
         for (const auto& a : cmd.args) {
-            if (a == "--strict") strict = true;
-            else if (path.empty()) path = a;
+            if      (a == "--strict") strict = true;
+            else if (a == "--fresh")  fresh  = true;
+            else if (path.empty())    path   = a;
         }
-        if (path.empty()) return {false, "Usage: :run [--strict] <script.mt>"};
+        if (path.empty()) return {false, "Usage: :run [--strict] [--fresh] <script.mt>"};
         std::ifstream file(path);
         if (!file) return {false, "Cannot open: " + path};
+        // --fresh: wipe overlay annotations (labels, measurements) before
+        // executing the script, so a batch render driver
+        // (`:run setup; :screenshot fig1; :run setup; :screenshot fig2`)
+        // doesn't accumulate fig1's overlays into fig2 (issue #28).
+        if (fresh) app.clearOverlayAnnotations();
         ScriptRunResult r = app.runScriptStream(file, strict);
         if (strict && r.stopped) {
             MLOG_INFO("Ran %d commands from %s (stopped on error)", r.count, path.c_str());
@@ -5316,9 +5345,11 @@ void Application::registerCommands() {
                     " (" + std::to_string(r.failures) + " failed; first: " + r.firstFail + ")"};
         }
         return {true, "Ran " + std::to_string(r.count) + " commands from " + path};
-    }, ":run [--strict] <file>",
-       "Execute a command script (# comments supported; --strict aborts on first error)",
-       {":run render.mt", ":run --strict ci.mt"}, "Files");
+    }, ":run [--strict] [--fresh] <file>",
+       "Execute a command script (# comments supported; --strict aborts on first error; "
+       "--fresh clears overlay annotations before running so batch-render drivers "
+       "don't leak labels/measurements between figures)",
+       {":run render.mt", ":run --strict ci.mt", ":run --fresh fig2.mt"}, "Files");
 
     cmdRegistry_.registerCmd("setenv", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto& env = app.scriptEnv();

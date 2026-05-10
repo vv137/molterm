@@ -453,6 +453,13 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   :load *.pdb
                                 "   :load model_{1..5}.cif
                                 "   :load relaxed_*.pdb confident_*.cif
+                                "   Idempotent on canonical source path: re-running
+                                "   `:load same.cif` after an earlier load returns
+                                "   "Loaded <name> (cached, same path)" instead of
+                                "   creating a `_1`-suffixed duplicate. Re-runnable
+                                "   batch-render scripts no longer stack overlapping
+                                "   copies of the assembly. To force a refresh of an
+                                "   already-loaded object, `:delete <name>` first.
 :fetch <pdb_id>                 " Download from RCSB PDB (e.g. fetch 1abc)
 :fetch afdb:<uniprot_id>        " Download from AlphaFold DB (e.g. fetch afdb:P12345)
 :show <repr> [selection]         " Show repr (optionally for selection only); applies across scope (see Multi-object scope)
@@ -496,7 +503,17 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :overlay                        " Toggle overlay visibility (labels, measurements, sele)
 :overlay clear                  " Clear all measurements and labels
 :preset                         " Apply smart defaults (cartoon protein, ballstick ligands)
-:run [--strict] <script.mt>     " Execute command script (# comments supported; --strict aborts on first error)
+:run [--strict] [--fresh] <script.mt>
+                                " Execute a command script (# comments supported).
+                                "   --strict  Abort on the first failing command (CI-style).
+                                "   --fresh   Clear overlay annotations (labels,
+                                "             :measure / :angle / :dihedral) before
+                                "             running, so a batch-render driver
+                                "             (`:run --fresh fig1.mt; :run --fresh fig2.mt`)
+                                "             does not leak fig1's labels into fig2.
+                                "             Without --fresh, overlays accumulate
+                                "             across :run calls — useful for layered
+                                "             setup scripts, intentional caption stacks.
 :save                           " Save session (auto-saved on quit)
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png] [W H [DPI]] " Save PNG; W H force off-screen size, optional DPI stamps pHYs metadata
