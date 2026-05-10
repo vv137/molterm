@@ -3,6 +3,7 @@
 #include "molterm/app/CommandScope.h"
 #include "molterm/app/PathPatterns.h"
 #include "molterm/cmd/CommandParser.h"
+#include "molterm/cmd/RegisterExpr.h"
 #include "molterm/io/Aligner.h"
 #include "molterm/io/CifLoader.h"
 #include "molterm/render/AsciiCanvas.h"
@@ -627,14 +628,61 @@ std::string Application::expandScriptVars(const std::string& line) const {
         if (c == '$' && i + 1 < line.size() && line[i + 1] == '{') {
             size_t close = line.find('}', i + 2);
             if (close != std::string::npos) {
-                std::string name = line.substr(i + 2, close - i - 2);
+                // Body grammar: <name>[.field][:fmt]
+                //   name  : isValidEnvName (alnum + underscore)
+                //   field : optional dotted accessor (axis1, center, x, length, …)
+                //   fmt   : optional printf spec (e.g. .2f, 4.1f, .0e, d)
+                // Lookup order:
+                //   1. registers_ (typed; vec3 → "(x, y, z)" by default)
+                //   2. scriptEnv_ (set by :setenv)
+                //   3. process getenv()
+                std::string body = line.substr(i + 2, close - i - 2);
+                std::string name, field, fmt;
+                size_t dot = body.find('.');
+                size_t colon = body.find(':');
+                size_t nameEnd = std::min(dot, colon);
+                name = body.substr(0, nameEnd);
+                if (dot != std::string::npos && dot < colon) {
+                    field = body.substr(dot + 1,
+                              (colon == std::string::npos ? body.size() : colon) - dot - 1);
+                }
+                if (colon != std::string::npos) fmt = body.substr(colon + 1);
+                bool consumed = false;
                 if (isValidEnvName(name)) {
-                    auto it = scriptEnv_.find(name);
-                    if (it != scriptEnv_.end()) {
-                        out += it->second;
-                    } else if (const char* env = std::getenv(name.c_str())) {
-                        out += env;
+                    auto regIt = registers_.find(name);
+                    if (regIt != registers_.end()) {
+                        const Register& r = regIt->second;
+                        // Try Scalar field first, then Vec3.
+                        if (auto s = r.getScalar(field)) {
+                            char buf[64];
+                            std::string spec = fmt.empty() ? std::string("%g") : ("%" + fmt);
+                            std::snprintf(buf, sizeof(buf), spec.c_str(), *s);
+                            out += buf;
+                            consumed = true;
+                        } else if (auto v = r.getVec(field)) {
+                            char buf[128];
+                            std::string spec = fmt.empty()
+                                ? std::string("(%.3f, %.3f, %.3f)")
+                                : ("(%" + fmt + ", %" + fmt + ", %" + fmt + ")");
+                            std::snprintf(buf, sizeof(buf), spec.c_str(),
+                                          (*v)[0], (*v)[1], (*v)[2]);
+                            out += buf;
+                            consumed = true;
+                        }
+                        // Field doesn't match anything — fall through to env.
                     }
+                    if (!consumed) {
+                        auto it = scriptEnv_.find(name);
+                        if (it != scriptEnv_.end()) {
+                            out += it->second;
+                            consumed = true;
+                        } else if (const char* env = std::getenv(name.c_str())) {
+                            out += env;
+                            consumed = true;
+                        }
+                    }
+                }
+                if (consumed || isValidEnvName(name)) {
                     i = close + 1;
                     continue;
                 }
@@ -3710,71 +3758,16 @@ void Application::registerCommands() {
             return {true, "Centered (need >=2 atoms for orientation)"};
         }
 
-        // PCA over the union of atom positions across all in-scope objects.
-        double A[3][3] = {};
-        for (size_t i = 0; i < g.xs.size(); ++i) {
-            double dx = g.xs[i] - cx, dy = g.ys[i] - cy, dz = g.zs[i] - cz;
-            A[0][0] += dx*dx; A[0][1] += dx*dy; A[0][2] += dx*dz;
-            A[1][1] += dy*dy; A[1][2] += dy*dz;
-            A[2][2] += dz*dz;
-        }
-        A[1][0] = A[0][1]; A[2][0] = A[0][2]; A[2][1] = A[1][2];
-
-        // Jacobi eigendecomposition for symmetric 3x3
-        double V[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
-        for (int sweep = 0; sweep < 50; ++sweep) {
-            double off = std::abs(A[0][1]) + std::abs(A[0][2]) + std::abs(A[1][2]);
-            if (off < 1e-12) break;
-            for (int p = 0; p < 3; ++p) {
-                for (int q = p + 1; q < 3; ++q) {
-                    double apq = A[p][q];
-                    if (std::abs(apq) < 1e-15) continue;
-                    double theta = (A[q][q] - A[p][p]) / (2.0 * apq);
-                    double t = (theta >= 0)
-                        ? 1.0 / (theta + std::sqrt(1.0 + theta*theta))
-                        : 1.0 / (theta - std::sqrt(1.0 + theta*theta));
-                    double c = 1.0 / std::sqrt(1.0 + t*t);
-                    double s = t * c;
-                    double app_old = A[p][p], aqq_old = A[q][q];
-                    A[p][p] = app_old - t*apq;
-                    A[q][q] = aqq_old + t*apq;
-                    A[p][q] = A[q][p] = 0.0;
-                    for (int r = 0; r < 3; ++r) {
-                        if (r != p && r != q) {
-                            double arp = A[r][p], arq = A[r][q];
-                            A[r][p] = A[p][r] = c*arp - s*arq;
-                            A[r][q] = A[q][r] = s*arp + c*arq;
-                        }
-                    }
-                    for (int r = 0; r < 3; ++r) {
-                        double vrp = V[r][p], vrq = V[r][q];
-                        V[r][p] = c*vrp - s*vrq;
-                        V[r][q] = s*vrp + c*vrq;
-                    }
-                }
-            }
-        }
-
-        // Sort eigenvectors by eigenvalue descending: e1 (longest) → e3 (shortest)
-        int order[3] = {0, 1, 2};
-        double eig[3] = {A[0][0], A[1][1], A[2][2]};
-        if (eig[order[0]] < eig[order[1]]) std::swap(order[0], order[1]);
-        if (eig[order[1]] < eig[order[2]]) std::swap(order[1], order[2]);
-        if (eig[order[0]] < eig[order[1]]) std::swap(order[0], order[1]);
-
-        double e1[3] = {V[0][order[0]], V[1][order[0]], V[2][order[0]]};
-        double e2[3] = {V[0][order[1]], V[1][order[1]], V[2][order[1]]};
-        double e3[3] = {V[0][order[2]], V[1][order[2]], V[2][order[2]]};
-
-        // Force right-handed PCA frame: e3 should equal e1 × e2
-        double cr[3] = {
-            e1[1]*e2[2] - e1[2]*e2[1],
-            e1[2]*e2[0] - e1[0]*e2[2],
-            e1[0]*e2[1] - e1[1]*e2[0]
-        };
-        if (cr[0]*e3[0] + cr[1]*e3[1] + cr[2]*e3[2] < 0) {
-            e3[0] = -e3[0]; e3[1] = -e3[1]; e3[2] = -e3[2];
-        }
+        // PCA over the union of atom positions across in-scope objects.
+        // The same primitive is exposed to scripts via `:let G = pca(...)`
+        // (issue #33); both code paths come through geom::pcaOf so the
+        // PCA frame chosen by `:orient` always matches the one a script
+        // sees.
+        auto pca = geom::pcaOf(g.xs, g.ys, g.zs);
+        if (!pca.valid) return {true, "Centered (need >=2 atoms for orientation)"};
+        const auto& e1 = pca.axis1;
+        const auto& e2 = pca.axis2;
+        const auto& e3 = pca.axis3;
 
         // View direction in world space
         double sz[3] = {
@@ -4817,6 +4810,166 @@ void Application::registerCommands() {
     }, ":camera [save|load|reset] [file]",
        "Save/load/reset the camera (15-float state: rotation 3x3, center XYZ, zoom, pan XY) — bit-reproducible figures",
        {":camera", ":camera save fig30.cam", ":camera load fig30.cam", ":camera reset"}, "View");
+
+    // :let <name> = <expr> — typed registers (#32, #33, #35).
+    //
+    // The expression evaluator (RegisterExpr) supports scalars, vec3
+    // literals (`[x,y,z]`), atom positions via `pos(<chain:resi:name>)`,
+    // PCA results via `pca(<selection>)`, and the usual vector algebra
+    // (+, -, *, /, dot, cross, length, normalize, midpoint, angle).
+    // Field access on registers: `$g.axis1`, `$g.center`, `$v.length`,
+    // etc. — see Register::getVec/getScalar.
+    cmdRegistry_.registerCmd("let", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        // Find `=` separator. Name is the single token before; RHS is
+        // everything after, rejoined with spaces (the command parser
+        // already split on whitespace AND commas, so `[1, 0, 0]` arrives
+        // as `[1` `0` `0]` — we re-emit commas between adjacent tokens
+        // so the expression lexer sees a clean stream).
+        int eqIdx = -1;
+        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
+            if (cmd.args[i] == "=") { eqIdx = i; break; }
+        }
+        if (eqIdx != 1) {
+            return {false, "Usage: :let <name> = <expr>"};
+        }
+        const std::string& name = cmd.args[0];
+        if (name.empty() || !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_')) {
+            return {false, "Register name must start with letter or underscore"};
+        }
+        // Rejoin RHS. The command parser already split on whitespace AND
+        // commas, so we re-emit commas between adjacent bare tokens (so
+        // `[1 2 3]` becomes `[1,2,3]` and `angle(v d)` becomes `angle(v,d)`
+        // for the expression lexer). Free-text inside pca(...)/pos(...)
+        // would over-comma here, but the builtin handlers normalize
+        // commas back to spaces before resolving the selection / atom-spec.
+        std::string rhs;
+        for (int i = eqIdx + 1; i < static_cast<int>(cmd.args.size()); ++i) {
+            const std::string& t = cmd.args[i];
+            if (!rhs.empty()) {
+                char last = rhs.back();
+                char first = t.empty() ? ' ' : t[0];
+                bool lastIsOp   = (last  == '+' || last  == '-' || last  == '*' ||
+                                   last  == '/' || last  == '(' || last  == '[' ||
+                                   last  == ',' || last  == '.');
+                bool firstIsOp  = (first == '+' || first == '-' || first == '*' ||
+                                   first == '/' || first == ')' || first == ']' ||
+                                   first == ',' || first == '.');
+                if (!lastIsOp && !firstIsOp) rhs += ',';
+                else                          rhs += ' ';
+            }
+            rhs += t;
+        }
+
+        RegisterExpr::Context ctx;
+        ctx.regs = &app.registers();
+        ctx.resolveAtomPos = [&app](const std::string& spec, double* x, double* y, double* z) -> bool {
+            // Atom-spec resolver: "chain:resi:name" against the current
+            // object. Falls back to the first atom of (chain, resi) when
+            // name is omitted; falls back to first matching residue when
+            // both omitted (rare; mostly for chain-then-resi typos).
+            auto obj = app.tabs().currentTab().currentObject();
+            if (!obj) return false;
+            std::string chain, resi, name;
+            int part = 0;
+            for (char c : spec) {
+                if (c == ':') { ++part; continue; }
+                if (std::isspace(static_cast<unsigned char>(c))) continue;
+                if      (part == 0) chain += c;
+                else if (part == 1) resi += c;
+                else                name += c;
+            }
+            int rs = -1;
+            try { rs = std::stoi(resi); } catch (...) { return false; }
+            const auto& atoms = obj->atoms();
+            for (const auto& a : atoms) {
+                if (!chain.empty() && a.chainId != chain) continue;
+                if (a.resSeq != rs) continue;
+                if (!name.empty() && a.name != name) continue;
+                *x = a.x; *y = a.y; *z = a.z;
+                return true;
+            }
+            return false;
+        };
+        ctx.collectSelectionXYZ = [&app](const std::string& expr,
+                                         std::vector<float>* xs,
+                                         std::vector<float>* ys,
+                                         std::vector<float>* zs) -> int {
+            auto obj = app.tabs().currentTab().currentObject();
+            if (!obj) return 0;
+            // pca(<sel>) gets comma-injected by the :let RHS rejoin (since
+            // the command parser pre-split on commas + whitespace). The
+            // selection grammar uses spaces, never commas, so it's safe
+            // to swap them back out before parsing.
+            std::string normalized = expr;
+            for (char& c : normalized) if (c == ',') c = ' ';
+            auto sel = app.parseSelection(normalized, *obj);
+            const auto& atoms = obj->atoms();
+            for (int i : sel.indices()) {
+                if (i < 0 || i >= (int)atoms.size()) continue;
+                xs->push_back(atoms[i].x);
+                ys->push_back(atoms[i].y);
+                zs->push_back(atoms[i].z);
+            }
+            return static_cast<int>(xs->size());
+        };
+
+        auto r = RegisterExpr::eval(rhs, ctx);
+        if (!r.ok) return {false, ":let " + name + ": " + r.error};
+        app.registers()[name] = r.value;
+        return {true, formatRegister(name, r.value)};
+    }, ":let <name> = <expr>",
+       "Bind a typed register (scalar, vec3, or pca-result) for reuse later. "
+       "Expression supports +,-,*,/, vec3 literals [x,y,z], $reg.field access, "
+       "and builtins pos()/pca()/dot()/cross()/length()/normalize()/midpoint()/angle().",
+       {":let v_axis = pos(A:43:CA) - pos(B:23:CA)",
+        ":let G = pca(chain A and helix)",
+        ":let theta = angle($v_axis, $G.axis1)"}, "Registers");
+
+    // :unlet <name> | :unlet * — drop registers.
+    cmdRegistry_.registerCmd("unlet", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty()) return {false, "Usage: :unlet <name> | :unlet *"};
+        if (cmd.args[0] == "*" || cmd.args[0] == "all") {
+            int n = static_cast<int>(app.registers().size());
+            app.registers().clear();
+            return {true, "Cleared " + std::to_string(n) + " registers"};
+        }
+        auto& tbl = app.registers();
+        auto it = tbl.find(cmd.args[0]);
+        if (it == tbl.end()) return {false, "No such register: " + cmd.args[0]};
+        tbl.erase(it);
+        return {true, "Unlet " + cmd.args[0]};
+    }, ":unlet <name>|*", "Drop a named register (or all of them)",
+       {":unlet v_axis", ":unlet *"}, "Registers");
+
+    // :registers — list all registers with their values.
+    cmdRegistry_.registerCmd("registers", [](Application& app, const ParsedCommand&) -> ExecResult {
+        const auto& tbl = app.registers();
+        if (tbl.empty()) return {true, "No registers"};
+        std::string out;
+        for (const auto& [name, r] : tbl) {
+            if (!out.empty()) out += '\n';
+            char buf[160];
+            switch (r.kind) {
+                case Register::Kind::Scalar:
+                    std::snprintf(buf, sizeof(buf), "%s = %.6g", name.c_str(), r.scalar);
+                    break;
+                case Register::Kind::Vec3:
+                    std::snprintf(buf, sizeof(buf), "%s = [%.4f, %.4f, %.4f]",
+                                  name.c_str(), r.vec[0], r.vec[1], r.vec[2]);
+                    break;
+                case Register::Kind::Pca:
+                    std::snprintf(buf, sizeof(buf),
+                        "%s = pca: center=(%.3f, %.3f, %.3f) eigvals=[%.3f, %.3f, %.3f]",
+                        name.c_str(),
+                        r.pca.center[0], r.pca.center[1], r.pca.center[2],
+                        r.pca.eigvals[0], r.pca.eigvals[1], r.pca.eigvals[2]);
+                    break;
+            }
+            out += buf;
+        }
+        return {true, out};
+    }, ":registers", "List all named registers and their typed values",
+       {":registers"}, "Registers");
 
     // :select <expression>
     cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> ExecResult {

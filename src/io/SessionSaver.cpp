@@ -1,5 +1,6 @@
 #include "molterm/io/SessionSaver.h"
 #include "molterm/app/Application.h"
+#include "molterm/cmd/Register.h"
 #include "molterm/core/Logger.h"
 
 #include <cstdlib>
@@ -95,6 +96,35 @@ bool SessionSaver::saveSession(const Application& app) {
         out << "\n";
     }
 
+    // Typed registers (`:let` from issues #32, #33, #35). Each register
+    // round-trips its kind + value so `:resume` recovers exact values
+    // without re-evaluating the original expression — important when the
+    // source structure has changed since the autosave (re-evaluating
+    // `pos(A:1:CA)` against a different model would silently drift).
+    for (const auto& [name, r] : app.registers()) {
+        out << "\n[[register]]\n";
+        out << "name = \"" << name << "\"\n";
+        if (!r.expr.empty()) out << "expr = \"" << r.expr << "\"\n";
+        switch (r.kind) {
+            case Register::Kind::Scalar:
+                out << "kind = \"scalar\"\n";
+                out << "scalar = " << r.scalar << "\n";
+                break;
+            case Register::Kind::Vec3:
+                out << "kind = \"vec3\"\n";
+                out << "vec = [" << r.vec[0] << ", " << r.vec[1] << ", " << r.vec[2] << "]\n";
+                break;
+            case Register::Kind::Pca:
+                out << "kind = \"pca\"\n";
+                out << "center = [" << r.pca.center[0] << ", " << r.pca.center[1] << ", " << r.pca.center[2] << "]\n";
+                out << "axis1 = ["  << r.pca.axis1[0]  << ", " << r.pca.axis1[1]  << ", " << r.pca.axis1[2]  << "]\n";
+                out << "axis2 = ["  << r.pca.axis2[0]  << ", " << r.pca.axis2[1]  << ", " << r.pca.axis2[2]  << "]\n";
+                out << "axis3 = ["  << r.pca.axis3[0]  << ", " << r.pca.axis3[1]  << ", " << r.pca.axis3[2]  << "]\n";
+                out << "eigvals = ["<< r.pca.eigvals[0]<< ", " << r.pca.eigvals[1]<< ", " << r.pca.eigvals[2]<< "]\n";
+                break;
+        }
+    }
+
     MLOG_INFO("Session saved to %s", path.c_str());
     return true;
 }
@@ -132,6 +162,28 @@ std::string SessionSaver::restoreSession(Application& app) {
     std::vector<TabState> tabs;
     TabState* curTab = nullptr;
     ObjState* curObj = nullptr;
+    // Pending registers — accumulated as we walk the file and applied
+    // to app.registers() after the tab-level state restore so the
+    // typed-value snapshot wins regardless of section order.
+    struct PendingReg {
+        std::string name;
+        std::string kind = "scalar";
+        std::string expr;
+        double scalar = 0;
+        std::array<double, 3> vec{};
+        geom::PcaResult pca;
+    };
+    std::vector<PendingReg> pendingRegs;
+    PendingReg* curReg = nullptr;
+    auto parseTriple = [](const std::string& v, std::array<double, 3>& out) {
+        std::string s = v;
+        if (!s.empty() && s.front() == '[') s = s.substr(1);
+        if (!s.empty() && s.back() == ']')  s.pop_back();
+        std::istringstream ss(s);
+        for (int i = 0; i < 3; ++i) {
+            ss >> out[i]; if (ss.peek() == ',') ss.ignore();
+        }
+    };
 
     std::string line;
     while (std::getline(in, line)) {
@@ -144,12 +196,22 @@ std::string SessionSaver::restoreSession(Application& app) {
             tabs.emplace_back();
             curTab = &tabs.back();
             curObj = nullptr;
+            curReg = nullptr;
             continue;
         }
         if (line == "[[tab.object]]") {
             if (!curTab) { tabs.emplace_back(); curTab = &tabs.back(); }
             curTab->objects.emplace_back();
             curObj = &curTab->objects.back();
+            curReg = nullptr;
+            continue;
+        }
+        if (line == "[[register]]") {
+            pendingRegs.emplace_back();
+            curReg = &pendingRegs.back();
+            curObj = nullptr;
+            // Stays at register-section regardless of which tab it lives
+            // in — registers are app-level, not tab-level.
             continue;
         }
 
@@ -164,6 +226,23 @@ std::string SessionSaver::restoreSession(Application& app) {
         // Strip quotes
         if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
             val = val.substr(1, val.size() - 2);
+
+        // Register-level keys take precedence over session-level when
+        // we're inside a [[register]] section (they appear after at
+        // least one [[tab]]; curReg is the explicit gate).
+        if (curReg) {
+            if      (key == "name")    curReg->name = val;
+            else if (key == "kind")    curReg->kind = val;
+            else if (key == "expr")    curReg->expr = val;
+            else if (key == "scalar")  curReg->scalar = std::stod(val);
+            else if (key == "vec")     parseTriple(val, curReg->vec);
+            else if (key == "center")  parseTriple(val, curReg->pca.center);
+            else if (key == "axis1")   parseTriple(val, curReg->pca.axis1);
+            else if (key == "axis2")   parseTriple(val, curReg->pca.axis2);
+            else if (key == "axis3")   parseTriple(val, curReg->pca.axis3);
+            else if (key == "eigvals") parseTriple(val, curReg->pca.eigvals);
+            continue;
+        }
 
         // Session-level keys
         if (!curTab) {
@@ -284,8 +363,26 @@ std::string SessionSaver::restoreSession(Application& app) {
     // Go back to first tab
     if (tabs.size() > 1) app.tabs().goToTab(0);
 
+    // Apply registers — pca.valid is set true so consumers don't have to
+    // know that the snapshot bypasses pcaOf().
+    for (const auto& pr : pendingRegs) {
+        if (pr.name.empty()) continue;
+        Register r;
+        r.expr = pr.expr;
+        if      (pr.kind == "scalar") { r.kind = Register::Kind::Scalar; r.scalar = pr.scalar; }
+        else if (pr.kind == "vec3")   { r.kind = Register::Kind::Vec3;   r.vec    = pr.vec; }
+        else if (pr.kind == "pca") {
+            r.kind = Register::Kind::Pca;
+            r.pca = pr.pca;
+            r.pca.valid = true;
+        } else continue;  // unknown kind — skip rather than poison the table
+        app.registers()[pr.name] = std::move(r);
+    }
+
     std::string result = "Restored session: " + std::to_string(filesLoaded) + " files";
     if (filesFailed > 0) result += " (" + std::to_string(filesFailed) + " failed)";
+    if (!pendingRegs.empty())
+        result += ", " + std::to_string(pendingRegs.size()) + " registers";
     MLOG_INFO("%s", result.c_str());
     return result;
 }

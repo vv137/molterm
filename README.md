@@ -514,7 +514,13 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "             Without --fresh, overlays accumulate
                                 "             across :run calls — useful for layered
                                 "             setup scripts, intentional caption stacks.
-:save                           " Save session (auto-saved on quit)
+:save                           " Save session (auto-saved on quit). Persists
+                                "   loaded objects, per-tab camera state, and
+                                "   typed registers (`:let`) so `:resume` recovers
+                                "   the exact register values without
+                                "   re-evaluating their original expressions —
+                                "   important when the source structure has
+                                "   changed since the autosave.
 :export <file.pml>              " Export session as PyMOL script
 :screenshot [file.png] [W H [DPI]] " Save PNG; W H force off-screen size, optional DPI stamps pHYs metadata
 :interface [cutoff]             " Toggle inter-chain contact overlay (closest heavy atom, default: 4.5Å)
@@ -649,6 +655,38 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "                   colored rim with subtle interior
                                 "                   depth-edge darkening on top.
 :get <option>                    " Query current value of any :set option (for scripting)
+:let <name> = <expr>             " Bind a typed register (scalar / vec3 / pca-result)
+                                "   for reuse in later commands. Closes #32, #33, #35.
+                                "   Expression supports:
+                                "     - Scalars: 1.5, -3
+                                "     - Vec3 literals: [1, 0, 0]
+                                "     - Atom positions: pos(A:1:CA)         (chain:resi:atom)
+                                "     - Register refs: $G.axis1, $v.length
+                                "                      (bare names also work: G.axis1)
+                                "     - Vector algebra: + - * /, dot(), cross(),
+                                "                      length(), normalize(), midpoint(),
+                                "                      angle()       (degrees)
+                                "     - PCA primitive: pca(<selection>)     -> { axis1,
+                                "                      axis2, axis3, eigvals, center }
+                                "   Type rules: vec±vec, scalar±scalar, scalar*vec,
+                                "   vec/scalar, dot/cross/length/angle on vec3.
+                                "   Examples:
+                                "     :let v_axis = pos(A:43:CA) - pos(B:23:CA)
+                                "     :let G = pca(chain A and helix)
+                                "     :let theta = angle(v_axis, G.axis1)
+:unlet <name> | :unlet *         " Drop one named register, or all of them.
+:registers                       " List every register and its current value.
+
+" ── ${name.field[:fmt]} interpolation ───────────────────────────────
+" Inside any string-typed argument (`:setenv`, `:label`, `:measure ...= caption`,
+" etc.), references to registers + a printf-style format spec are expanded
+" before the command sees them. Lookup order: registers, scriptEnv (set by
+" :setenv), process getenv. Examples:
+"     ${theta:.2f}            -> 12.34
+"     ${v.length:.1f}         -> 8.7
+"     ${V.x:.4f}              -> 1.0000
+"     ${G.center}             -> (1.230, 4.560, 7.890)   (vec3 default fmt)
+"     ${G.center:.2f}         -> (1.23, 4.56, 7.89)      (per-component fmt)
 :set / :set all                  " (no value) Print every queryable option's
                                 "   current value, one per line — Vim parity for
                                 "   `:set all`. The list is the canonical option

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(molterm VERSION 0.24.0 LANGUAGES CXX)
+project(molterm VERSION 0.25.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -66,6 +66,7 @@ endif()
 set(MOLTERM_SOURCES
     src/main.cpp
     # Core
+    src/core/Geometry.cpp
     src/core/MolObject.cpp
     src/core/ObjectStore.cpp
     src/core/Selection.cpp
@@ -119,6 +120,8 @@ set(MOLTERM_SOURCES
     # Cmd
     src/cmd/CommandParser.cpp
     src/cmd/CommandRegistry.cpp
+    src/cmd/Register.cpp
+    src/cmd/RegisterExpr.cpp
     src/cmd/UndoStack.cpp
     # App
     src/app/Tab.cpp
