@@ -216,7 +216,12 @@ public:
     bool verbose() const { return verbose_; }
     void setVerbose(bool v) { verbose_ = v; }
     // Helps diagnose empty-canvas screenshots from headless scripts.
-    void logViewState(const struct ParsedCommand& cmd) const;
+    // basisAtoms ≥ 0 → that count went into the camera-basis bbox (the
+    // selection's atoms across all in-scope objects). basisAtoms < 0 →
+    // the call didn't have a bbox basis (e.g. `:focus off`); fall back
+    // to the current object's total atom count so the log line stays
+    // structurally identical.
+    void logViewState(const struct ParsedCommand& cmd, int basisAtoms = -1) const;
     void logSelectionInfo(const std::string& name,
                           const std::string& expr,
                           const class Selection& sel,

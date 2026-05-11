@@ -942,18 +942,33 @@ std::optional<std::array<uint8_t, 3>> parseColorSpec(const std::string& s) {
 
 }  // namespace
 
-void Application::logViewState(const ParsedCommand& cmd) const {
+void Application::logViewState(const ParsedCommand& cmd, int basisAtoms) const {
     if (!verbose_) return;
     auto& tab = tabMgr_.currentTab();
     const auto& cam = tab.camera();
-    auto obj = tab.currentObject();
-    int total = obj ? static_cast<int>(obj->atoms().size()) : 0;
+    // For commands that fitted a bbox to a selection (:center / :zoom /
+    // :orient / :focus), report the selection-basis atom count — that
+    // is the number that actually went into center/zoom. Otherwise fall
+    // back to the current object's total atom count. Previously this
+    // always reported the latter, which made it look like the bbox was
+    // computed from the whole object even when an obj/(sel) qualifier
+    // narrowed it (issue #85 confusion source).
+    int reported;
+    const char* label;
+    if (basisAtoms >= 0) {
+        reported = basisAtoms;
+        label = "basis_atoms";
+    } else {
+        auto obj = tab.currentObject();
+        reported = obj ? static_cast<int>(obj->atoms().size()) : 0;
+        label = "total_atoms";
+    }
     // Width 7 = max(label_len)+1 (longest is "orient", 6) for column alignment.
     std::fprintf(stderr,
-        "[view] %-7s -> center=(%.2f, %.2f, %.2f) zoom=%.3f pan=(%.2f, %.2f) total_atoms=%d\n",
+        "[view] %-7s -> center=(%.2f, %.2f, %.2f) zoom=%.3f pan=(%.2f, %.2f) %s=%d\n",
         cmd.name.c_str(),
         cam.centerX(), cam.centerY(), cam.centerZ(),
-        cam.zoom(), cam.panXOffset(), cam.panYOffset(), total);
+        cam.zoom(), cam.panXOffset(), cam.panYOffset(), label, reported);
 }
 
 void Application::logSelectionInfo(const std::string& name,
@@ -4299,7 +4314,7 @@ void Application::registerCommands() {
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
         std::string msg = "Centered on " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
-        app.logViewState(cmd);
+        app.logViewState(cmd, static_cast<int>(g.xs.size()));
         return {true, msg};
     }, ":center [selection]", "Center the view on a selection (or whole object)",
        {":center", ":center chain A", ":center resn HEM"}, "View");
@@ -4313,7 +4328,7 @@ void Application::registerCommands() {
         if (span > 0.0f) app.tabs().currentTab().camera().setZoom(40.0f / span);
         std::string msg = "Zoomed to " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
-        app.logViewState(cmd);
+        app.logViewState(cmd, static_cast<int>(g.xs.size()));
         return {true, msg};
     }, ":zoom [selection]", "Center and zoom to fit the selection (or whole object)",
        {":zoom", ":zoom chain A", ":zoom resi 50-80"}, "View");
@@ -4402,7 +4417,7 @@ void Application::registerCommands() {
 
         std::string msg = "Oriented " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
-        app.logViewState(cmd);
+        app.logViewState(cmd, static_cast<int>(g.xs.size()));
         return {true, msg};
     }, ":orient [view <vx> <vy> <vz>] [selection]",
        "Center, zoom, and align principal axes (default: view down shortest axis)",
@@ -7529,7 +7544,7 @@ void Application::registerCommands() {
         Selection sel = app.parseSelection(expr, *obj);
         if (sel.empty()) return {false, "Empty selection: " + expr};
         app.enterFocus(*obj, sel.indices(), expr);
-        app.logViewState(cmd);
+        app.logViewState(cmd, static_cast<int>(sel.size()));
         return {true, "Focus: " + std::to_string(sel.size()) +
                       " atoms (" + expr + ")"};
     }, ":focus <selection>|off",
