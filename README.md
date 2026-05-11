@@ -484,6 +484,15 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :select <name> = <expr>         " Named selection (e.g. :select s1 = $sele)
 :select clear                   " Clear $sele and pk1-pk4 (also bound to gx)
 :count <expr>                   " Count matching atoms
+:cmp <expr-A> vs <expr-B>       " Compare two selections (Venn breakdown + verdict).
+                                "   Prints |A| |B| |A∩B| |A\B| |B\A| and ends with
+                                "   one verdict word — equal / A⊆B / B⊆A / disjoint /
+                                "   overlap — which is greppable from scripts.
+                                "   `vs` is the separator (= / , would be ambiguous).
+                                "   Issue #53. Examples:
+                                "     :cmp chain A vs chain B
+                                "     :cmp $old_paratope vs $new_paratope
+                                "     :cmp $paratope vs byres within 5 of $antigen
 :center [selection]             " Center view
 :zoom [selection]               " Center + zoom to fit
 :orient [selection]             " Align principal axes + center + zoom

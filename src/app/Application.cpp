@@ -5323,6 +5323,61 @@ void Application::registerCommands() {
     }, ":count <expr>", "Count atoms matching a selection expression",
        {":count chain A", ":count resn HEM", ":count $sele"}, "Selection");
 
+    // :cmp <expr-A> vs <expr-B> — Venn breakdown + verdict word (issue #53)
+    // Useful for sanity-checking selection equivalence after a refactor
+    // (`:cmp old_paratope vs new_paratope`) or confirming a `byres` /
+    // `within` expansion didn't drag in extra residues. The trailing
+    // verdict word (equal / A⊆B / B⊆A / disjoint / overlap) is grep-able
+    // in scripts that don't yet have a real `:if`.
+    cmdRegistry_.registerCmd("cmp", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        constexpr const char* kUsage = "Usage: :cmp <expr-A> vs <expr-B>";
+        if (cmd.args.empty()) return {false, kUsage};
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+
+        // Find the `vs` separator. Plain `=` / `==` / `,` would be
+        // ambiguous (= is :select name=expr; , can appear inside
+        // rgb(R,G,B); == suggests boolean predicate which this isn't).
+        int vsIdx = -1;
+        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
+            if (cmd.args[i] == "vs") { vsIdx = i; break; }
+        }
+        if (vsIdx < 1 || vsIdx >= static_cast<int>(cmd.args.size()) - 1)
+            return {false, kUsage};
+
+        std::string exprA = joinArgs(cmd.args, 0, static_cast<size_t>(vsIdx));
+        std::string exprB = joinArgs(cmd.args, static_cast<size_t>(vsIdx) + 1, cmd.args.size());
+
+        auto a = app.parseSelection(exprA, *obj);
+        auto b = app.parseSelection(exprB, *obj);
+        // |A∩B| done once; the two differences are derivable from sizes,
+        // so we skip building the difference vectors just to read .size().
+        size_t both    = (a & b).size();
+        size_t aMinusB = a.size() - both;
+        size_t bMinusA = b.size() - both;
+
+        const char* verdict;
+        if (a.size() == b.size() && aMinusB == 0)      verdict = "equal";
+        else if (aMinusB == 0)                          verdict = "A⊆B";
+        else if (bMinusA == 0)                          verdict = "B⊆A";
+        else if (both == 0)                             verdict = "disjoint";
+        else                                            verdict = "overlap";
+
+        std::string msg = "cmp:";
+        msg += "  |A|="    + std::to_string(a.size());
+        msg += "  |B|="    + std::to_string(b.size());
+        msg += "  |A∩B|="  + std::to_string(both);
+        msg += "  |A\\B|=" + std::to_string(aMinusB);
+        msg += "  |B\\A|=" + std::to_string(bMinusA);
+        msg += "  →  ";
+        msg += verdict;
+        return {true, msg};
+    }, ":cmp <expr-A> vs <expr-B>",
+       "Compare two selections: |A| |B| |A∩B| |A\\B| |B\\A| + verdict (equal/A⊆B/B⊆A/disjoint/overlap)",
+       {":cmp chain A vs chain B",
+        ":cmp $paratope vs byres within 5 of $antigen",
+        ":cmp $old_sele vs $new_sele"}, "Selection");
+
     // :sele — list named selections
     cmdRegistry_.registerCmd(kSele, [](Application& app, const ParsedCommand&) -> ExecResult {
         auto& sels = app.namedSelections();
