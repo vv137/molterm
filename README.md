@@ -298,6 +298,37 @@ regardless of scope — switch the current object explicitly with
 :object prev                     " cycle backward
 ```
 
+### Analysis recipes — `:run @lib/<name>` (issue #56)
+
+The `lib/` directory ships short, validated `.mt` scripts for named
+structural metrics — TCR-pMHC crossing/incident angle, eventually
+antibody elbow, DNA bend, etc. — composed from the v0.31+ register
+primitives (`:let` / `pos()` / `pca()` / `dot()` / `angle()`).
+
+```vim
+:setenv TCR_A D ; :setenv TCR_B E
+:setenv MHC A   ; :setenv PEP C
+:setenv MHC_HELIX1 50-85
+:setenv MHC_HELIX2 138-175
+:setenv TCRA_CYS23 22 ; :setenv TCRB_CYS23 23
+:setenv PEP_FIRST 1   ; :setenv PEP_LAST 9
+:run @lib/tcr_angles
+:label corner topleft  = "crossing = ${crossing:.1f}°"
+:label corner topright = "incident = ${incident:.1f}°"
+```
+
+`@lib/<name>` resolves against this lookup chain (first match wins):
+
+1. `$MOLTERM_LIB_DIR/<name>.mt`
+2. `~/.molterm/lib/<name>.mt`              ← user library, writable
+3. `<install-prefix>/share/molterm/lib/<name>.mt` ← shipped recipes
+4. `<exe-dir>/../lib/<name>.mt`            ← build-tree layout
+5. `<source-dir>/lib/<name>.mt`            ← dev fallback
+
+Forks live at `~/.molterm/lib/`; shipped baselines stay untouched. See
+[`lib/README.md`](lib/README.md) for the recipe catalog with required
+env vars, output registers, and a validated PDB example per recipe.
+
 ### High-quality rendering
 
 PNGs from `:screenshot` are produced by `PixelCanvas` regardless of the

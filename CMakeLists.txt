@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(molterm VERSION 0.34.0 LANGUAGES CXX)
+project(molterm VERSION 0.35.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -204,6 +204,7 @@ target_compile_definitions(molterm PRIVATE
     USALIGN_PATH="${CMAKE_BINARY_DIR}/USalign"
     NCURSES_WIDECHAR=1
     MOLTERM_VERSION="${MOLTERM_VERSION_STRING}"
+    MOLTERM_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 
 # molterm depends on USalign binary being built
@@ -212,3 +213,8 @@ add_dependencies(molterm USalign)
 # ── Install ──────────────────────────────────────────────────────────────────
 
 install(TARGETS molterm DESTINATION bin)
+# Ship the analysis recipe library — discoverable from scripts via
+# `:run @lib/<name>`. Per-user overrides at ~/.molterm/lib/ and the
+# $MOLTERM_LIB_DIR env var take precedence at lookup time (issue #56).
+install(DIRECTORY lib/ DESTINATION share/molterm/lib
+        FILES_MATCHING PATTERN "*.mt")
