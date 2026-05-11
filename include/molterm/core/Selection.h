@@ -32,6 +32,8 @@ public:
     // Set operations
     Selection operator&(const Selection& other) const;  // AND (intersection)
     Selection operator|(const Selection& other) const;  // OR (union)
+    Selection operator-(const Selection& other) const;  // MINUS (set difference, issue #52)
+    Selection operator^(const Selection& other) const;  // XOR (symmetric difference, issue #52)
     Selection operator~() const;                        // NOT (complement, needs totalAtoms)
     Selection complement(int totalAtoms) const;
 
@@ -46,12 +48,14 @@ public:
     //            helix, sheet, loop, backbone, sidechain, hydro,
     //            vis | visible,            (atoms shown by any active repr)
     //            @name (named selection reference),
-    //            and, or, not, ( ),
+    //            and, or, not, minus, xor, ( ),     (issue #52)
     //   VMD-style spatial / propagation operators:
     //            within N of <selection>     — atoms within N Å of <selection>
     //            exwithin N of <selection>   — within minus the sub-selection
     //            same KW as <selection>      — atoms sharing KW with <selection>
     //                                          (KW ∈ residue, chain, resname/resn)
+    //            byres <selection>           — alias for `same residue as`
+    //            bychain <selection>         — alias for `same chain as`
     //
     // PyMOL equivalents (consult before serializing named selections to .pml):
     //   within N of S       →  "(all within N of (S))"

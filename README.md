@@ -927,11 +927,23 @@ cross chain breaks. Works with the rest of the algebra:
 
 **Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `hydro`, `water`, `het`/`ligand`, `protein`, `nucleic`, `dna`, `rna`, `polymer`, `obj`, `$name`
 
-**Spatial / expansion:** `within N of <expr>`, `exwithin N of <expr>`, `same residue as <expr>`, `same chain as <expr>`, `same resname as <expr>` (alias `resn`)
+**Spatial / expansion:** `within N of <expr>`, `exwithin N of <expr>`, `same residue as <expr>`, `same chain as <expr>`, `same resname as <expr>` (alias `resn`); `byres <expr>` / `bychain <expr>` are sugar for `same residue|chain as <expr>` (issue #52)
 
 **Sequence search:** `pepseq <one-letter-codes>` (aliases: `seq`, `sequence`); `.` / `?` = single-residue wildcard
 
-**Operators:** `and`, `or`, `not`, `( )`, `+` (OR shorthand: `chain A+B`, `resi 10+20+30-40`)
+**Operators:** `and`, `or`, `minus`, `xor`, `not`, `( )`, `+` (OR shorthand: `chain A+B`, `resi 10+20+30-40`)
+
+**Set algebra examples (issue #52):**
+
+```vim
+:select paratope = chain H+L and within 5 of chain G
+:select paratope_only = $paratope minus $epitope     " atoms in paratope not in epitope
+:select interface   = $paratope xor $epitope         " atoms in exactly one side
+:count byres $paratope                                " entire residues touching the antigen
+:select bb_interface = backbone and bychain $paratope " whole chains, backbone only
+```
+
+`minus` and `xor` sit at the same precedence as `or` (left-associative); use parentheses when mixing with `and` to be explicit (`(chain A and resi 1-50) minus name CA`). `-` is *not* an operator — it stays reserved for residue ranges like `resi 1-10`.
 
 ---
 
