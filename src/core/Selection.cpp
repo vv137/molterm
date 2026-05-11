@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -584,16 +585,19 @@ private:
                 return v * sign;
             };
             auto parseOneResi = [&]() {
+                // GCC 11 confuses bare `end` here with `std::end` via the
+                // <algorithm>-pulled-in ADL set, so name the upper bound
+                // explicitly to avoid the build failure on Linux release CI.
                 auto start = parseSignedInt();
-                std::optional<int> end;
+                std::optional<int> stop;
                 bool isRange = (current_.type == Token::Dash);
                 if (isRange) {
                     advance();
-                    end = parseSignedInt();
+                    stop = parseSignedInt();
                 }
                 if (!start) return;          // malformed leading value — skip
-                if (isRange && !end)  return;     // malformed range tail — skip
-                ranges.push_back({*start, isRange ? *end : *start});
+                if (isRange && !stop) return;     // malformed range tail — skip
+                ranges.push_back({*start, isRange ? *stop : *start});
             };
             parseOneResi();
             while (current_.type == Token::Plus) {
