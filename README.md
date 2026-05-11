@@ -867,12 +867,41 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "     :let theta  = abs(angle(v_axis, G.axis1))
 :unlet <name> | :unlet *         " Drop one named register, or all of them.
 :registers                       " List every register and its current value.
+:expose <name> [<name>...]       " Mark registers for export from a scope=local
+                                "   script frame to the caller (issue #67). Names
+                                "   starting with `_` are auto-private. Outside
+                                "   a scope=local frame, no-op.
 :echo <text>                     " Print to stdout after ${var} / ${reg:fmt} expansion.
                                 "   LLM-agent-friendly: machine-readable output without
                                 "   relying on the status bar. Useful for scripted
                                 "   analysis pipelines:
                                 "     :let crossing = angle($v_proj, $p_proj)
                                 "     :echo crossing_deg=${crossing:.2f}
+
+" ── Script scope & call args (issue #67) ──────────────────────────────
+" By default (back-compat), a `:run` script reads/writes the same
+" register and env namespace as the caller — convenient for in-place
+" recipes, but it means a library script's temporaries can leak into
+" the caller. The first line of a script can opt into a local frame:
+"
+"   #!molterm scope=local export=crossing,incident
+"   let _scratch = 99      # `_`-prefix never escapes the script
+"   let crossing = 28.0    # only listed names flow back to caller
+"   let incident = 12.5
+"
+" The shebang grammar is `#!molterm key=value ...`. Recognised keys:
+"   scope=local|inherit (default: inherit)
+"   export=name1,name2,...
+" In-script `:expose` adds names dynamically; `_`-prefixed names are
+" silently dropped to enforce privacy.
+"
+" Call-site arguments (KEY=VALUE) implicitly trigger scope=local:
+"
+"   :run @lib/tcr_angles TCR_A=D TCR_B=E MHC=A PEP=C MHC_HELIX1=50-85
+"
+" The KEY=VALUE pairs land in the script's env (visible as `${TCR_A}`
+" etc.) and are popped when the script exits. The caller's env is
+" untouched.
 
 " ── ${name.field[:fmt]} interpolation ───────────────────────────────
 " Inside any string-typed argument (`:setenv`, `:label`, `:measure ...= caption`,

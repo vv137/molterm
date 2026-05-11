@@ -278,8 +278,101 @@ void Application::init(int argc, char* argv[]) {
     }
 }
 
+int Application::pushScriptFrame(const std::unordered_map<std::string, std::string>& seedEnv,
+                                  const std::vector<std::string>& seedExports) {
+    regStack_.emplace_back();          // empty register frame
+    // Env inherits the parent's bindings, then args overlay them. Writes
+    // inside the script land in the new top-of-stack map only.
+    envStack_.push_back(envStack_.back());
+    for (const auto& [k, v] : seedEnv) envStack_.back()[k] = v;
+    exportStack_.push_back(seedExports);
+    return static_cast<int>(regStack_.size());
+}
+
+int Application::popScriptFrame() {
+    if (regStack_.size() < 2) return 0;     // never pop frame[0]
+    auto frameRegs    = std::move(regStack_.back());
+    auto frameExports = std::move(exportStack_.back());
+    regStack_.pop_back();
+    envStack_.pop_back();
+    exportStack_.pop_back();
+    int copied = 0;
+    for (const auto& name : frameExports) {
+        if (!name.empty() && name[0] == '_') continue;   // private — drop
+        auto it = frameRegs.find(name);
+        if (it == frameRegs.end()) continue;             // never set, skip
+        regStack_.back()[name] = it->second;
+        ++copied;
+    }
+    return copied;
+}
+
+Application::ExportResult Application::markExport(const std::string& name) {
+    if (regStack_.size() < 2) return ExportResult::NoFrame;
+    if (name.empty())                 return ExportResult::Empty;
+    // `_`-prefix is enforced at popScriptFrame (single chokepoint, also
+    // catches shebang `export=_foo` seedings). markExport surfaces it
+    // here too so the user gets a tailored error message rather than
+    // a silent "Marked 0 exports".
+    if (name[0] == '_')               return ExportResult::Private;
+    exportStack_.back().push_back(name);
+    return ExportResult::Ok;
+}
+
 Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool strict) {
+    return runScriptStream(in, strict, {});
+}
+
+Application::ScriptRunResult Application::runScriptStream(
+    std::istream& in, bool strict,
+    const std::unordered_map<std::string, std::string>& args) {
     ScriptRunResult result;
+
+    // Peek the first non-empty line for a `#!molterm` shebang. The
+    // shebang is grammar-light:
+    //   #!molterm scope=local export=name1,name2
+    // Recognised keys: scope (local|inherit, default inherit), export
+    // (comma list of names that flow back to the caller).
+    enum class Scope { Inherit, Local };
+    Scope scope = Scope::Inherit;
+    std::vector<std::string> exports;
+    std::string firstLine;
+    bool consumedShebang = false;
+    if (std::getline(in, firstLine)) {
+        std::string t = firstLine;
+        size_t s = t.find_first_not_of(" \t");
+        if (s != std::string::npos &&
+            t.compare(s, 9, "#!molterm") == 0) {
+            consumedShebang = true;
+            std::string rest = t.substr(s + 9);
+            std::stringstream ss(rest);
+            std::string tok;
+            while (ss >> tok) {
+                auto eq = tok.find('=');
+                if (eq == std::string::npos) continue;
+                std::string k = tok.substr(0, eq);
+                std::string v = tok.substr(eq + 1);
+                if (k == "scope") {
+                    if      (v == "local")   scope = Scope::Local;
+                    else if (v == "inherit") scope = Scope::Inherit;
+                } else if (k == "export") {
+                    std::string name;
+                    for (char c : v) {
+                        if (c == ',') { if (!name.empty()) exports.push_back(name); name.clear(); }
+                        else if (!std::isspace(static_cast<unsigned char>(c))) name += c;
+                    }
+                    if (!name.empty()) exports.push_back(name);
+                }
+            }
+        }
+    }
+    // Args alone imply scope=local even without a shebang — so `:run X
+    // KEY=VAL` always isolates the script's writes from the caller.
+    // RAII guard ensures every early-return / exception path through
+    // the loop body still pops the frame exactly once.
+    bool needLocal = (scope == Scope::Local) || !args.empty();
+    ScriptFrameGuard frame(*this, needLocal, args, exports);
+
     auto runOne = [&](std::string cmd) -> bool {
         size_t start = cmd.find_first_not_of(" \t");
         if (start == std::string::npos || cmd[start] == '#') return true;
@@ -328,21 +421,28 @@ Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool
             }
         }
     };
-    std::string line;
-    while (std::getline(in, line)) {
-        // Strip '#' line/inline comments BEFORE splitting on ';' so a ';' inside
-        // a comment is not interpreted as a command separator.
+    // Helper that runs one logical line through stripComment + ;-split.
+    auto runLine = [&](std::string line) -> bool {
         stripComment(line);
-        // Split on ';' so multiple commands fit on one line (shell-style).
         size_t pos = 0;
         while (pos <= line.size()) {
             size_t next = line.find(';', pos);
             if (next == std::string::npos) next = line.size();
-            if (!runOne(line.substr(pos, next - pos))) return result;
+            if (!runOne(line.substr(pos, next - pos))) return false;
             pos = next + 1;
         }
+        return true;
+    };
+    // If we ate the first line probing for a shebang and it wasn't one,
+    // run it as a normal script line before the main loop.
+    if (!firstLine.empty() && !consumedShebang) {
+        if (!runLine(firstLine)) return result;     // RAII pops frame
     }
-    return result;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!runLine(line)) return result;          // RAII pops frame
+    }
+    return result;                                  // RAII pops frame
 }
 
 namespace {
@@ -769,8 +869,9 @@ std::string Application::expandScriptVars(const std::string& line) const {
                 if (colon != std::string::npos) fmt = body.substr(colon + 1);
                 bool consumed = false;
                 if (isValidEnvName(name)) {
-                    auto regIt = registers_.find(name);
-                    if (regIt != registers_.end()) {
+                    const auto& regs = registers();
+                    auto regIt = regs.find(name);
+                    if (regIt != regs.end()) {
                         const Register& r = regIt->second;
                         // Try Scalar field first, then Vec3.
                         if (auto s = r.getScalar(field)) {
@@ -792,12 +893,13 @@ std::string Application::expandScriptVars(const std::string& line) const {
                         // Field doesn't match anything — fall through to env.
                     }
                     if (!consumed) {
-                        auto it = scriptEnv_.find(name);
-                        if (it != scriptEnv_.end()) {
+                        const auto& env = scriptEnv();
+                        auto it = env.find(name);
+                        if (it != env.end()) {
                             out += it->second;
                             consumed = true;
-                        } else if (const char* env = std::getenv(name.c_str())) {
-                            out += env;
+                        } else if (const char* sysenv = std::getenv(name.c_str())) {
+                            out += sysenv;
                             consumed = true;
                         }
                     }
@@ -5520,6 +5622,47 @@ void Application::registerCommands() {
     }, ":registers", "List all named registers and their typed values",
        {":registers"}, "Registers");
 
+    // :expose <name> [<name> ...] — mark registers for export from the
+    // current script frame (issue #67). Each name will be copied into
+    // the caller's register frame when the script exits. Names starting
+    // with `_` are private and silently rejected. Outside a scope=local
+    // script the command is a no-op (top-level frame has no caller).
+    // Named :expose to avoid collision with the existing :export
+    // commands for PML session export and PDB file export.
+    cmdRegistry_.registerCmd("expose", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty())
+            return {false, "Usage: :expose <name> [<name> ...]"};
+        int ok = 0;
+        std::vector<std::string> noFrame, privateNames;
+        for (const auto& n : cmd.args) {
+            switch (app.markExport(n)) {
+                case Application::ExportResult::Ok:       ++ok; break;
+                case Application::ExportResult::NoFrame:  noFrame.push_back(n); break;
+                case Application::ExportResult::Private:  privateNames.push_back(n); break;
+                case Application::ExportResult::Empty:    /* skip silently */ break;
+            }
+        }
+        std::string msg = "Marked " + std::to_string(ok) + " export(s)";
+        if (!privateNames.empty()) {
+            msg += "; rejected " + std::to_string(privateNames.size()) +
+                   " private name(s) (rename without leading `_`): ";
+            for (size_t i = 0; i < privateNames.size(); ++i) {
+                if (i) msg += ", ";
+                msg += privateNames[i];
+            }
+        }
+        if (!noFrame.empty()) {
+            msg += "; ignored at top-level frame: " +
+                   std::to_string(noFrame.size()) + " name(s) "
+                   "(use inside a `#!molterm scope=local` script)";
+        }
+        return {true, msg};
+    }, ":expose <name> [<name> ...]",
+       "Mark registers for export from the current scope=local script "
+       "frame to the caller. Names starting with `_` are auto-private. "
+       "Also configurable via shebang `#!molterm scope=local export=name1,name2`.",
+       {":expose crossing incident", ":expose tcr_angle"}, "Registers");
+
     // :select <expression>
     cmdRegistry_.registerCmd("select", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) return {false, "Usage: :select <expr> | :select <name> = <expr> | :select clear"};
@@ -6141,31 +6284,10 @@ void Application::registerCommands() {
     }, ":assembly [id|list]", "Generate a biological assembly (defaults to assembly 1; 'list' shows available IDs)",
        {":assembly", ":assembly 1", ":assembly list"}, "Files");
 
-    // :export <file.pml> — export PyMOL script
-    cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        if (cmd.args.empty()) return {false, "Usage: :export <file.pml>"};
-        const std::string& path = cmd.args[0];
-
-        // Validate extension
-        if (path.size() < 5 || path.substr(path.size() - 4) != ".pml")
-            return {false, "Export file must have .pml extension"};
-
-        auto& tab = app.tabs().currentTab();
-        if (tab.objects().empty()) return {false, "No objects to export"};
-
-        int vpW = app.layout().viewportWidth();
-        int vpH = app.layout().viewportHeight();
-        std::vector<SessionExporter::Measurement> exportMs;
-        exportMs.reserve(app.measurements().size());
-        for (const auto& m : app.measurements())
-            exportMs.push_back({m.atoms, m.label, m.caption});
-        std::string result = SessionExporter::exportPML(
-            path, tab, vpW, vpH, app.stereoMode(), app.stereoAngle(), exportMs);
-        bool ok = result.find("Failed") == std::string::npos &&
-                  result.find("Error") == std::string::npos;
-        return {ok, result};
-    }, ":export <file.pml>", "Export the current session as a PyMOL script",
-       {":export figure.pml"}, "Files");
+    // (PML/PDB :export handlers were registered separately and the second
+    // one silently overwrote the first under CommandRegistry's last-write-
+    // wins semantics. They now live as a single extension-dispatching
+    // handler below near the PDB writer call site.)
 
     // :screenshot <file.png>
     cmdRegistry_.registerCmd("screenshot", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -6543,17 +6665,31 @@ void Application::registerCommands() {
     }, ":overlay on|off | clear", "Toggle overlay visibility (labels, measurements, $sele) or clear them",
        {":overlay on", ":overlay off", ":overlay clear"}, "Display");
 
-    // :run [--strict] [--fresh] <script.mt> — execute a command script
+    // :run [--strict] [--fresh] <script.mt> [KEY=VALUE ...] — execute a command script
     cmdRegistry_.registerCmd("run", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        if (cmd.args.empty()) return {false, "Usage: :run [--strict] [--fresh] <script.mt>"};
+        if (cmd.args.empty()) return {false, "Usage: :run [--strict] [--fresh] <script.mt> [KEY=VAL ...]"};
         bool strict = false, fresh = false;
         std::string path;
+        std::unordered_map<std::string, std::string> callArgs;
         for (const auto& a : cmd.args) {
             if      (a == "--strict") strict = true;
             else if (a == "--fresh")  fresh  = true;
             else if (path.empty())    path   = a;
+            else {
+                // KEY=VALUE — script call args (issue #67). With at least
+                // one such arg the script body runs in a fresh register
+                // frame regardless of shebang, so caller state stays
+                // protected even when the script author hasn't added
+                // a `#!molterm scope=local` line.
+                auto eq = a.find('=');
+                if (eq == std::string::npos) {
+                    return {false, "Trailing arg `" + a + "` must be KEY=VALUE "
+                                   "(positional args not supported — name your params)"};
+                }
+                callArgs[a.substr(0, eq)] = a.substr(eq + 1);
+            }
         }
-        if (path.empty()) return {false, "Usage: :run [--strict] [--fresh] <script.mt>"};
+        if (path.empty()) return {false, "Usage: :run [--strict] [--fresh] <script.mt> [KEY=VAL ...]"};
         std::string resolved = path;
         if (path.compare(0, kAtLibPrefix.size(), kAtLibPrefix) == 0) {
             std::string r = resolveAtLibPath(path);
@@ -6570,7 +6706,7 @@ void Application::registerCommands() {
         // (`:run setup; :screenshot fig1; :run setup; :screenshot fig2`)
         // doesn't accumulate fig1's overlays into fig2 (issue #28).
         if (fresh) app.clearOverlayAnnotations();
-        ScriptRunResult r = app.runScriptStream(file, strict);
+        ScriptRunResult r = app.runScriptStream(file, strict, callArgs);
         if (strict && r.stopped) {
             MLOG_INFO("Ran %d commands from %s (stopped on error)", r.count, path.c_str());
             return {false, "Stopped at line: " + r.failLine + " — " + r.firstFail};
@@ -6641,48 +6777,66 @@ void Application::registerCommands() {
        {":save"}, "Session");
 
     // :export [<obj>] <path>
-    // Write a single MolObject to disk. Format derived from the path
-    // extension — .pdb today (gemmi mmCIF writer integration is a
-    // follow-up). Pairs with :extract / :split by chain so users can
-    // carve a domain and feed it to USalign / ANARCI / Pierce TCR3d.
+    // Extension-dispatched file export. `.pml` writes the WHOLE session
+    // as a PyMOL script (all loaded objects + reprs + measurements);
+    // `.pdb` / `.ent` writes a single MolObject (the named one or
+    // current). `.cif` / `.mmcif` is reserved for a future gemmi-
+    // backed writer.
     cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        constexpr const char* kUsage = "Usage: :export [<obj>] <path.pdb>";
+        constexpr const char* kUsage = "Usage: :export [<obj>] <path.pml|.pdb>";
         if (cmd.args.empty()) return {false, kUsage};
-        auto& tab = app.tabs().currentTab();
-        std::string objName, path;
-        if (cmd.args.size() == 1) {
-            auto cur = tab.currentObject();
-            if (!cur) return {false, "No object selected"};
-            objName = cur->name();
-            path = cmd.args[0];
-        } else {
-            objName = cmd.args[0];
-            path = joinArgs(cmd.args, 1, cmd.args.size());
-        }
-        auto obj = app.store().get(objName);
-        if (!obj) return {false, "Object not found: " + objName};
-        // Extension-based dispatch — .pdb today; .cif / .mmcif when the
-        // gemmi writer wire-up lands.
-        auto endsWith = [&](const std::string& suffix) {
-            return path.size() >= suffix.size() &&
-                   path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0;
+        auto endsWith = [](const std::string& s, const std::string& suffix) {
+            return s.size() >= suffix.size() &&
+                   s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
         };
-        if (endsWith(".cif") || endsWith(".mmcif")) {
+        // The path is always the last arg (so `:export <path>` and
+        // `:export <obj> <path>` both parse correctly).
+        std::string path = cmd.args.back();
+        // PML export — whole-session script; ignores any leading <obj>.
+        if (endsWith(path, ".pml")) {
+            auto& tab = app.tabs().currentTab();
+            if (tab.objects().empty()) return {false, "No objects to export"};
+            int vpW = app.layout().viewportWidth();
+            int vpH = app.layout().viewportHeight();
+            std::vector<SessionExporter::Measurement> exportMs;
+            exportMs.reserve(app.measurements().size());
+            for (const auto& m : app.measurements())
+                exportMs.push_back({m.atoms, m.label, m.caption});
+            std::string result = SessionExporter::exportPML(
+                path, tab, vpW, vpH, app.stereoMode(), app.stereoAngle(), exportMs);
+            bool ok = result.find("Failed") == std::string::npos &&
+                      result.find("Error") == std::string::npos;
+            return {ok, result};
+        }
+        // PDB / .ent export — single object.
+        if (endsWith(path, ".pdb") || endsWith(path, ".ent")) {
+            auto& tab = app.tabs().currentTab();
+            std::string objName;
+            if (cmd.args.size() == 1) {
+                auto cur = tab.currentObject();
+                if (!cur) return {false, "No object selected"};
+                objName = cur->name();
+            } else {
+                objName = cmd.args[0];
+            }
+            auto obj = app.store().get(objName);
+            if (!obj) return {false, "Object not found: " + objName};
+            if (!writePdb(*obj, path))
+                return {false, "Failed to write " + path};
+            return {true, "Wrote " + objName + " (" +
+                          std::to_string(obj->atoms().size()) + " atoms) to " + path};
+        }
+        if (endsWith(path, ".cif") || endsWith(path, ".mmcif")) {
             return {false, "mmCIF export not implemented yet — write .pdb and "
                            "round-trip through gemmi (`gemmi convert in.pdb out.cif`) "
                            "for now."};
         }
-        if (!endsWith(".pdb") && !endsWith(".ent")) {
-            return {false, "Unsupported extension. Use .pdb (or .ent) — "
-                           "the writer picks format from the path suffix."};
-        }
-        if (!writePdb(*obj, path))
-            return {false, "Failed to write " + path};
-        return {true, "Wrote " + objName + " (" +
-                      std::to_string(obj->atoms().size()) + " atoms) to " + path};
+        return {false, "Unsupported extension. Use .pml (whole session), "
+                       ".pdb / .ent (one object), or wait for .cif."};
     }, ":export [<obj>] <path>",
-       "Write a single object to disk as PDB (extension picks format).",
-       {":export 1ubq.pdb",
+       "Write to disk. .pml → whole session as PyMOL script; .pdb/.ent → one MolObject.",
+       {":export figure.pml",
+        ":export 1ubq.pdb",
         ":export carved tcr_alone.pdb",
         ":export 1ubq /tmp/backup.pdb"}, "Files");
 

@@ -147,12 +147,23 @@ public:
     // Run commands from a stream. Skips blank lines and `#` comments.
     // If strict is true, stops on the first failure.
     ScriptRunResult runScriptStream(std::istream& in, bool strict = false);
+    // Variant with call-site KEY=VALUE args (issue #67). When `args` is
+    // non-empty OR the script declares `#!molterm scope=local`, the
+    // runner pushes a fresh register/env frame for the script body so
+    // its `:let` writes don't leak into the caller's namespace. Names
+    // explicitly :export'd (or listed in the shebang `export=` field)
+    // flow back into the caller frame on script exit; everything else
+    // is discarded with the frame.
+    ScriptRunResult runScriptStream(std::istream& in, bool strict,
+                                    const std::unordered_map<std::string, std::string>& args);
 
     // Expand ${VAR} references against the in-process scriptEnv_ map (set by
     // :setenv) with a fall-through to the OS environment. Unset → empty.
     // Backslash-escapes the dollar: `\$X` → literal `$X`.
     std::string expandScriptVars(const std::string& line) const;
-    std::unordered_map<std::string, std::string>& scriptEnv() { return scriptEnv_; }
+    // Active script env (top of envStack_). `:setenv` reads/writes this.
+    std::unordered_map<std::string, std::string>& scriptEnv() { return envStack_.back(); }
+    const std::unordered_map<std::string, std::string>& scriptEnv() const { return envStack_.back(); }
 
     BgMode bgMode() const { return bgMode_; }
     void setBgMode(BgMode m) { bgMode_ = m; }
@@ -402,10 +413,54 @@ private:
     // Named selections
     std::unordered_map<std::string, Selection> namedSelections_;
     // Typed registers populated by `:let <name> = <expr>` (#32, #33, #35).
-    std::unordered_map<std::string, Register> registers_;
+    // Stack of frames — frame[0] is the interactive/top-level frame and
+    // is always present. `:run` with `#!molterm scope=local` pushes a
+    // new frame on entry and pops it on exit (issue #67). Names starting
+    // with `_` never escape a popped frame; explicit `:export` lists
+    // the survivors. Without a shebang, scripts inherit frame[0] —
+    // back-compat for pre-#67 scripts.
+    std::vector<std::unordered_map<std::string, Register>> regStack_{1};
 public:
-    std::unordered_map<std::string, Register>& registers() { return registers_; }
-    const std::unordered_map<std::string, Register>& registers() const { return registers_; }
+    std::unordered_map<std::string, Register>& registers() { return regStack_.back(); }
+    const std::unordered_map<std::string, Register>& registers() const { return regStack_.back(); }
+    // Push a new register + env + exports frame for a `scope=local`
+    // script. The caller passes `seedEnv` (typically the call-site
+    // KEY=VALUE args) which is laid over a fresh copy of the parent env
+    // so the child can read inherited vars but can't mutate the caller's
+    // env on assignment. `seedExports` is the comma-list parsed from
+    // `#!molterm export=…`; the running script can grow it via :export.
+    // Returns the depth after push (always >= 2).
+    int pushScriptFrame(const std::unordered_map<std::string, std::string>& seedEnv,
+                        const std::vector<std::string>& seedExports);
+    // Pop the topmost frame. Names in this frame's export list are
+    // copied into the caller frame; `_`-prefixed names are rejected
+    // silently (private). Frame[0] is never popped. Returns the
+    // number of exported registers actually copied.
+    int popScriptFrame();
+    // Add a name to the current frame's export list. Called by
+    // `:expose <name>` inside a running script. The same name may be
+    // added multiple times; popScriptFrame is the single chokepoint
+    // that filters `_`-prefixed (private) entries.
+    enum class ExportResult { Ok, NoFrame, Empty, Private };
+    ExportResult markExport(const std::string& name);
+
+    // RAII wrapper around push/popScriptFrame so all early-return paths
+    // in runScriptStream (errors, strict abort, exceptions) pop the
+    // frame exactly once. Construct with `active = false` for the
+    // script-inherits-caller path; the destructor is a no-op then.
+    struct ScriptFrameGuard {
+        Application& app;
+        bool active;
+        ScriptFrameGuard(Application& a, bool on,
+                         const std::unordered_map<std::string, std::string>& seedEnv,
+                         const std::vector<std::string>& seedExports)
+            : app(a), active(on) {
+            if (active) app.pushScriptFrame(seedEnv, seedExports);
+        }
+        ~ScriptFrameGuard() { if (active) app.popScriptFrame(); }
+        ScriptFrameGuard(const ScriptFrameGuard&)            = delete;
+        ScriptFrameGuard& operator=(const ScriptFrameGuard&) = delete;
+    };
 private:
 
     // Command scope (`:set scope all|current`, default all). The optional
@@ -510,7 +565,11 @@ private:
     int pickRegs_[4] = {-1, -1, -1, -1};
     int pickNext_ = 0;
 
-    std::unordered_map<std::string, std::string> scriptEnv_;
+    std::vector<std::unordered_map<std::string, std::string>> envStack_{1};
+    // Parallel to regStack_/envStack_: names the current script frame
+    // wants to export into its caller on pop. Frame[0]'s slot is
+    // unused (top level has no caller).
+    std::vector<std::vector<std::string>> exportStack_{ {} };
 
     BgMode bgMode_ = BgMode::Transparent;
     uint8_t bgCustomR_ = 0, bgCustomG_ = 0, bgCustomB_ = 0;
