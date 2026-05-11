@@ -89,5 +89,9 @@ New recipes welcome. The convention:
 - Required env vars listed in the file header, with default-friendly
   examples in the header comment.
 - Output registers documented in the header.
+- Start the file with `#!molterm scope=local export=<names>` and prefix
+  every scratch register with `_` (`$_hlx1`, `$_groove`, …) — the local
+  frame keeps caller state clean and the `_`-prefix is enforced as
+  private at frame pop, so only the listed outputs propagate.
 - A canonical PDB + expected output values in `lib/README.md` for
   validation.

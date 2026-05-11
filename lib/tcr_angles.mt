@@ -1,3 +1,4 @@
+#!molterm scope=local export=crossing,incident
 # tcr_angles.mt — TCR-pMHC crossing & incident angles (Singh 2020 / Pierce TCR3d)
 #
 # Geometric definition (per Rudolph 2006 / Singh 2020):

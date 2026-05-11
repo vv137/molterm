@@ -363,6 +363,13 @@ Forks live at `~/.molterm/lib/`; shipped baselines stay untouched. See
 [`lib/README.md`](lib/README.md) for the recipe catalog with required
 env vars, output registers, and a validated PDB example per recipe.
 
+Shipped recipes declare a `#!molterm scope=local export=<names>`
+shebang, so they run in their own register frame and only the named
+output registers (`$crossing`, `$incident`, …) propagate back to the
+caller. Internal scratch (`$_hlx1`, `$_groove`, …) stays contained —
+the `_`-prefix is enforced as private at frame pop, so even an
+accidental `:expose _hlx1` would be rejected.
+
 ### High-quality rendering
 
 PNGs from `:screenshot` are produced by `PixelCanvas` regardless of the
