@@ -1,4 +1,5 @@
 #include "molterm/tui/Window.h"
+#include "molterm/render/ColorMapper.h"
 
 namespace molterm {
 
@@ -50,11 +51,19 @@ void Window::print(int y, int x, const std::string& text) {
     mvwprintw(win_, y, x, "%s", text.c_str());
 }
 
+// Hex/rgb literals (issue #79) pack 24-bit RGB into the pair int —
+// ncurses can't honour those, so map to the nearest of the 8 builtin
+// named pairs. Real pair ids pass through unchanged.
+static inline int resolvePair(int colorPair) {
+    return isCustomColor(colorPair) ? ColorMapper::nearestNamedPair(colorPair) : colorPair;
+}
+
 void Window::printColored(int y, int x, const std::string& text, int colorPair) {
     if (!win_) return;
-    wattron(win_, COLOR_PAIR(colorPair));
+    int p = resolvePair(colorPair);
+    wattron(win_, COLOR_PAIR(p));
     mvwprintw(win_, y, x, "%s", text.c_str());
-    wattroff(win_, COLOR_PAIR(colorPair));
+    wattroff(win_, COLOR_PAIR(p));
 }
 
 void Window::addChar(int y, int x, char ch) {
@@ -64,17 +73,19 @@ void Window::addChar(int y, int x, char ch) {
 
 void Window::addCharColored(int y, int x, char ch, int colorPair) {
     if (!win_) return;
-    wattron(win_, COLOR_PAIR(colorPair));
+    int p = resolvePair(colorPair);
+    wattron(win_, COLOR_PAIR(p));
     mvwaddch(win_, y, x, ch);
-    wattroff(win_, COLOR_PAIR(colorPair));
+    wattroff(win_, COLOR_PAIR(p));
 }
 
 void Window::fillRow(int y, char ch, int colorPair) {
     if (!win_) return;
-    wattron(win_, COLOR_PAIR(colorPair));
+    int p = resolvePair(colorPair);
+    wattron(win_, COLOR_PAIR(p));
     wmove(win_, y, 0);
     for (int i = 0; i < w_; ++i) waddch(win_, ch);
-    wattroff(win_, COLOR_PAIR(colorPair));
+    wattroff(win_, COLOR_PAIR(p));
 }
 
 void Window::horizontalLine(int y, int x, int len) {

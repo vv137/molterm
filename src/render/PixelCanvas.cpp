@@ -1023,6 +1023,12 @@ void PixelCanvas::flush(Window& win) {
 // ── Color pair → RGB ────────────────────────────────────────────────────────
 
 PixelCanvas::RGB PixelCanvas::colorPairToRGB(int colorPair) {
+    // Custom hex/rgb literals (issue #79) pack the 24-bit RGB into the
+    // pair int directly — decode and return without a table lookup.
+    if (isCustomColor(colorPair)) {
+        auto rgb = unpackCustomRGB(colorPair);
+        return {rgb[0], rgb[1], rgb[2]};
+    }
     switch (colorPair) {
         case kColorCarbon:      return {34, 200, 34};
         case kColorNitrogen:    return {50, 80, 255};

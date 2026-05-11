@@ -244,7 +244,7 @@ void Application::init(int argc, char* argv[]) {
         std::ifstream initFile(initPath);
         if (initFile) {
             MLOG_INFO("Loading init script: %s", initPath.c_str());
-            ScriptRunResult r = runScriptStream(initFile, /*strict=*/false);
+            ScriptRunResult r = runScriptStream(initFile, /*strict=*/false, initPath);
             if (r.failures > 0) {
                 MLOG_WARN("init.mt: %d of %d command(s) failed (first: %s)",
                           r.failures, r.count, r.firstFail.c_str());
@@ -320,14 +320,17 @@ Application::ExportResult Application::markExport(const std::string& name) {
     return ExportResult::Ok;
 }
 
-Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool strict) {
-    return runScriptStream(in, strict, {});
+Application::ScriptRunResult Application::runScriptStream(std::istream& in, bool strict,
+                                                            const std::string& sourcePath) {
+    return runScriptStream(in, strict, {}, sourcePath);
 }
 
 Application::ScriptRunResult Application::runScriptStream(
     std::istream& in, bool strict,
-    const std::unordered_map<std::string, std::string>& args) {
+    const std::unordered_map<std::string, std::string>& args,
+    const std::string& sourcePath) {
     ScriptRunResult result;
+    result.sourcePath = sourcePath.empty() ? std::string("<stdin>") : sourcePath;
 
     // Peek the first non-empty line for a `#!molterm` shebang. The
     // shebang is grammar-light:
@@ -376,9 +379,13 @@ Application::ScriptRunResult Application::runScriptStream(
 
     // Buffer the script body (post-shebang) into a line vector so the
     // block-aware dispatcher can find matching :endif / :end without
-    // re-reading the stream.
+    // re-reading the stream. srcLineOffset translates buffer index back
+    // to the original 1-indexed file line number for failure reports
+    // (issue #80) — if we consumed a shebang on line 1, buffer[0] is
+    // file line 2.
     std::vector<std::string> lines;
     if (!firstLine.empty() && !consumedShebang) lines.push_back(std::move(firstLine));
+    result.srcLineOffset = consumedShebang ? 2 : 1;
     std::string line;
     while (std::getline(in, line)) lines.push_back(std::move(line));
     dispatchScriptLines(lines, 0, lines.size(), result, strict);
@@ -442,8 +449,25 @@ bool isControlKeyword(const std::string& line, const char* kw, std::string& body
 bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
                                        size_t lo, size_t hi,
                                        ScriptRunResult& result, bool strict) {
+    // Centralise the "record a failure" path so every report (command
+    // exec error, bad :if condition, malformed :foreach header, …)
+    // contributes uniform context to result.failureList — issue #80.
+    auto recordFailure = [&](size_t bufIdx, const std::string& srcLine,
+                              const std::string& reason) {
+        ++result.failures;
+        int lineNum = static_cast<int>(bufIdx) + result.srcLineOffset;
+        result.failureList.push_back({lineNum, srcLine, reason});
+        if (result.firstFail.empty()) {
+            result.firstFail = reason;
+            result.failLine = srcLine;
+        }
+    };
     // Execute a single non-control line (the original runOne lambda).
-    auto runOne = [&](std::string cmd) -> bool {
+    // bufIdx is the index of the source line in `lines`; srcLine is the
+    // original (pre-`;`-split, pre-expand) text — both go into the
+    // failure record so reports cite the *file* line, not the synthetic
+    // semicolon-split fragment.
+    auto runOne = [&](std::string cmd, size_t bufIdx, const std::string& srcLine) -> bool {
         size_t start = cmd.find_first_not_of(" \t");
         if (start == std::string::npos || cmd[start] == '#') return true;
         cmd.erase(0, start);
@@ -461,22 +485,19 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
         ++result.count;
         if (!r.msg.empty()) result.lastMsg = r.msg;
         if (!r.ok) {
-            ++result.failures;
-            if (result.firstFail.empty()) {
-                result.firstFail = r.msg;
-                result.failLine = cmd;
-            }
+            recordFailure(bufIdx, srcLine.empty() ? cmd : srcLine, r.msg);
             if (strict) { result.stopped = true; return false; }
         }
         return true;
     };
-    auto runLine = [&](std::string line) -> bool {
+    auto runLine = [&](std::string line, size_t bufIdx) -> bool {
+        const std::string srcLine = line;
         stripScriptComment(line);
         size_t pos = 0;
         while (pos <= line.size()) {
             size_t next = line.find(';', pos);
             if (next == std::string::npos) next = line.size();
-            if (!runOne(line.substr(pos, next - pos))) return false;
+            if (!runOne(line.substr(pos, next - pos), bufIdx, srcLine)) return false;
             pos = next + 1;
         }
         return true;
@@ -559,11 +580,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             std::string expanded = expandScriptVars(body);
             auto cond = evalCondition(expanded);
             if (!cond) {
-                ++result.failures;
-                if (result.firstFail.empty()) {
-                    result.firstFail = "bad :if condition: " + expanded;
-                    result.failLine = srcLine;
-                }
+                recordFailure(i, srcLine, "bad :if condition: " + expanded);
                 if (strict) { result.stopped = true; return false; }
                 ifStack.push_back({false, false});
             } else {
@@ -598,11 +615,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             bool matched = false;
             size_t endIdx = findMatchingClose(i, "foreach", "end", matched);
             if (!matched) {
-                ++result.failures;
-                if (result.firstFail.empty()) {
-                    result.firstFail = "unmatched :foreach (no :end found)";
-                    result.failLine = srcLine;
-                }
+                recordFailure(i, srcLine, "unmatched :foreach (no :end found)");
                 if (strict) { result.stopped = true; return false; }
                 i = endIdx;
                 continue;
@@ -613,11 +626,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             std::string expanded = expandScriptVars(body);
             auto inPos = expanded.find(" in ");
             if (inPos == std::string::npos) {
-                ++result.failures;
-                if (result.firstFail.empty()) {
-                    result.firstFail = "bad :foreach header (expected `VAR in LO..HI`): " + expanded;
-                    result.failLine = srcLine;
-                }
+                recordFailure(i, srcLine, "bad :foreach header (expected `VAR in LO..HI`): " + expanded);
                 if (strict) { result.stopped = true; return false; }
                 i = endIdx;
                 continue;
@@ -629,11 +638,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             // parse `LO..HI`
             auto dotPos = rangeExpr.find("..");
             if (dotPos == std::string::npos) {
-                ++result.failures;
-                if (result.firstFail.empty()) {
-                    result.firstFail = "bad :foreach range (expected LO..HI): " + rangeExpr;
-                    result.failLine = srcLine;
-                }
+                recordFailure(i, srcLine, "bad :foreach range (expected LO..HI): " + rangeExpr);
                 if (strict) { result.stopped = true; return false; }
                 i = endIdx;
                 continue;
@@ -643,11 +648,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
                 loVal = std::stoi(rangeExpr.substr(0, dotPos));
                 hiVal = std::stoi(rangeExpr.substr(dotPos + 2));
             } catch (const std::exception&) {
-                ++result.failures;
-                if (result.firstFail.empty()) {
-                    result.firstFail = "bad :foreach numeric range: " + rangeExpr;
-                    result.failLine = srcLine;
-                }
+                recordFailure(i, srcLine, "bad :foreach numeric range: " + rangeExpr);
                 if (strict) { result.stopped = true; return false; }
                 i = endIdx;
                 continue;
@@ -669,7 +670,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
 
         // Non-control line. Skip if any enclosing :if branch is inactive.
         if (anyInactive()) continue;
-        if (!runLine(srcLine)) return false;
+        if (!runLine(srcLine, i)) return false;
     }
     return true;
 }
@@ -4192,11 +4193,17 @@ void Application::registerCommands() {
         }
 
         // Otherwise: named color + optional selection expression.
-        // :color red              → color all atoms red (every in-scope object)
-        // :color red chain A      → color chain A red (every in-scope object)
+        // :color red                → color all atoms red (every in-scope object)
+        // :color red chain A        → color chain A red (every in-scope object)
+        // :color "#cc4444" chain A  → hex / rgb() literals also accepted (issue #79)
         int colorPair = ColorMapper::colorByName(first);
-        if (colorPair < 0)
-            return {false, "Unknown color/scheme: " + first + " | Available: " + ColorMapper::availableColors()};
+        if (colorPair < 0) {
+            if (auto rgb = parseHexColor(first)) {
+                colorPair = packCustomRGB((*rgb)[0], (*rgb)[1], (*rgb)[2]);
+            } else {
+                return {false, "Unknown color/scheme: " + first + " | Available: " + ColorMapper::availableColors()};
+            }
+        }
 
         std::string expr;
         for (size_t i = 1; i < cmd.args.size(); ++i) {
@@ -6935,15 +6942,30 @@ void Application::registerCommands() {
         // (`:run setup; :screenshot fig1; :run setup; :screenshot fig2`)
         // doesn't accumulate fig1's overlays into fig2 (issue #28).
         if (fresh) app.clearOverlayAnnotations();
-        ScriptRunResult r = app.runScriptStream(file, strict, callArgs);
+        ScriptRunResult r = app.runScriptStream(file, strict, callArgs, path);
+        // Surface every failure to MLOG_ERROR with file:line context
+        // (issue #80) — TUI users can `tail -f ~/.molterm/molterm.log`
+        // to see them as they fire; cmdline gets the brief summary.
+        for (const auto& f : r.failureList) {
+            MLOG_ERROR("%s:%d: `%s`: %s",
+                       r.sourcePath.c_str(), f.lineNum,
+                       f.srcLine.c_str(), f.reason.c_str());
+        }
         if (strict && r.stopped) {
             MLOG_INFO("Ran %d commands from %s (stopped on error)", r.count, path.c_str());
-            return {false, "Stopped at line: " + r.failLine + " — " + r.firstFail};
+            return {false, path + ":" + std::to_string(r.lastFailureLine()) +
+                    ": `" + r.failLine + "`: " + r.firstFail};
         }
         MLOG_INFO("Ran %d commands from %s (%d failed)", r.count, path.c_str(), r.failures);
         if (r.failures > 0) {
-            return {false, "Ran " + std::to_string(r.count) + " commands from " + path +
-                    " (" + std::to_string(r.failures) + " failed; first: " + r.firstFail + ")"};
+            // Cite first failure with file:line so the user can jump
+            // straight to it; remaining failures are in the log.
+            std::string msg = "Ran " + std::to_string(r.count) + " commands from " + path +
+                              " (" + std::to_string(r.failures) + " failed; first: " +
+                              path + ":" + std::to_string(r.firstFailureLine()) +
+                              " — " + r.firstFail + ")";
+            if (r.failures > 1) msg += " — see molterm.log for full list";
+            return {false, msg};
         }
         return {true, "Ran " + std::to_string(r.count) + " commands from " + path};
     }, ":run [--strict] [--fresh] <file>",

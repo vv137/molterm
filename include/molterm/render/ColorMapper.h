@@ -1,11 +1,32 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
 #include "molterm/core/MolObject.h"
 
 namespace molterm {
+
+// Custom-RGB color pair encoding (issue #79). Real ncurses pair IDs live
+// in [0, ~256); to support full 24-bit hex/rgb literals in :color without
+// growing the per-atom storage from int to a tagged union, custom colors
+// are packed into the same int with a high-bit tag. Tag is bit 24 so the
+// 24-bit RGB payload (bits 0-23) doesn't collide with it. PixelCanvas
+// decodes at render time; Window::addCharColored falls back to the
+// nearest builtin named pair so the 8-color terminal still shows
+// *something* sensible.
+constexpr int kColorCustomTag = 0x01000000;
+inline int packCustomRGB(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    return kColorCustomTag | (int(r) << 16) | (int(g) << 8) | int(b);
+}
+inline bool isCustomColor(int p) { return (p & kColorCustomTag) != 0; }
+inline std::array<std::uint8_t, 3> unpackCustomRGB(int p) {
+    return {std::uint8_t((p >> 16) & 0xFF),
+            std::uint8_t((p >> 8)  & 0xFF),
+            std::uint8_t( p        & 0xFF)};
+}
 
 // Color pair IDs for ncurses
 enum ColorPairId : int {
@@ -115,6 +136,12 @@ public:
 
     // List available color names
     static std::string availableColors();
+
+    // Map a custom-encoded RGB pair to the nearest 8-color terminal pair
+    // (kColorRed / Green / Blue / Yellow / Magenta / Cyan / White / Gray),
+    // by squared-RGB distance. Used by Window::addCharColored so hex
+    // colors degrade gracefully when ncurses can't honour 24-bit pairs.
+    static int nearestNamedPair(int customColor);
 };
 
 } // namespace molterm

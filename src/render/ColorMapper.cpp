@@ -1,6 +1,7 @@
 #include "molterm/render/ColorMapper.h"
 #include <ncurses.h>
 #include <algorithm>
+#include <cstdint>
 
 namespace molterm {
 
@@ -250,7 +251,34 @@ int ColorMapper::colorByName(const std::string& name) {
 }
 
 std::string ColorMapper::availableColors() {
-    return "red green blue yellow magenta cyan white orange pink lime teal purple salmon slate gray";
+    return "red green blue yellow magenta cyan white orange pink lime teal purple salmon slate gray "
+           "(or hex/rgb: #RRGGBB, #RGB, rgb(R,G,B))";
+}
+
+int ColorMapper::nearestNamedPair(int customColor) {
+    if (!isCustomColor(customColor)) return customColor;
+    auto rgb = unpackCustomRGB(customColor);
+    int r = rgb[0], g = rgb[1], b = rgb[2];
+    // Anchors match PixelCanvas::colorPairToRGB hues exactly so the
+    // terminal-mode picks the same family as the PNG render would.
+    struct Anchor { int pair; int ar, ag, ab; };
+    static const Anchor anchors[] = {
+        {kColorRed,     255,  50,  50},
+        {kColorGreen,    50, 220,  50},
+        {kColorBlue,     50,  80, 255},
+        {kColorYellow,  255, 255,  50},
+        {kColorMagenta, 255,  50, 255},
+        {kColorCyan,     50, 255, 255},
+        {kColorWhite,   240, 240, 240},
+        {kColorGray,    158, 158, 158},
+    };
+    int best = kColorWhite, bestD = INT32_MAX;
+    for (const auto& a : anchors) {
+        int dr = r - a.ar, dg = g - a.ag, db = b - a.ab;
+        int d = dr*dr + dg*dg + db*db;
+        if (d < bestD) { bestD = d; best = a.pair; }
+    }
+    return best;
 }
 
 } // namespace molterm

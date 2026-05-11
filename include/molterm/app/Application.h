@@ -138,15 +138,35 @@ public:
     struct ScriptRunResult {
         int count = 0;        // commands attempted (non-blank, non-comment)
         int failures = 0;     // failed commands
-        std::string firstFail; // first failure message (if any)
-        std::string failLine;  // the offending line for the first failure
-        std::string lastMsg;   // last non-empty result message
-        bool stopped = false;  // true if strict mode aborted early
+        // Per-failure detail for `path:line: cmd: reason` reporting
+        // (issue #80). firstFail/failLine are kept for strict-abort
+        // back-compat and ergonomic single-fail messages.
+        struct Failure {
+            int lineNum;          // 1-indexed line in the source file
+            std::string srcLine;  // original (pre-expansion) text
+            std::string reason;
+        };
+        std::vector<Failure> failureList;
+        std::string sourcePath;   // script file path (or "<stdin>", "init.mt", …)
+        int srcLineOffset = 1;    // buffer-idx 0 → file line `srcLineOffset`
+        std::string firstFail;    // first failure message (if any)
+        std::string failLine;     // the offending line for the first failure
+        std::string lastMsg;      // last non-empty result message
+        bool stopped = false;     // true if strict mode aborted early
+
+        int firstFailureLine() const {
+            return failureList.empty() ? 0 : failureList.front().lineNum;
+        }
+        int lastFailureLine() const {
+            return failureList.empty() ? 0 : failureList.back().lineNum;
+        }
     };
 
     // Run commands from a stream. Skips blank lines and `#` comments.
-    // If strict is true, stops on the first failure.
-    ScriptRunResult runScriptStream(std::istream& in, bool strict = false);
+    // If strict is true, stops on the first failure. `sourcePath` is the
+    // human-readable label used in failure reports (file path, "<stdin>", …).
+    ScriptRunResult runScriptStream(std::istream& in, bool strict = false,
+                                    const std::string& sourcePath = "");
     // Variant with call-site KEY=VALUE args (issue #67). When `args` is
     // non-empty OR the script declares `#!molterm scope=local`, the
     // runner pushes a fresh register/env frame for the script body so
@@ -155,7 +175,8 @@ public:
     // flow back into the caller frame on script exit; everything else
     // is discarded with the frame.
     ScriptRunResult runScriptStream(std::istream& in, bool strict,
-                                    const std::unordered_map<std::string, std::string>& args);
+                                    const std::unordered_map<std::string, std::string>& args,
+                                    const std::string& sourcePath = "");
 
 private:
     // Block-aware script dispatcher (issue #68). Buffers the script

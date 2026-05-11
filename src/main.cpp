@@ -116,16 +116,34 @@ int main(int argc, char* argv[]) {
                 }
                 in = &file;
             }
-            molterm::Application::ScriptRunResult r = app.runScriptStream(*in, strict);
+            const std::string sourceLabel = (scriptPath == "-") ? std::string("<stdin>") : scriptPath;
+            molterm::Application::ScriptRunResult r =
+                app.runScriptStream(*in, strict, sourceLabel);
             if (strict && r.stopped) {
                 leaveCurses();
-                std::cerr << "molterm: script error at line: " << r.failLine
-                          << "\n  " << r.firstFail << std::endl;
+                std::cerr << r.sourcePath << ":" << r.lastFailureLine()
+                          << ": `" << r.failLine << "`: " << r.firstFail << std::endl;
                 return 1;
+            }
+            // Failure dump goes to stderr so TUI users see it after :quit,
+            // not just the brief cmdline summary. Skip for single-fail
+            // headless runs — the summary line already carries the same text.
+            if (r.failures > 0 && !(headless && r.failures == 1)) {
+                for (const auto& f : r.failureList) {
+                    std::cerr << r.sourcePath << ":" << f.lineNum
+                              << ": `" << f.srcLine << "`: " << f.reason << "\n";
+                }
             }
             std::string lastMsg = r.lastMsg;
             if (r.failures > 0) {
-                lastMsg = "Script: " + std::to_string(r.failures) + " command(s) failed";
+                if (r.failures == 1 && !r.failureList.empty()) {
+                    const auto& f = r.failureList.front();
+                    lastMsg = r.sourcePath + ":" + std::to_string(f.lineNum) +
+                              ": " + f.reason;
+                } else {
+                    lastMsg = "Script: " + std::to_string(r.failures) +
+                              " command(s) failed (see stderr for file:line detail)";
+                }
             }
             if (!lastMsg.empty()) {
                 app.cmdLine().setMessage(lastMsg);

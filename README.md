@@ -555,6 +555,12 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   Multi-object: a bare selection covers every loaded object;
                                 "   narrow with `obj <name>` or `/objname/...`. Append `!`
                                 "   to flip scope for one call (e.g. `:color! red, chain A`).
+:color "#RRGGBB" [selection]    " 24-bit hex literal — also `#RGB` short form and
+:color "rgb(R,G,B)" [selection] "   `rgb(0..255, 0..255, 0..255)`. Pixel/screenshot output
+                                "   honours the full 24-bit value; the 8-colour terminal
+                                "   maps to the nearest named pair. Round-trips through
+                                "   `:export *.pml` as PyMOL `0xRRGGBB` so figure scripts
+                                "   keep the authored shade.
 :select <expr>                  " Select atoms (see Selection Algebra below)
 :select <name> = <expr>         " Named selection (e.g. :select s1 = $sele)
 :select clear                   " Clear $sele and pk1-pk4 (also bound to gx)
@@ -647,6 +653,11 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "             Without --fresh, overlays accumulate
                                 "             across :run calls — useful for layered
                                 "             setup scripts, intentional caption stacks.
+                                " Failures (issue #80) are reported as
+                                "   `path:line: \`cmd\`: reason` to stderr (headless mode)
+                                "   or `~/.molterm/molterm.log` (TUI mode); the cmdline
+                                "   summary cites the first failure's file:line so the
+                                "   first jump-to is one click away.
 :save                           " Save session (auto-saved on quit). Persists
                                 "   loaded objects, per-tab camera state, and
                                 "   typed registers (`:let`) so `:resume` recovers

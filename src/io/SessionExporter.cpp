@@ -305,6 +305,14 @@ std::string SessionExporter::pymolColorScheme(ColorScheme s) {
 }
 
 std::string SessionExporter::pymolColorName(int colorPairId) {
+    // Hex/rgb literals (issue #79) round-trip as PyMOL `0xRRGGBB` so the
+    // exact authored colour shows up in the exported figure script.
+    if (isCustomColor(colorPairId)) {
+        auto rgb = unpackCustomRGB(colorPairId);
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "0x%02X%02X%02X", rgb[0], rgb[1], rgb[2]);
+        return buf;
+    }
     switch (colorPairId) {
         case kColorRed:     return "red";
         case kColorGreen:   return "green";
