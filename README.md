@@ -296,6 +296,22 @@ regardless of scope — switch the current object explicitly with
 :object 2                        " switch by 1-based index (matches :objects)
 :object next                     " cycle forward (also Tab in Normal mode)
 :object prev                     " cycle backward
+:copy [<obj>] [as <name>]        " Clone an object (whole-object deep copy — atoms,
+                                "   bonds, reprs, colors, alpha). Defaults to the
+                                "   current object; auto-names <name>_copy when
+                                "   `as` is omitted. Source is unchanged.
+                                "   Useful for A/B render comparisons, pre-experiment
+                                "   backup, or two views of the same structure with
+                                "   different representation settings.
+                                "   `:copy <selection> as <name>` lands separately
+                                "   (Q2 bundle) once the bond-remap helper is in.
+:rename [<old>] <new>            " Rename an object (one-arg form renames current)
+:delete [<name>]                 " Delete an object (defaults to current). Also
+                                "   removes it from the active tab, not just the
+                                "   ObjectStore — prior versions could leave a
+                                "   dangling shared_ptr in the tab when called
+                                "   by name.
+:rm [<name>]                     " Alias for :delete
 ```
 
 ### Analysis recipes — `:run @lib/<name>` (issue #56)

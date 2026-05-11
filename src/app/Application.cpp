@@ -5015,26 +5015,79 @@ void Application::registerCommands() {
     {":clear", ":clear all"},
     "Window");
 
-    // :delete
-    cmdRegistry_.registerCmd("delete", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    // Shared :delete / :rm handler. Removes from both the ObjectStore
+    // and the active tab — per-tab consumers (count / show / color /
+    // forEachInScope) iterate the tab's shared_ptr vector, so a store-
+    // only remove would leave them dereferencing a freed entry.
+    auto deleteObjectCmd = [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto& tab = app.tabs().currentTab();
+        std::string name;
+        int tabIdx = -1;
         if (cmd.args.empty()) {
             auto obj = tab.currentObject();
             if (!obj) return {false, "No object selected"};
-            std::string name = obj->name();
-            app.store().remove(name);
-            tab.removeObject(tab.selectedObjectIdx());
-            if (app.canvas()) app.canvas()->invalidate();
-            return {true, "Deleted " + name};
+            name = obj->name();
+            tabIdx = tab.selectedObjectIdx();
+        } else {
+            name = cmd.args[0];
+            auto obj = app.store().get(name);
+            if (!obj) return {false, "Object not found: " + name};
+            const auto& objs = tab.objects();
+            for (int i = 0; i < static_cast<int>(objs.size()); ++i) {
+                if (objs[i] && objs[i]->name() == name) { tabIdx = i; break; }
+            }
         }
-        auto obj = app.store().get(cmd.args[0]);
-        if (!obj) return {false, "Object not found: " + cmd.args[0]};
-        std::string name = obj->name();
         app.store().remove(name);
+        if (tabIdx >= 0) tab.removeObject(tabIdx);
         if (app.canvas()) app.canvas()->invalidate();
         return {true, "Deleted " + name};
-    }, ":delete [name]", "Delete an object (defaults to the currently selected one)",
-       {":delete", ":delete 1bna"}, "Window");
+    };
+    cmdRegistry_.registerCmd("delete", deleteObjectCmd,
+        ":delete [name]", "Delete an object (defaults to the currently selected one)",
+        {":delete", ":delete 1bna"}, "Window");
+    // :rm — vim/unix-style alias for :delete.
+    cmdRegistry_.registerCmd("rm", deleteObjectCmd,
+        ":rm [name]", "Remove an object (alias for :delete)",
+        {":rm", ":rm 1bna"}, "Window");
+
+    // :copy [<src>] [as <newname>]
+    // Whole-object clone (non-destructive). Source unchanged.
+    // Selection-form (`:copy <expr> as <name>`) requires a bond-remap
+    // helper for atom subsets and is deferred to a follow-up.
+    cmdRegistry_.registerCmd("copy", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto& tab = app.tabs().currentTab();
+        std::string srcName, newName;
+        int asIdx = -1;
+        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
+            if (cmd.args[i] == "as") { asIdx = i; break; }
+        }
+        if (asIdx == 0) {
+            // `:copy as <name>` — current object, explicit name.
+            auto cur = tab.currentObject();
+            if (!cur) return {false, "No object selected"};
+            srcName = cur->name();
+            newName = joinArgs(cmd.args, 1, cmd.args.size());
+        } else if (asIdx > 0) {
+            srcName = joinArgs(cmd.args, 0, static_cast<size_t>(asIdx));
+            newName = joinArgs(cmd.args, static_cast<size_t>(asIdx) + 1, cmd.args.size());
+        } else if (!cmd.args.empty()) {
+            srcName = cmd.args[0];
+        } else {
+            auto cur = tab.currentObject();
+            if (!cur) return {false, "No object selected"};
+            srcName = cur->name();
+        }
+        if (!app.store().get(srcName))
+            return {false, "Object not found: " + srcName};
+        if (newName.empty()) newName = srcName + "_copy";
+        auto cloned = app.store().clone(srcName, newName);
+        if (!cloned) return {false, "Clone failed for " + srcName};
+        tab.addObject(cloned);
+        return {true, "Copied " + srcName + " -> " + cloned->name() +
+                      " (" + std::to_string(cloned->atoms().size()) + " atoms)"};
+    }, ":copy [<obj>] [as <name>]",
+       "Clone an object (default: current). Auto-names <name>_copy if 'as' is omitted. Source unchanged.",
+       {":copy", ":copy 1ubq", ":copy as backup", ":copy 1ubq as ref"}, "Window");
 
     // :rename
     cmdRegistry_.registerCmd("rename", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
