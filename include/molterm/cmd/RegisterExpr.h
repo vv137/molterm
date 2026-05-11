@@ -45,8 +45,10 @@ class MolObject;
 class RegisterExpr {
 public:
     struct Context {
-        // Register table from Application::registers().
-        std::unordered_map<std::string, Register>* regs = nullptr;
+        // Register table from Application::registers(). Read-only —
+        // eval() never assigns into this map; assignment is the caller's
+        // job (`:let` writes the final result).
+        const std::unordered_map<std::string, Register>* regs = nullptr;
         // Resolves a "chain:resi:name" atom spec to absolute (x,y,z).
         // Returns false when no atom matches. Implementation lives in
         // Application (knows the current object + selection grammar).

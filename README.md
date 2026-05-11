@@ -903,6 +903,31 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 " etc.) and are popped when the script exits. The caller's env is
 " untouched.
 
+" ── Control flow (issue #68) ──────────────────────────────────────────
+" Scripts support :if / :elseif / :else / :endif and numeric :foreach.
+" Conditions go through the :let expression evaluator on both sides
+" of a comparison (==, !=, <, >, <=, >=).
+"
+"   :let crossing = angle($v_proj, $p_proj)
+"   :if $crossing > 60
+"   :  label corner topleft = "warning: atypical crossing"
+"   :elseif $crossing > 30
+"   :  label corner topleft = "canonical crossing"
+"   :else
+"   :  label corner topleft = "shallow crossing (8YIV-like)"
+"   :endif
+"
+" Numeric range iteration:
+"
+"   :foreach i in 1..5
+"   :  run @lib/render_one i=${i}
+"   :end
+"
+" Nested :if and :foreach work; loop variable is set as a scalar
+" register on each iteration. Iteration over selections / lists is
+" not yet supported — use a :let-driven calculation if you need
+" per-residue logic for now.
+
 " ── ${name.field[:fmt]} interpolation ───────────────────────────────
 " Inside any string-typed argument (`:setenv`, `:label`, `:measure ...= caption`,
 " etc.), references to registers + a printf-style format spec are expanded
