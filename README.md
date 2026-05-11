@@ -1034,17 +1034,38 @@ ranges (per imgt.org):
 
 | keyword | residue range |
 |---|---|
-| `fr1`  | 1-26    |
-| `cdr1` | 27-38   |
-| `fr2`  | 39-55   |
-| `cdr2` | 56-65   |
-| `fr3`  | 66-104  |
-| `cdr3` | 105-117 |
-| `fr4`  | 118-128 |
+| `fr1`            | 1-26    |
+| `cdr1`           | 27-38   |
+| `cdr1_anchored`  | 26-39   |
+| `fr2`            | 39-55   |
+| `cdr2`           | 56-65   |
+| `cdr2_anchored`  | 55-66   |
+| `fr3`            | 66-104  |
+| `cdr3`           | 105-117 |
+| `cdr3_anchored`  | 104-118 |
+| `fr4`            | 118-128 |
+
+The `_anchored` variants (issue #83) include the conserved framework
+positions that bookend each CDR — Cys23/26-Cys104 for the V-domain
+core disulfide, Trp/Phe118 for the FR4 anchor — so `imgt cdr3_anchored`
+gives the canonical C-X-X-X-X-W/F bracket form used in many
+structural papers.
+
+**IMGT positions** (issue #84) — alongside the named regions, `imgt`
+also accepts numeric forms for single positions, inclusive ranges, and
+'+'-separated sets:
 
 ```vim
-:select cdr3a = chain A and imgt cdr3        " TCR α-chain CDR3
-:select cdr3b = chain B and imgt cdr3        " TCR β-chain CDR3
+:select e108 = chain B and imgt 108              " single IMGT position
+:select cdr3core = chain B and imgt 107-115      " range
+:select glus  = chain B and imgt 106+108+115     " set
+:select mixed = chain B and imgt 105-110+115     " range + set mixed
+:zoom chain B and imgt 108                       " frame the load-bearing residue
+```
+
+```vim
+:select cdr3a = chain A and imgt cdr3            " TCR α-chain CDR3 (105-117)
+:select cdr3b = chain B and imgt cdr3_anchored   " TCR β with C/F anchors
 :show ballstick chain A and imgt cdr3
 :color magenta chain B and imgt cdr3
 ```
@@ -1052,7 +1073,11 @@ ranges (per imgt.org):
 The same ranges work for antibody heavy/light chain CDRs since IMGT
 numbering is unified across V-domain types. Unknown region names
 return an empty selection rather than failing — keeps batch scripts
-robust against typos in domain-specific keywords.
+robust against typos in domain-specific keywords. **Position counts
+are data-dependent**: a 9-aa CDR3-β with IMGT gaps at 109-112 returns
+9 residues, but a chain renumbered with the gaps *filled in* will
+return all 13 positions — the selector trusts the residue numbers it
+sees, ANARCI must produce the canonical gap pattern upstream.
 
 **Spatial proximity** — `within N of <expr>` selects atoms ≤ N Å from any
 atom matching the inner expression; `exwithin` is the same minus the
