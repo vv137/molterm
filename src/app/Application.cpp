@@ -373,11 +373,79 @@ Application::ScriptRunResult Application::runScriptStream(
     bool needLocal = (scope == Scope::Local) || !args.empty();
     ScriptFrameGuard frame(*this, needLocal, args, exports);
 
+    // Buffer the script body (post-shebang) into a line vector so the
+    // block-aware dispatcher can find matching :endif / :end without
+    // re-reading the stream.
+    std::vector<std::string> lines;
+    if (!firstLine.empty() && !consumedShebang) lines.push_back(std::move(firstLine));
+    std::string line;
+    while (std::getline(in, line)) lines.push_back(std::move(line));
+    dispatchScriptLines(lines, 0, lines.size(), result, strict);
+    return result;                                  // RAII pops frame
+}
+
+namespace {
+// In-place trim of leading + trailing ASCII whitespace. Duplicated across
+// half a dozen sites in this TU before this consolidation.
+void trimWhitespace(std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r");
+    if (a == std::string::npos) { s.clear(); return; }
+    size_t b = s.find_last_not_of(" \t\r");
+    s = s.substr(a, b - a + 1);
+}
+
+// Strip a trailing '#' comment, respecting single/double quotes so a '#'
+// inside a quoted argument (e.g. a label string) is preserved. Backslash
+// escapes (`\#`) are NOT honoured — a hash anywhere outside quotes ends
+// the line.
+void stripScriptComment(std::string& s) {
+    bool inQuote = false;
+    char qc = '\0';
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (inQuote) {
+            if (c == qc) inQuote = false;
+        } else if (c == '"' || c == '\'') {
+            inQuote = true; qc = c;
+        } else if (c == '#') {
+            s.resize(i);
+            return;
+        }
+    }
+}
+
+// True iff `line` (after leading whitespace + optional `:`) starts
+// with the keyword `kw` followed by whitespace or end-of-line. On hit,
+// fills `body` with the rest of the line (after the keyword).
+bool isControlKeyword(const std::string& line, const char* kw, std::string& body) {
+    size_t i = line.find_first_not_of(" \t");
+    if (i == std::string::npos) return false;
+    if (line[i] == ':') {
+        ++i;
+        while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+    }
+    size_t klen = std::strlen(kw);
+    if (line.compare(i, klen, kw) != 0) return false;
+    size_t after = i + klen;
+    if (after < line.size() && line[after] != ' ' && line[after] != '\t') return false;
+    while (after < line.size() && (line[after] == ' ' || line[after] == '\t')) ++after;
+    body = line.substr(after);
+    // trim trailing whitespace
+    size_t end = body.find_last_not_of(" \t\r");
+    if (end == std::string::npos) body.clear();
+    else                          body.resize(end + 1);
+    return true;
+}
+}  // namespace
+
+bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
+                                       size_t lo, size_t hi,
+                                       ScriptRunResult& result, bool strict) {
+    // Execute a single non-control line (the original runOne lambda).
     auto runOne = [&](std::string cmd) -> bool {
         size_t start = cmd.find_first_not_of(" \t");
         if (start == std::string::npos || cmd[start] == '#') return true;
         cmd.erase(0, start);
-        // Accept optional leading ':' so interactive-mode habits work in scripts.
         if (!cmd.empty() && cmd[0] == ':') {
             cmd.erase(0, 1);
             size_t s2 = cmd.find_first_not_of(" \t");
@@ -387,9 +455,6 @@ Application::ScriptRunResult Application::runScriptStream(
         size_t end = cmd.find_last_not_of(" \t");
         if (end == std::string::npos) return true;
         cmd.resize(end + 1);
-        // Expand ${VAR} *after* the ';' split so a setenv'd value carrying a
-        // ';' is treated as one argument, and so :setenv on a line takes
-        // effect for the next command on the same line.
         cmd = expandScriptVars(cmd);
         ExecResult r = cmdRegistry_.execute(*this, cmd);
         ++result.count;
@@ -404,26 +469,8 @@ Application::ScriptRunResult Application::runScriptStream(
         }
         return true;
     };
-    // Strip a trailing '#' comment, respecting single/double quotes so a '#'
-    // inside a quoted argument (e.g. a label string) is preserved.
-    auto stripComment = [](std::string& s) {
-        bool inQuote = false;
-        char qc = '\0';
-        for (size_t i = 0; i < s.size(); ++i) {
-            char c = s[i];
-            if (inQuote) {
-                if (c == qc) inQuote = false;
-            } else if (c == '"' || c == '\'') {
-                inQuote = true; qc = c;
-            } else if (c == '#') {
-                s.resize(i);
-                return;
-            }
-        }
-    };
-    // Helper that runs one logical line through stripComment + ;-split.
     auto runLine = [&](std::string line) -> bool {
-        stripComment(line);
+        stripScriptComment(line);
         size_t pos = 0;
         while (pos <= line.size()) {
             size_t next = line.find(';', pos);
@@ -433,16 +480,197 @@ Application::ScriptRunResult Application::runScriptStream(
         }
         return true;
     };
-    // If we ate the first line probing for a shebang and it wasn't one,
-    // run it as a normal script line before the main loop.
-    if (!firstLine.empty() && !consumedShebang) {
-        if (!runLine(firstLine)) return result;     // RAII pops frame
+
+    // Find the matching close for a control block. Handles nesting:
+    // each `openKw` line increments depth, each `closeKw` decrements.
+    // On unmatched (depth never returns to 0) the caller logs an
+    // "unmatched :foreach / :if" error and treats the rest of the
+    // range as the body, so a missing :endif doesn't silently swallow
+    // commands that were meant to run unconditionally.
+    auto findMatchingClose = [&](size_t startIdx, const char* openKw,
+                                  const char* closeKw, bool& matched) -> size_t {
+        int depth = 1;
+        std::string body;
+        for (size_t i = startIdx + 1; i < hi; ++i) {
+            if (isControlKeyword(lines[i], openKw,  body)) ++depth;
+            else if (isControlKeyword(lines[i], closeKw, body)) {
+                --depth;
+                if (depth == 0) { matched = true; return i; }
+            }
+        }
+        matched = false;
+        return hi;
+    };
+
+    // Evaluate a comparison expression `LHS OP RHS` using the existing
+    // register expression evaluator on each side (so `$reg.x`, math,
+    // and pos() all work). Returns nullopt on parse / type failure.
+    auto evalCondition = [&](const std::string& expr) -> std::optional<bool> {
+        static const char* kOps[] = {"==", "!=", "<=", ">=", "<", ">"};
+        for (const char* op : kOps) {
+            size_t p = expr.find(op);
+            if (p == std::string::npos) continue;
+            std::string lhs = expr.substr(0, p);
+            std::string rhs = expr.substr(p + std::strlen(op));
+            trimWhitespace(lhs);
+            trimWhitespace(rhs);
+            RegisterExpr::Context ctx;
+            ctx.regs = &registers();
+            auto lr = RegisterExpr::eval(lhs, ctx);
+            auto rr = RegisterExpr::eval(rhs, ctx);
+            if (!lr.ok || !rr.ok) return std::nullopt;
+            if (lr.value.kind != Register::Kind::Scalar ||
+                rr.value.kind != Register::Kind::Scalar) return std::nullopt;
+            double l = lr.value.scalar, r = rr.value.scalar;
+            if      (std::strcmp(op, "==") == 0) return l == r;
+            else if (std::strcmp(op, "!=") == 0) return l != r;
+            else if (std::strcmp(op, "<=") == 0) return l <= r;
+            else if (std::strcmp(op, ">=") == 0) return l >= r;
+            else if (std::strcmp(op, "<")  == 0) return l <  r;
+            else                                  return l >  r;
+        }
+        return std::nullopt;
+    };
+
+    // Block stack — one entry per open :if. `active` is true while the
+    // current branch should execute its body lines; `anyTaken` is true
+    // once any branch (if / elseif / else) has been entered, so
+    // subsequent elseif/else know to stay inactive.
+    struct IfFrame { bool active; bool anyTaken; };
+    std::vector<IfFrame> ifStack;
+    auto anyInactive = [&]() {
+        for (const auto& f : ifStack) if (!f.active) return true;
+        return false;
+    };
+
+    std::string body;
+    for (size_t i = lo; i < hi; ++i) {
+        const std::string& srcLine = lines[i];
+
+        if (isControlKeyword(srcLine, "if", body)) {
+            if (anyInactive()) {
+                // Still track so :endif pops correctly; subsequent
+                // iterations skip the body automatically via
+                // anyInactive() since active=false.
+                ifStack.push_back({false, false});
+                continue;
+            }
+            std::string expanded = expandScriptVars(body);
+            auto cond = evalCondition(expanded);
+            if (!cond) {
+                ++result.failures;
+                if (result.firstFail.empty()) {
+                    result.firstFail = "bad :if condition: " + expanded;
+                    result.failLine = srcLine;
+                }
+                if (strict) { result.stopped = true; return false; }
+                ifStack.push_back({false, false});
+            } else {
+                ifStack.push_back({*cond, *cond});
+            }
+            continue;
+        }
+        if (isControlKeyword(srcLine, "elseif", body)) {
+            if (ifStack.empty()) continue;
+            if (ifStack.back().anyTaken) {
+                ifStack.back().active = false;
+            } else {
+                std::string expanded = expandScriptVars(body);
+                auto cond = evalCondition(expanded);
+                bool c = cond.value_or(false);
+                ifStack.back().active = c;
+                if (c) ifStack.back().anyTaken = true;
+            }
+            continue;
+        }
+        if (isControlKeyword(srcLine, "else", body)) {
+            if (ifStack.empty()) continue;
+            ifStack.back().active = !ifStack.back().anyTaken;
+            ifStack.back().anyTaken = true;
+            continue;
+        }
+        if (isControlKeyword(srcLine, "endif", body)) {
+            if (!ifStack.empty()) ifStack.pop_back();
+            continue;
+        }
+        if (isControlKeyword(srcLine, "foreach", body)) {
+            bool matched = false;
+            size_t endIdx = findMatchingClose(i, "foreach", "end", matched);
+            if (!matched) {
+                ++result.failures;
+                if (result.firstFail.empty()) {
+                    result.firstFail = "unmatched :foreach (no :end found)";
+                    result.failLine = srcLine;
+                }
+                if (strict) { result.stopped = true; return false; }
+                i = endIdx;
+                continue;
+            }
+            if (anyInactive()) { i = endIdx; continue; }
+            // Parse `VAR in LO..HI`. expandScriptVars first so the
+            // bounds can come from registers / env vars.
+            std::string expanded = expandScriptVars(body);
+            auto inPos = expanded.find(" in ");
+            if (inPos == std::string::npos) {
+                ++result.failures;
+                if (result.firstFail.empty()) {
+                    result.firstFail = "bad :foreach header (expected `VAR in LO..HI`): " + expanded;
+                    result.failLine = srcLine;
+                }
+                if (strict) { result.stopped = true; return false; }
+                i = endIdx;
+                continue;
+            }
+            std::string var = expanded.substr(0, inPos);
+            std::string rangeExpr = expanded.substr(inPos + 4);
+            trimWhitespace(var);
+            if (var.empty()) { i = endIdx; continue; }
+            // parse `LO..HI`
+            auto dotPos = rangeExpr.find("..");
+            if (dotPos == std::string::npos) {
+                ++result.failures;
+                if (result.firstFail.empty()) {
+                    result.firstFail = "bad :foreach range (expected LO..HI): " + rangeExpr;
+                    result.failLine = srcLine;
+                }
+                if (strict) { result.stopped = true; return false; }
+                i = endIdx;
+                continue;
+            }
+            int loVal = 0, hiVal = 0;
+            try {
+                loVal = std::stoi(rangeExpr.substr(0, dotPos));
+                hiVal = std::stoi(rangeExpr.substr(dotPos + 2));
+            } catch (const std::exception&) {
+                ++result.failures;
+                if (result.firstFail.empty()) {
+                    result.firstFail = "bad :foreach numeric range: " + rangeExpr;
+                    result.failLine = srcLine;
+                }
+                if (strict) { result.stopped = true; return false; }
+                i = endIdx;
+                continue;
+            }
+            for (int v = loVal; v <= hiVal; ++v) {
+                Register r; r.kind = Register::Kind::Scalar; r.scalar = v;
+                registers()[var] = r;
+                if (!dispatchScriptLines(lines, i + 1, endIdx, result, strict)) {
+                    return false;
+                }
+            }
+            i = endIdx;       // past the :end
+            continue;
+        }
+        if (isControlKeyword(srcLine, "end", body)) {
+            // Stray :end (foreach consumed its own); ignore.
+            continue;
+        }
+
+        // Non-control line. Skip if any enclosing :if branch is inactive.
+        if (anyInactive()) continue;
+        if (!runLine(srcLine)) return false;
     }
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!runLine(line)) return result;          // RAII pops frame
-    }
-    return result;                                  // RAII pops frame
+    return true;
 }
 
 namespace {
