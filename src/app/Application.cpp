@@ -5976,6 +5976,19 @@ void Application::registerCommands() {
 
         auto sel = app.parseSelection(expr, *obj);
 
+        // `<other>/(<expr>)` qualifying a loaded-but-not-current object
+        // parses to empty here (name mismatch in the parser). Fall back
+        // to forEachInScope so the qualifier resolves against the named
+        // object regardless of which one happens to be current. Issue #88.
+        if (sel.empty()) {
+            forEachInScope(app, ScopeMode::All, expr, [&](ScopedTarget& t) {
+                if (t.obj == obj) return true;  // already tried current
+                obj = t.obj;
+                sel = std::move(t.sel);
+                return false;  // stop on first match
+            });
+        }
+
         if (!name.empty()) {
             // Store as named selection
             app.namedSelections()[name] = sel;
