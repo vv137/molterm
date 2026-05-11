@@ -490,12 +490,31 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
         }
         return true;
     };
+    // Find the next `;` outside of "..."/'...' quotes, so a literal
+    // semicolon inside a quoted label/measure caption isn't treated as
+    // a command separator (issue #87). stripScriptComment uses the same
+    // quote-tracking rule for `#`.
+    auto findUnquotedSemicolon = [](const std::string& s, size_t from) -> size_t {
+        bool inQuote = false;
+        char qc = '\0';
+        for (size_t i = from; i < s.size(); ++i) {
+            char c = s[i];
+            if (inQuote) {
+                if (c == qc) inQuote = false;
+            } else if (c == '"' || c == '\'') {
+                inQuote = true; qc = c;
+            } else if (c == ';') {
+                return i;
+            }
+        }
+        return std::string::npos;
+    };
     auto runLine = [&](std::string line, size_t bufIdx) -> bool {
         const std::string srcLine = line;
         stripScriptComment(line);
         size_t pos = 0;
         while (pos <= line.size()) {
-            size_t next = line.find(';', pos);
+            size_t next = findUnquotedSemicolon(line, pos);
             if (next == std::string::npos) next = line.size();
             if (!runOne(line.substr(pos, next - pos), bufIdx, srcLine)) return false;
             pos = next + 1;
