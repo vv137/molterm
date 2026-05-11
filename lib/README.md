@@ -17,7 +17,10 @@ against the first match in:
 4. `<exe-dir>/../lib/<name>.mt`            — build-tree layout
 5. `<source-dir>/lib/<name>.mt`            — dev fallback
 
-Forks live at `~/.molterm/lib/`; shipped baselines stay untouched.
+Forks live at `~/.molterm/lib/`; shipped baselines (delivered by
+`scripts/update.sh` into `<prefix>/share/molterm/lib/`, or by `cmake
+--install` to the same location) stay untouched. The updater never
+writes to `~/.molterm/`.
 
 ## Shipped recipes
 

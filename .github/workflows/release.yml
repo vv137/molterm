@@ -51,10 +51,18 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p molterm-${{ env.RELEASE_TAG }}-${{ matrix.name }}
-          cp build/molterm build/USalign THIRDPARTY.md molterm-${{ env.RELEASE_TAG }}-${{ matrix.name }}/
-          tar czf molterm-${{ env.RELEASE_TAG }}-${{ matrix.name }}.tar.gz \
-            molterm-${{ env.RELEASE_TAG }}-${{ matrix.name }}/
+          STAGE=molterm-${{ env.RELEASE_TAG }}-${{ matrix.name }}
+          mkdir -p "$STAGE"
+          cp build/molterm build/USalign THIRDPARTY.md "$STAGE/"
+          # Ship the analysis recipe library (issue #56). update.sh
+          # relocates this to <bin>/../share/molterm/lib/ so :run @lib/...
+          # finds the shipped baseline at the install layout location.
+          # `~/.molterm/lib/` stays reserved for user-fork overrides.
+          if [ -d lib ]; then
+            mkdir -p "$STAGE/lib"
+            cp lib/*.mt lib/README.md "$STAGE/lib/" 2>/dev/null || true
+          fi
+          tar czf "$STAGE.tar.gz" "$STAGE/"
 
       - uses: actions/upload-artifact@v4
         with:
