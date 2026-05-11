@@ -26,6 +26,22 @@ Selection Selection::operator&(const Selection& other) const {
     return Selection(std::move(result), "(" + expr_ + " and " + other.expr_ + ")");
 }
 
+Selection Selection::operator-(const Selection& other) const {
+    std::vector<int> result;
+    std::set_difference(indices_.begin(), indices_.end(),
+                        other.indices_.begin(), other.indices_.end(),
+                        std::back_inserter(result));
+    return Selection(std::move(result), "(" + expr_ + " minus " + other.expr_ + ")");
+}
+
+Selection Selection::operator^(const Selection& other) const {
+    std::vector<int> result;
+    std::set_symmetric_difference(indices_.begin(), indices_.end(),
+                                  other.indices_.begin(), other.indices_.end(),
+                                  std::back_inserter(result));
+    return Selection(std::move(result), "(" + expr_ + " xor " + other.expr_ + ")");
+}
+
 Selection Selection::operator|(const Selection& other) const {
     std::vector<int> result;
     std::set_union(indices_.begin(), indices_.end(),
@@ -103,6 +119,7 @@ bool Selection::isPrimaryKeyword(std::string_view word) {
         "het", "hetatm", "ligand",
         "protein", "nucleic", "dna", "rna", "polymer",
         "obj", "within", "exwithin", "same",
+        "byres", "bychain",          // sugar for `same residue|chain as` (#52)
         "pepseq", "seq", "sequence",
         "not",  // unary operator can lead an expression
     };
@@ -292,12 +309,21 @@ private:
     }
 
     // or: and (("or") and)*
+    // Left-associative parse of {or, minus, xor} at the same precedence
+    // (issue #52). `A and B minus C` reads as (A and B) minus C since
+    // parseAnd is one level up; `A or B minus C` reads as (A or B) minus C.
     Selection parseOr() {
         auto left = parseAnd();
-        while (current_.type == Token::Word && current_.value == "or") {
+        while (current_.type == Token::Word &&
+               (current_.value == "or" ||
+                current_.value == "minus" ||
+                current_.value == "xor")) {
+            std::string op = current_.value;
             advance();
             auto right = parseAnd();
-            left = left | right;
+            if      (op == "or")    left = left | right;
+            else if (op == "minus") left = left - right;
+            else                    left = left ^ right;
         }
         return left;
     }
@@ -738,6 +764,15 @@ private:
             }
             Selection sub = parseAtom();
             return sameAs(sub, keywordLower);
+        }
+        if (kwLower == "byres" || kwLower == "bychain") {
+            // Sugar for `same residue|chain as <sub>` (issue #52). PyMOL/
+            // ChimeraX users expect these spellings; the `same … as` form
+            // stays available for the resname / resn case which has no
+            // single-word alias.
+            std::string shareKw = (kwLower == "byres") ? "residue" : "chain";
+            Selection sub = parseAtom();
+            return sameAs(sub, shareKw);
         }
         if (kwLower == "pepseq" || kwLower == "seq" || kwLower == "sequence") {
             // pepseq <pattern> — match contiguous runs of residues whose
