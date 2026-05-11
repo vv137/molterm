@@ -549,10 +549,17 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   All three knobs scale by :set overlay_scale.
 :label <selection> = "<text>"   " Override the label text for matched atoms
                                 "   (e.g. :label name CA and resi 1 = "P1")
-:label clear                    " Remove all labels and overrides
-:unlabel [<selection>]          " Remove labels (no arg: all; with sel: just those)
+:label clear                    " Remove all labels and overrides (atom + corner/screen/world)
+:unlabel [<selection>|corner [<which>]|screen|world]
+                                " Remove labels (issue #58):
+                                "   no arg               every atom label AND every free label
+                                "   <selection>          atom labels matching the selection only
+                                "   corner               every corner-anchored free label
+                                "   corner topleft|tl|topright|tr|bottomleft|bl|bottomright|br
+                                "                         that one corner only
+                                "   screen | world       every screen-anchored / world-anchored free label
 :overlay                        " Toggle overlay visibility (labels, measurements, sele)
-:overlay clear                  " Clear all measurements and labels
+:overlay clear                  " Clear all measurements, atom labels, free labels, arrows
 :preset                         " Apply smart defaults (cartoon protein, ballstick ligands)
 :run [--strict] [--fresh] <script.mt>
                                 " Execute a command script (# comments supported).
