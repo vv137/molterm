@@ -55,9 +55,9 @@ namespace molterm {
 static constexpr const char* kAllToken = "all";
 static constexpr const char* kAllGlob  = "*";
 
-static std::string resolveUSalignPath() {
-    namespace fs = std::filesystem;
-    constexpr const char* kName = "USalign";
+// Read the current executable path. Empty on platforms without a
+// supported syscall; callers must handle that gracefully.
+static std::filesystem::path exeDir() {
     char buf[4096] = {};
 #if defined(__APPLE__)
     uint32_t size = sizeof(buf);
@@ -66,15 +66,64 @@ static std::string resolveUSalignPath() {
     ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (n > 0) buf[n] = '\0'; else buf[0] = '\0';
 #endif
+    if (!buf[0]) return {};
+    return std::filesystem::path(buf).parent_path();
+}
+
+static std::string resolveUSalignPath() {
+    namespace fs = std::filesystem;
+    constexpr const char* kName = "USalign";
     std::error_code ec;
-    if (buf[0]) {
-        fs::path sibling = fs::path(buf).parent_path() / kName;
+    auto dir = exeDir();
+    if (!dir.empty()) {
+        fs::path sibling = dir / kName;
         if (fs::exists(sibling, ec)) return sibling.string();
     }
 #ifdef USALIGN_PATH
     if (fs::exists(USALIGN_PATH, ec)) return USALIGN_PATH;
 #endif
     return kName;
+}
+
+inline constexpr std::string_view kAtLibPrefix = "@lib/";
+
+// Resolve `@lib/<name>` (with or without trailing .mt) to a concrete
+// file path for `:run` — issue #56. Lookup chain, first match wins:
+//   1. $MOLTERM_LIB_DIR/<name>.mt        (per-invocation override)
+//   2. ~/.molterm/lib/<name>.mt          (per-user library)
+//   3. <exe>/../share/molterm/lib/<name>.mt   (install layout)
+//   4. <exe>/../lib/<name>.mt           (build-tree layout — running from build/)
+//   5. <source>/lib/<name>.mt           (dev fallback via MOLTERM_SOURCE_DIR)
+// Returns empty string when no candidate exists, so the caller can
+// surface a "Cannot resolve @lib/foo" message with the chain it tried.
+static std::string resolveAtLibPath(const std::string& spec) {
+    namespace fs = std::filesystem;
+    if (spec.size() <= kAtLibPrefix.size() ||
+        spec.compare(0, kAtLibPrefix.size(), kAtLibPrefix) != 0) {
+        return std::string();
+    }
+    std::string name = spec.substr(kAtLibPrefix.size());
+    if (name.size() < 3 || name.substr(name.size() - 3) != ".mt") name += ".mt";
+
+    std::vector<fs::path> candidates;
+    if (const char* env = std::getenv("MOLTERM_LIB_DIR")) {
+        candidates.emplace_back(fs::path(env) / name);
+    }
+    candidates.emplace_back(fs::path(ConfigParser::configDir()) / "lib" / name);
+    auto dir = exeDir();
+    if (!dir.empty()) {
+        candidates.emplace_back(dir / ".." / "share" / "molterm" / "lib" / name);
+        candidates.emplace_back(dir / ".." / "lib" / name);
+    }
+#ifdef MOLTERM_SOURCE_DIR
+    candidates.emplace_back(fs::path(MOLTERM_SOURCE_DIR) / "lib" / name);
+#endif
+
+    std::error_code ec;
+    for (const auto& p : candidates) {
+        if (fs::exists(p, ec)) return fs::weakly_canonical(p, ec).string();
+    }
+    return std::string();
 }
 
 static int applyHeteroatomColors(MolObject& obj) {
@@ -6296,8 +6345,17 @@ void Application::registerCommands() {
             else if (path.empty())    path   = a;
         }
         if (path.empty()) return {false, "Usage: :run [--strict] [--fresh] <script.mt>"};
-        std::ifstream file(path);
-        if (!file) return {false, "Cannot open: " + path};
+        std::string resolved = path;
+        if (path.compare(0, kAtLibPrefix.size(), kAtLibPrefix) == 0) {
+            std::string r = resolveAtLibPath(path);
+            if (r.empty()) return {false,
+                "Cannot resolve " + path +
+                "  (tried $MOLTERM_LIB_DIR, ~/.molterm/lib/, "
+                "<install>/share/molterm/lib/, <exe>/../lib/)"};
+            resolved = r;
+        }
+        std::ifstream file(resolved);
+        if (!file) return {false, "Cannot open: " + resolved};
         // --fresh: wipe overlay annotations (labels, measurements) before
         // executing the script, so a batch render driver
         // (`:run setup; :screenshot fig1; :run setup; :screenshot fig2`)
@@ -6318,7 +6376,8 @@ void Application::registerCommands() {
        "Execute a command script (# comments supported; --strict aborts on first error; "
        "--fresh clears overlay annotations before running so batch-render drivers "
        "don't leak labels/measurements between figures)",
-       {":run render.mt", ":run --strict ci.mt", ":run --fresh fig2.mt"}, "Files");
+       {":run render.mt", ":run --strict ci.mt", ":run --fresh fig2.mt",
+        ":run @lib/tcr_angles"}, "Files");
 
     cmdRegistry_.registerCmd("setenv", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto& env = app.scriptEnv();
