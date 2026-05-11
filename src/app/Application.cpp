@@ -34,6 +34,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -4659,21 +4660,31 @@ void Application::registerCommands() {
             // 1.0 - v: PyMOL-style "transparency" is 1 = fully invisible,
             // but PixelCanvas blending uses alpha (1 = opaque). Convert.
             float alpha = 1.0f - v;
-            auto obj = app.tabs().currentTab().currentObject();
-            if (!obj) return {false, "No object selected"};
             if (cmd.args.size() == 2) {
+                // No selection — operate on current object's whole atom set,
+                // matching the legacy "set transparency 0.5" shorthand.
+                auto obj = app.tabs().currentTab().currentObject();
+                if (!obj) return {false, "No object selected"};
                 if (v <= 0.0f) { obj->clearAtomAlpha(); return {true, "transparency cleared"}; }
                 obj->setAtomAlphaAll(alpha);
                 return {true, "transparency = " + cmd.args[1] +
                               " (whole object, " + std::to_string(obj->atoms().size()) + " atoms)"};
             }
+            // With a selection, use forEachInScope so obj-qualified forms
+            // (issue #55, e.g. `reference/(chain D)`) hit the named object
+            // instead of silently failing on the current object.
             std::string expr = joinArgs(cmd.args, 2, cmd.args.size());
-            auto sel = app.parseSelection(expr, *obj);
-            if (sel.empty()) return {false, "No atoms match: " + expr};
-            std::vector<int> idxs(sel.indices().begin(), sel.indices().end());
-            obj->setAtomAlphas(idxs, alpha);
-            return {true, "transparency = " + cmd.args[1] +
-                          " on " + std::to_string(idxs.size()) + " atoms (" + expr + ")"};
+            int totalAtoms = 0;
+            int objs = forEachInScope(app, expr, [&](ScopedTarget& t) {
+                t.obj->setAtomAlphas(t.sel.indices(), alpha);
+                totalAtoms += static_cast<int>(t.sel.size());
+                return true;
+            });
+            if (objs == 0) return {false, "No atoms match: " + expr};
+            std::string msg = "transparency = " + cmd.args[1] +
+                              " on " + std::to_string(totalAtoms) + " atoms (" + expr + ")";
+            if (objs > 1) msg += " in " + std::to_string(objs) + " objects";
+            return {true, msg};
         }
         return {false, "Unknown option: " + opt};
     }, ":set <option> [value]",
@@ -5321,19 +5332,25 @@ void Application::registerCommands() {
     // :count <expression> — count atoms matching selection
     cmdRegistry_.registerCmd("count", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) return {false, "Usage: :count <expression>"};
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
-
-        std::string expr;
-        for (size_t i = 0; i < cmd.args.size(); ++i) {
-            if (i > 0) expr += " ";
-            expr += cmd.args[i];
+        std::string expr = joinArgs(cmd.args, 0, cmd.args.size());
+        auto scoped = collectInScope(app, expr);
+        if (scoped.perObject.empty())
+            return {false, "No object selected"};
+        std::string msg = std::to_string(scoped.totalAtoms) + " atoms match: " + expr;
+        if (scoped.perObject.size() > 1) {
+            msg += " (";
+            bool first = true;
+            for (const auto& [obj, idxs] : scoped.perObject) {
+                if (!first) msg += ", ";
+                first = false;
+                msg += obj->name() + ":" + std::to_string(idxs.size());
+            }
+            msg += ")";
         }
-
-        auto sel = app.parseSelection(expr, *obj);
-        return {true, std::to_string(sel.size()) + " atoms match: " + expr};
+        return {true, msg};
     }, ":count <expr>", "Count atoms matching a selection expression",
-       {":count chain A", ":count resn HEM", ":count $sele"}, "Selection");
+       {":count chain A", ":count resn HEM", ":count $sele",
+        ":count 1ubq/(chain A)"}, "Selection");
 
     // :cmp <expr-A> vs <expr-B> — Venn breakdown + verdict word (issue #53)
     // Useful for sanity-checking selection equivalence after a refactor
@@ -5344,8 +5361,6 @@ void Application::registerCommands() {
     cmdRegistry_.registerCmd("cmp", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         constexpr const char* kUsage = "Usage: :cmp <expr-A> vs <expr-B>";
         if (cmd.args.empty()) return {false, kUsage};
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
 
         // Find the `vs` separator. Plain `=` / `==` / `,` would be
         // ambiguous (= is :select name=expr; , can appear inside
@@ -5360,24 +5375,39 @@ void Application::registerCommands() {
         std::string exprA = joinArgs(cmd.args, 0, static_cast<size_t>(vsIdx));
         std::string exprB = joinArgs(cmd.args, static_cast<size_t>(vsIdx) + 1, cmd.args.size());
 
-        auto a = app.parseSelection(exprA, *obj);
-        auto b = app.parseSelection(exprB, *obj);
-        // |A∩B| done once; the two differences are derivable from sizes,
-        // so we skip building the difference vectors just to read .size().
-        size_t both    = (a & b).size();
-        size_t aMinusB = a.size() - both;
-        size_t bMinusA = b.size() - both;
+        // Pair each side's per-object selections by object identity and
+        // compute the Venn breakdown within the same object — comparing
+        // indices across objects would mix index spaces, so cross-object
+        // pairs are treated as disjoint.
+        std::unordered_map<MolObject*, Selection> aMap, bMap;
+        forEachInScope(app, exprA, [&](ScopedTarget& t) {
+            aMap.emplace(t.obj.get(), std::move(t.sel)); return true;
+        });
+        forEachInScope(app, exprB, [&](ScopedTarget& t) {
+            bMap.emplace(t.obj.get(), std::move(t.sel)); return true;
+        });
+        if (aMap.empty() && bMap.empty()) return {false, "No object selected"};
+
+        size_t aSize = 0, bSize = 0, both = 0;
+        for (const auto& [obj, sel] : aMap) {
+            aSize += sel.size();
+            auto bit = bMap.find(obj);
+            if (bit != bMap.end()) both += (sel & bit->second).size();
+        }
+        for (const auto& [obj, sel] : bMap) bSize += sel.size();
+        size_t aMinusB = aSize - both;
+        size_t bMinusA = bSize - both;
 
         const char* verdict;
-        if (a.size() == b.size() && aMinusB == 0)      verdict = "equal";
+        if (aSize == bSize && aMinusB == 0)            verdict = "equal";
         else if (aMinusB == 0)                          verdict = "A⊆B";
         else if (bMinusA == 0)                          verdict = "B⊆A";
         else if (both == 0)                             verdict = "disjoint";
         else                                            verdict = "overlap";
 
         std::string msg = "cmp:";
-        msg += "  |A|="    + std::to_string(a.size());
-        msg += "  |B|="    + std::to_string(b.size());
+        msg += "  |A|="    + std::to_string(aSize);
+        msg += "  |B|="    + std::to_string(bSize);
         msg += "  |A∩B|="  + std::to_string(both);
         msg += "  |A\\B|=" + std::to_string(aMinusB);
         msg += "  |B\\A|=" + std::to_string(bMinusA);
