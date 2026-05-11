@@ -845,21 +845,34 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "     - Scalars: 1.5, -3
                                 "     - Vec3 literals: [1, 0, 0]
                                 "     - Atom positions: pos(A:1:CA)         (chain:resi:atom)
+                                "                      pos(1ubq/A:1:CA)    (obj qualifier, issue #66)
                                 "     - Register refs: $G.axis1, $v.length
                                 "                      (bare names also work: G.axis1)
                                 "     - Vector algebra: + - * /, dot(), cross(),
                                 "                      length(), normalize(), midpoint(),
                                 "                      angle()       (degrees)
+                                "     - Scalar math:   abs, sqrt, exp, log, log10, log2,
+                                "                      sin, cos, tan, asin, acos, atan,
+                                "                      floor, ceil, round
+                                "                      (2-arg) min, max, pow, atan2
                                 "     - PCA primitive: pca(<selection>)     -> { axis1,
                                 "                      axis2, axis3, eigvals, center }
                                 "   Type rules: vec±vec, scalar±scalar, scalar*vec,
                                 "   vec/scalar, dot/cross/length/angle on vec3.
                                 "   Examples:
                                 "     :let v_axis = pos(A:43:CA) - pos(B:23:CA)
-                                "     :let G = pca(chain A and helix)
-                                "     :let theta = angle(v_axis, G.axis1)
+                                "     :let drift  = length(pos(model/A:50:CA) -
+                                "                          pos(ref/A:50:CA))
+                                "     :let G      = pca(chain A and helix)
+                                "     :let theta  = abs(angle(v_axis, G.axis1))
 :unlet <name> | :unlet *         " Drop one named register, or all of them.
 :registers                       " List every register and its current value.
+:echo <text>                     " Print to stdout after ${var} / ${reg:fmt} expansion.
+                                "   LLM-agent-friendly: machine-readable output without
+                                "   relying on the status bar. Useful for scripted
+                                "   analysis pipelines:
+                                "     :let crossing = angle($v_proj, $p_proj)
+                                "     :echo crossing_deg=${crossing:.2f}
 
 " ── ${name.field[:fmt]} interpolation ───────────────────────────────
 " Inside any string-typed argument (`:setenv`, `:label`, `:measure ...= caption`,
