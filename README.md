@@ -250,7 +250,10 @@ bare selection is interpreted per-object; narrow it with one of:
   for nested expressions: `:zoom 1ubq/(chain A and resi 50-80)`. Wildcard form
   `all/(<expr>)` and `*/(<expr>)` is symmetric to a bare `(<expr>)` but explicit
   about the intent. PDB-style digit-led names (`1ubq`, `7tcr`) work as the
-  object qualifier without quoting.
+  object qualifier without quoting. As of #55, `:count`, `:cmp`, and
+  `:set transparency` resolve obj-qualified selections against the named
+  object even when it isn't the `:object` current — previously they were
+  pinned to the current object and silently returned 0 atoms.
 
 `:zoom` / `:center` / `:orient` also skip `:disable`d objects in
 broadcast mode — a disabled crystal reference loaded alongside a model
