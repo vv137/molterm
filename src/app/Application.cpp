@@ -5396,15 +5396,31 @@ void Application::registerCommands() {
         RegisterExpr::Context ctx;
         ctx.regs = &app.registers();
         ctx.resolveAtomPos = [&app](const std::string& spec, double* x, double* y, double* z) -> bool {
-            // Atom-spec resolver: "chain:resi:name" against the current
-            // object. Falls back to the first atom of (chain, resi) when
-            // name is omitted; falls back to first matching residue when
-            // both omitted (rare; mostly for chain-then-resi typos).
-            auto obj = app.tabs().currentTab().currentObject();
+            // Atom-spec resolver — accepts the same `obj/chain:resi:name`
+            // qualifier the selection grammar uses since #55 (issue #66).
+            // Forms:
+            //   chain:resi:name              → current object
+            //   obj/chain:resi:name          → named object (cross-object)
+            // `obj/` is recognised by the first '/' in the spec; everything
+            // before it is the object name, everything after is the
+            // legacy three-part atom spec.
+            std::string objName;
+            std::string remainder = spec;
+            auto slash = spec.find('/');
+            if (slash != std::string::npos) {
+                objName = spec.substr(0, slash);
+                remainder = spec.substr(slash + 1);
+            }
+            std::shared_ptr<MolObject> obj;
+            if (objName.empty()) {
+                obj = app.tabs().currentTab().currentObject();
+            } else {
+                obj = app.store().get(objName);
+            }
             if (!obj) return false;
             std::string chain, resi, name;
             int part = 0;
-            for (char c : spec) {
+            for (char c : remainder) {
                 if (c == ':') { ++part; continue; }
                 if (std::isspace(static_cast<unsigned char>(c))) continue;
                 if      (part == 0) chain += c;
@@ -6598,6 +6614,24 @@ void Application::registerCommands() {
        {":setenv WS /store/casp17/H2324",
         ":load ${WS}/models/top1.cif",
         ":setenv WS"}, "Files");
+
+    // :echo — emit args to stdout for LLM-agent-friendly automated
+    // analysis. Args are pre-expanded by expandScriptVars() upstream,
+    // so `${reg:.2f}` and `${ENV}` both work. Returns an empty status
+    // message because the printf is the visible output — duplicating
+    // it via the command-bar return path would print echo lines
+    // twice in script mode (printf during + lastMsg at script end).
+    cmdRegistry_.registerCmd("echo", [](Application&, const ParsedCommand& cmd) -> ExecResult {
+        std::string text = joinArgs(cmd.args, 0, cmd.args.size());
+        std::printf("%s\n", text.c_str());
+        std::fflush(stdout);
+        return {true, ""};
+    }, ":echo <text>",
+       "Print text to stdout (after ${var} / ${reg:fmt} expansion). Useful for "
+       "machine-readable script output and LLM-agent telemetry.",
+       {":echo crossing = ${crossing:.2f}",
+        ":echo workspace = ${WS}",
+        ":echo \"label A\\tlabel B\""}, "Session");
 
     cmdRegistry_.registerCmd("save", [](Application& app, const ParsedCommand&) -> ExecResult {
         if (SessionSaver::saveSession(app))
