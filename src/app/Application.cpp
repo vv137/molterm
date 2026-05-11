@@ -6,6 +6,7 @@
 #include "molterm/cmd/RegisterExpr.h"
 #include "molterm/io/Aligner.h"
 #include "molterm/io/CifLoader.h"
+#include "molterm/io/PdbWriter.h"
 #include "molterm/render/AsciiCanvas.h"
 #include "molterm/render/BrailleCanvas.h"
 #include "molterm/render/BlockCanvas.h"
@@ -6569,6 +6570,52 @@ void Application::registerCommands() {
         return {false, "Failed to save session"};
     }, ":save", "Save the current session to ~/.molterm/autosave.toml",
        {":save"}, "Session");
+
+    // :export [<obj>] <path>
+    // Write a single MolObject to disk. Format derived from the path
+    // extension — .pdb today (gemmi mmCIF writer integration is a
+    // follow-up). Pairs with :extract / :split by chain so users can
+    // carve a domain and feed it to USalign / ANARCI / Pierce TCR3d.
+    cmdRegistry_.registerCmd("export", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        constexpr const char* kUsage = "Usage: :export [<obj>] <path.pdb>";
+        if (cmd.args.empty()) return {false, kUsage};
+        auto& tab = app.tabs().currentTab();
+        std::string objName, path;
+        if (cmd.args.size() == 1) {
+            auto cur = tab.currentObject();
+            if (!cur) return {false, "No object selected"};
+            objName = cur->name();
+            path = cmd.args[0];
+        } else {
+            objName = cmd.args[0];
+            path = joinArgs(cmd.args, 1, cmd.args.size());
+        }
+        auto obj = app.store().get(objName);
+        if (!obj) return {false, "Object not found: " + objName};
+        // Extension-based dispatch — .pdb today; .cif / .mmcif when the
+        // gemmi writer wire-up lands.
+        auto endsWith = [&](const std::string& suffix) {
+            return path.size() >= suffix.size() &&
+                   path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0;
+        };
+        if (endsWith(".cif") || endsWith(".mmcif")) {
+            return {false, "mmCIF export not implemented yet — write .pdb and "
+                           "round-trip through gemmi (`gemmi convert in.pdb out.cif`) "
+                           "for now."};
+        }
+        if (!endsWith(".pdb") && !endsWith(".ent")) {
+            return {false, "Unsupported extension. Use .pdb (or .ent) — "
+                           "the writer picks format from the path suffix."};
+        }
+        if (!writePdb(*obj, path))
+            return {false, "Failed to write " + path};
+        return {true, "Wrote " + objName + " (" +
+                      std::to_string(obj->atoms().size()) + " atoms) to " + path};
+    }, ":export [<obj>] <path>",
+       "Write a single object to disk as PDB (extension picks format).",
+       {":export 1ubq.pdb",
+        ":export carved tcr_alone.pdb",
+        ":export 1ubq /tmp/backup.pdb"}, "Files");
 
     cmdRegistry_.registerCmd("resume", [](Application& app, const ParsedCommand&) -> ExecResult {
         std::string msg = SessionSaver::restoreSession(app);

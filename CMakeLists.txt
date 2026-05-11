@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(molterm VERSION 0.37.0 LANGUAGES CXX)
+project(molterm VERSION 0.38.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -75,6 +75,7 @@ set(MOLTERM_SOURCES
     src/core/DSSP.cpp
     # IO
     src/io/CifLoader.cpp
+    src/io/PdbWriter.cpp
     src/io/Aligner.cpp
     # Analysis
     src/analysis/ContactMap.cpp
