@@ -425,6 +425,25 @@ std::optional<Application::FreeLabelCorner> parseCornerName(const std::string& w
     return std::nullopt;
 }
 
+// Remove free labels of a given anchor kind (Corner / Screen / World).
+// When `corner` is set, only that one corner is removed; otherwise every
+// label of the kind goes. Returns the number of entries removed.
+// Shared by `:unlabel corner|screen|world` and `:label <kind> = ""`
+// (issue #65) so the per-anchor mutation rule lives in one place.
+size_t clearFreeLabelsByAnchor(std::vector<Application::FreeLabel>& fls,
+                                Application::FreeLabelAnchor anchor,
+                                std::optional<Application::FreeLabelCorner> corner) {
+    size_t before = fls.size();
+    fls.erase(std::remove_if(fls.begin(), fls.end(),
+              [&](const Application::FreeLabel& fl) {
+                  if (fl.anchor != anchor) return false;
+                  if (anchor == Application::FreeLabelAnchor::Corner && corner)
+                      return fl.corner == *corner;
+                  return true;
+              }), fls.end());
+    return before - fls.size();
+}
+
 // Canonical option names enumerated by `:set` (no args) / `:set all` AND
 // by tab-completion (which extends with kSetOptionsShort below). Long
 // forms only — listing should not double-print under each alias.
@@ -6350,8 +6369,33 @@ void Application::registerCommands() {
         // separate anchor args from the label string.
         if (cmd.args[0] == "corner" || cmd.args[0] == "screen" || cmd.args[0] == "world") {
             auto [anchorArgs, text] = splitAtEqToken(cmd.args);
-            if (text.empty())
-                return {false, "Free-position labels require '= \"text\"' suffix"};
+            // splitAtEqToken strictly shortens anchorArgs when `=` is
+            // present, so the size delta is a cheap presence check
+            // (same idiom as the atom-anchored branch below).
+            bool sawEq = anchorArgs.size() != cmd.args.size();
+            // `:label <anchor> = ""` (or empty text after =) acts as a
+            // clear-this-anchor instruction (issue #65). Without `=`,
+            // it's a usage error.
+            if (text.empty()) {
+                if (!sawEq)
+                    return {false, "Free-position labels require '= \"text\"' suffix "
+                                   "(or `= \"\"` to clear)"};
+                FreeLabelAnchor anchor;
+                std::optional<FreeLabelCorner> which;
+                if (anchorArgs[0] == "corner") {
+                    anchor = FreeLabelAnchor::Corner;
+                    if (anchorArgs.size() >= 2) {
+                        which = parseCornerName(anchorArgs[1]);
+                        if (!which) return {false, "Bad corner: " + anchorArgs[1]};
+                    }
+                } else {
+                    anchor = (anchorArgs[0] == "screen")
+                        ? FreeLabelAnchor::Screen : FreeLabelAnchor::World;
+                }
+                size_t removed = clearFreeLabelsByAnchor(app.freeLabels(), anchor, which);
+                return {true, "Cleared " + std::to_string(removed) +
+                              " " + anchorArgs[0] + " label(s)"};
+            }
             FreeLabel fl;
             fl.text = text;
             const std::string& mode = anchorArgs[0];
@@ -6427,30 +6471,21 @@ void Application::registerCommands() {
                           std::to_string(fn) + " free label(s)"};
         }
         if (cmd.args[0] == "corner") {
-            auto& fls = app.freeLabels();
-            size_t before = fls.size();
             std::optional<FreeLabelCorner> which;
             if (cmd.args.size() >= 2) {
                 which = parseCornerName(cmd.args[1]);
                 if (!which) return {false, "Bad corner: " + cmd.args[1]};
             }
-            fls.erase(std::remove_if(fls.begin(), fls.end(),
-                      [&](const FreeLabel& fl) {
-                          if (fl.anchor != FreeLabelAnchor::Corner) return false;
-                          return !which || fl.corner == *which;
-                      }), fls.end());
-            return {true, "Removed " + std::to_string(before - fls.size()) +
-                          " corner label(s)"};
+            size_t removed = clearFreeLabelsByAnchor(app.freeLabels(),
+                                FreeLabelAnchor::Corner, which);
+            return {true, "Removed " + std::to_string(removed) + " corner label(s)"};
         }
         if (cmd.args[0] == "screen" || cmd.args[0] == "world") {
-            auto target = (cmd.args[0] == "screen")
+            auto anchor = (cmd.args[0] == "screen")
                 ? FreeLabelAnchor::Screen : FreeLabelAnchor::World;
-            auto& fls = app.freeLabels();
-            size_t before = fls.size();
-            fls.erase(std::remove_if(fls.begin(), fls.end(),
-                      [&](const FreeLabel& fl) { return fl.anchor == target; }),
-                      fls.end());
-            return {true, "Removed " + std::to_string(before - fls.size()) +
+            size_t removed = clearFreeLabelsByAnchor(app.freeLabels(),
+                                anchor, std::nullopt);
+            return {true, "Removed " + std::to_string(removed) +
                           " " + cmd.args[0] + " label(s)"};
         }
         auto obj = app.tabs().currentTab().currentObject();

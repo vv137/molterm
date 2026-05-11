@@ -379,20 +379,29 @@ private:
         std::string resiPat  = (parts.size() > 2) ? parts[2] : "";
         std::string namePat  = (parts.size() > 3) ? parts[3] : "";
 
-        // Parse resi pattern: could be "42", "10-20", "10+20+30-40"
+        // Parse resi pattern: "42", "10-20", "10+20+30-40", or signed forms
+        // like "-5--1" (issue #63). Signed support: a leading '-' is part
+        // of the start value, so the range separator is the FIRST '-'
+        // *after* index 0. std::stoi is wrapped in try/catch so a
+        // malformed component (e.g. "abc") yields an empty selection
+        // instead of crashing the process.
         std::vector<std::pair<int,int>> resiRanges;
         if (!resiPat.empty()) {
-            // Split by +
             std::string buf;
             auto flushBuf = [&]() {
                 if (buf.empty()) return;
-                auto dash = buf.find('-');
-                if (dash != std::string::npos && dash > 0) {
-                    resiRanges.push_back({std::stoi(buf.substr(0, dash)),
-                                          std::stoi(buf.substr(dash + 1))});
-                } else {
-                    int v = std::stoi(buf);
-                    resiRanges.push_back({v, v});
+                size_t searchFrom = (buf[0] == '-') ? 1 : 0;
+                auto dash = buf.find('-', searchFrom);
+                try {
+                    if (dash != std::string::npos) {
+                        resiRanges.push_back({std::stoi(buf.substr(0, dash)),
+                                              std::stoi(buf.substr(dash + 1))});
+                    } else {
+                        int v = std::stoi(buf);
+                        resiRanges.push_back({v, v});
+                    }
+                } catch (...) {
+                    // skip — leave resiRanges empty for this chunk
                 }
                 buf.clear();
             };
@@ -555,18 +564,36 @@ private:
         }
         if (kwLower == "resi") {
             // Parse: resi 10, resi 10-20, resi 10+20+30, resi 10-20+30-40
-            std::vector<std::pair<int,int>> ranges;  // {start, end} pairs
-            auto parseOneResi = [&]() {
-                int start = std::stoi(current_.value);
-                advance();
+            // Negative numbers (signal-peptide-trimmed PDBs etc., issue #63)
+            // tokenize as Dash + Number; parseSignedInt collapses those
+            // back into a signed int. Returns nullopt on garbage so the
+            // caller can skip the range entirely — falling back to 0
+            // would silently match resi 0 atoms.
+            std::vector<std::pair<int,int>> ranges;
+            auto parseSignedInt = [&]() -> std::optional<int> {
+                int sign = 1;
                 if (current_.type == Token::Dash) {
+                    sign = -1;
                     advance();
-                    int end = std::stoi(current_.value);
-                    advance();
-                    ranges.push_back({start, end});
-                } else {
-                    ranges.push_back({start, start});
                 }
+                if (current_.type != Token::Number) return std::nullopt;
+                int v = 0;
+                try { v = std::stoi(current_.value); }
+                catch (const std::exception&) { advance(); return std::nullopt; }
+                advance();
+                return v * sign;
+            };
+            auto parseOneResi = [&]() {
+                auto start = parseSignedInt();
+                std::optional<int> end;
+                bool isRange = (current_.type == Token::Dash);
+                if (isRange) {
+                    advance();
+                    end = parseSignedInt();
+                }
+                if (!start) return;          // malformed leading value — skip
+                if (isRange && !end)  return;     // malformed range tail — skip
+                ranges.push_back({*start, isRange ? *end : *start});
             };
             parseOneResi();
             while (current_.type == Token::Plus) {
