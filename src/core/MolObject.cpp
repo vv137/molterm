@@ -88,6 +88,112 @@ void MolObject::computeCenter(float& cx, float& cy, float& cz) const {
     cx /= n; cy /= n; cz /= n;
 }
 
+namespace {
+// Build a dense 0..N-1 → newIdx map from a list of indices to keep.
+// Returns a vector of size atomCount where entry[i] is the new index
+// of original atom i, or -1 if i isn't kept. Used by subset() and
+// removeAtoms() to remap bonds + per-atom state in one pass.
+std::vector<int> buildKeepMap(const std::vector<int>& keep, int atomCount) {
+    std::vector<int> map(atomCount, -1);
+    int next = 0;
+    // Sort+unique keep so the new ordering is deterministic and the
+    // surviving atoms keep their original relative order — mirrors how
+    // Selection::indices() comes back sorted.
+    std::vector<int> sortedKeep = keep;
+    std::sort(sortedKeep.begin(), sortedKeep.end());
+    sortedKeep.erase(std::unique(sortedKeep.begin(), sortedKeep.end()), sortedKeep.end());
+    for (int idx : sortedKeep) {
+        if (idx >= 0 && idx < atomCount) map[idx] = next++;
+    }
+    return map;
+}
+
+// Compact a per-atom vector<T> based on the keep map. Entries with
+// map[i] == -1 are dropped; survivors land at their new index. `fill`
+// only seeds slots that fall off the end of `src` (e.g. lazy per-atom
+// state shorter than atoms_); every kept slot within range is then
+// overwritten from src, so this is a safety net rather than a true
+// default.
+template <typename T>
+std::vector<T> remapPerAtom(const std::vector<T>& src,
+                            const std::vector<int>& keepMap,
+                            T fill) {
+    if (src.empty()) return {};
+    int newSize = 0;
+    for (int idx : keepMap) if (idx >= 0) ++newSize;
+    std::vector<T> out(newSize, fill);
+    for (size_t i = 0; i < keepMap.size() && i < src.size(); ++i) {
+        if (keepMap[i] >= 0) out[keepMap[i]] = src[i];
+    }
+    return out;
+}
+}  // namespace
+
+std::unique_ptr<MolObject> MolObject::subset(const std::vector<int>& keep,
+                                              const std::string& newName) const {
+    auto out = std::make_unique<MolObject>(newName);
+    out->sourcePath_ = sourcePath_;
+    out->visible_ = visible_;
+    out->colorScheme_ = colorScheme_;
+    out->reprVisible_ = reprVisible_;
+
+    auto keepMap = buildKeepMap(keep, static_cast<int>(atoms_.size()));
+    int newSize = 0;
+    for (int v : keepMap) if (v >= 0) ++newSize;
+    out->atoms_.resize(newSize);
+    for (size_t i = 0; i < keepMap.size(); ++i) {
+        if (keepMap[i] >= 0) out->atoms_[keepMap[i]] = atoms_[i];
+    }
+
+    // Bonds: keep only those with both endpoints surviving; remap indices.
+    out->bonds_.reserve(bonds_.size());
+    for (const auto& b : bonds_) {
+        if (b.atom1 < 0 || b.atom1 >= static_cast<int>(keepMap.size())) continue;
+        if (b.atom2 < 0 || b.atom2 >= static_cast<int>(keepMap.size())) continue;
+        int n1 = keepMap[b.atom1];
+        int n2 = keepMap[b.atom2];
+        if (n1 < 0 || n2 < 0) continue;
+        BondData nb = b;
+        nb.atom1 = n1;
+        nb.atom2 = n2;
+        out->bonds_.push_back(nb);
+    }
+
+    out->atomColors_ = remapPerAtom<int>(atomColors_, keepMap, -1);
+    out->atomAlpha_  = remapPerAtom<float>(atomAlpha_, keepMap, 1.0f);
+    for (const auto& [r, mask] : reprAtomMask_) {
+        out->reprAtomMask_[r] = remapPerAtom<bool>(mask, keepMap, false);
+    }
+    // states_, ssPerState_, rainbowCache_ deliberately not propagated:
+    // multi-state subsetting is ambiguous (per-state atom counts can
+    // differ); SS + rainbow are derivable on demand from the new atom
+    // sequence.
+    return out;
+}
+
+void MolObject::removeAtoms(const std::vector<int>& remove) {
+    if (remove.empty()) return;
+    std::vector<bool> drop(atoms_.size(), false);
+    for (int idx : remove) {
+        if (idx >= 0 && idx < static_cast<int>(atoms_.size())) drop[idx] = true;
+    }
+    std::vector<int> keep;
+    keep.reserve(atoms_.size());
+    for (int i = 0; i < static_cast<int>(atoms_.size()); ++i) {
+        if (!drop[i]) keep.push_back(i);
+    }
+    auto trimmed = subset(keep, name_);
+    atoms_      = std::move(trimmed->atoms_);
+    bonds_      = std::move(trimmed->bonds_);
+    atomColors_ = std::move(trimmed->atomColors_);
+    atomAlpha_  = std::move(trimmed->atomAlpha_);
+    reprAtomMask_ = std::move(trimmed->reprAtomMask_);
+    rainbowCache_.clear();
+    invalidateSSCache();
+    // states_ is dropped — see subset() rationale.
+    states_.clear();
+}
+
 const std::vector<float>& MolObject::rainbowFractions() const {
     if (rainbowCache_.size() == atoms_.size()) return rainbowCache_;
 

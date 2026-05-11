@@ -296,15 +296,33 @@ regardless of scope — switch the current object explicitly with
 :object 2                        " switch by 1-based index (matches :objects)
 :object next                     " cycle forward (also Tab in Normal mode)
 :object prev                     " cycle backward
-:copy [<obj>] [as <name>]        " Clone an object (whole-object deep copy — atoms,
-                                "   bonds, reprs, colors, alpha). Defaults to the
-                                "   current object; auto-names <name>_copy when
-                                "   `as` is omitted. Source is unchanged.
-                                "   Useful for A/B render comparisons, pre-experiment
-                                "   backup, or two views of the same structure with
-                                "   different representation settings.
-                                "   `:copy <selection> as <name>` lands separately
-                                "   (Q2 bundle) once the bond-remap helper is in.
+:copy [<obj-or-sel>] [as <name>] " Clone an object OR a selection's atoms.
+                                "   Object form: whole-object deep copy (atoms,
+                                "   bonds, reprs, colors, alpha). Defaults to
+                                "   current; auto-names <name>_copy.
+                                "   Selection form: subset() + bond-remap — keeps
+                                "   only the matching atoms; bonds survive iff
+                                "   both endpoints are kept; per-atom state
+                                "   (color, alpha, repr masks) carries over.
+                                "   Auto-names <name>_subset.
+                                "   Source unchanged either way (non-destructive).
+                                "   Examples:
+                                "     :copy 1ubq as backup
+                                "     :copy chain A as just_A
+                                "     :copy byres within 5 of $hem as binding_site
+:extract <sel> [as <name>]       " Cut atoms out of the current object into a new
+                                "   MolObject (destructive). Like :copy <sel> but
+                                "   the source loses those atoms. Auto-names
+                                "   <name>_extract. Refuses to extract every atom
+                                "   (use :rename if that's what you want).
+                                "   Useful for "carve TCR out of TCR-pMHC complex
+                                "   for independent alignment" workflows.
+:split [<obj>] by chain          " Build one new MolObject per chain of <obj>
+                                "   (current if omitted). Source unchanged — :rm
+                                "   it after if you want pure chain-objects.
+                                "   Names: <obj>_<chainId>. Useful for per-chain
+                                "   alignment, per-chain color, or splitting a
+                                "   TCR-pMHC complex into its 4-5 functional units.
 :rename [<old>] <new>            " Rename an object (one-arg form renames current)
 :delete [<name>]                 " Delete an object (defaults to current). Also
                                 "   removes it from the active tab, not just the

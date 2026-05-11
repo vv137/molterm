@@ -394,14 +394,22 @@ std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi)
 // is present, right is empty and left is the original args vector. Used by
 // :label and the :measure/:angle/:dihedral caption parsers.
 std::pair<std::vector<std::string>, std::string>
-splitAtEqToken(const std::vector<std::string>& args) {
+splitAtToken(const std::vector<std::string>& args, std::string_view token) {
     for (size_t i = 0; i < args.size(); ++i) {
-        if (args[i] == "=") {
+        if (args[i] == token) {
             return {std::vector<std::string>(args.begin(), args.begin() + i),
                     joinArgs(args, i + 1, args.size())};
         }
     }
     return {args, ""};
+}
+
+// Back-compat wrapper for the original "=" caller. New callers should
+// invoke splitAtToken directly with whichever keyword they want
+// (`as` for :copy / :extract, `vs` for :cmp, etc.).
+std::pair<std::vector<std::string>, std::string>
+splitAtEqToken(const std::vector<std::string>& args) {
+    return splitAtToken(args, "=");
 }
 
 // Accept either the long form (topleft) or the two-letter short (tl)
@@ -5050,44 +5058,146 @@ void Application::registerCommands() {
         ":rm [name]", "Remove an object (alias for :delete)",
         {":rm", ":rm 1bna"}, "Window");
 
-    // :copy [<src>] [as <newname>]
-    // Whole-object clone (non-destructive). Source unchanged.
-    // Selection-form (`:copy <expr> as <name>`) requires a bond-remap
-    // helper for atom subsets and is deferred to a follow-up.
+    // :copy [<src-obj-or-sel>] [as <newname>]
+    // Non-destructive clone. The first token is treated as an object
+    // name iff it matches an object loaded in the store; otherwise the
+    // whole pre-`as` chunk is parsed as a selection expression, and a
+    // new MolObject is built from the matching atoms via subset().
+    // Selection-form bonds are kept iff both endpoints survive, and
+    // per-atom state (color, alpha, repr masks) carries over.
     cmdRegistry_.registerCmd("copy", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto& tab = app.tabs().currentTab();
-        std::string srcName, newName;
-        int asIdx = -1;
-        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
-            if (cmd.args[i] == "as") { asIdx = i; break; }
+        auto [srcArgs, newName] = splitAtToken(cmd.args, "as");
+        // splitAtToken returns the whole arg list as `srcArgs` when the
+        // token is absent; we still need the joined-string form for the
+        // selection-grammar path that expects `chain A and resi 5-10`.
+        std::string srcSpec = joinArgs(srcArgs, 0, srcArgs.size());
+
+        // Whole-object path: srcSpec is empty (current) or names a
+        // loaded object. Always-try-store-first so a literal name like
+        // `1ubq` doesn't accidentally parse as a selection expression.
+        if (srcSpec.empty() || app.store().get(srcSpec)) {
+            std::string objName = srcSpec;
+            if (objName.empty()) {
+                auto cur = tab.currentObject();
+                if (!cur) return {false, "No object selected"};
+                objName = cur->name();
+            }
+            if (newName.empty()) newName = objName + "_copy";
+            auto cloned = app.store().clone(objName, newName);
+            if (!cloned) return {false, "Clone failed for " + objName};
+            tab.addObject(cloned);
+            return {true, "Copied " + objName + " -> " + cloned->name() +
+                          " (" + std::to_string(cloned->atoms().size()) + " atoms)"};
         }
-        if (asIdx == 0) {
-            // `:copy as <name>` — current object, explicit name.
+
+        // Selection path. Parse the spec against the current object
+        // (consistent with :count's resolution — obj-qualified forms
+        // like `1ubq/(chain A)` route through forEachInScope if we
+        // ever extend, but :copy is single-object by design).
+        auto src = tab.currentObject();
+        if (!src) return {false, "No object selected"};
+        auto sel = app.parseSelection(srcSpec, *src);
+        if (sel.empty()) return {false, "No atoms match: " + srcSpec};
+        if (newName.empty()) newName = src->name() + "_subset";
+        auto sub = src->subset(sel.indices(), newName);
+        auto added = app.store().add(std::move(sub));
+        tab.addObject(added);
+        return {true, "Copied selection -> " + added->name() +
+                      " (" + std::to_string(added->atoms().size()) + " atoms from " +
+                      src->name() + ")"};
+    }, ":copy [<obj-or-sel>] [as <name>]",
+       "Clone an object or a selection's atoms (non-destructive). Object form deep-copies the whole MolObject; selection form runs subset()+bond-remap. Auto-names <name>_copy (object) or <name>_subset (selection) when 'as' is omitted.",
+       {":copy", ":copy 1ubq", ":copy as backup",
+        ":copy chain A as just_A", ":copy byres within 5 of $hem as binding_site"}, "Window");
+
+    // :extract <sel> [as <name>]
+    // Destructive counterpart of `:copy <sel>` — creates the new object
+    // exactly as :copy would, then removes those atoms from the source.
+    // Useful for "carve TCR out of TCR-pMHC complex for independent
+    // alignment" workflows where the user wants the carved piece to
+    // stand alone and the source to no longer contain it.
+    cmdRegistry_.registerCmd("extract", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        if (cmd.args.empty())
+            return {false, "Usage: :extract <selection> [as <name>]"};
+        auto& tab = app.tabs().currentTab();
+        auto src = tab.currentObject();
+        if (!src) return {false, "No object selected"};
+
+        auto [exprArgs, newName] = splitAtToken(cmd.args, "as");
+        std::string expr = joinArgs(exprArgs, 0, exprArgs.size());
+        if (expr.empty()) return {false, "Usage: :extract <selection> [as <name>]"};
+        auto sel = app.parseSelection(expr, *src);
+        if (sel.empty()) return {false, "No atoms match: " + expr};
+        if (sel.size() == src->atoms().size())
+            return {false, "Refusing to extract every atom — the source "
+                           "would be left empty. Use :rename if that's what you want."};
+        if (newName.empty()) newName = src->name() + "_extract";
+
+        auto sub = src->subset(sel.indices(), newName);
+        size_t newAtoms = sub->atoms().size();
+        auto added = app.store().add(std::move(sub));
+        tab.addObject(added);
+        src->removeAtoms(sel.indices());
+        return {true, "Extracted " + std::to_string(newAtoms) + " atoms to " +
+                      added->name() + "; " + src->name() + " now has " +
+                      std::to_string(src->atoms().size()) + " atoms"};
+    }, ":extract <selection> [as <name>]",
+       "Cut atoms out of the current object into a new MolObject (destructive). Like :copy <sel> but the source loses those atoms.",
+       {":extract chain A as tcr_a_alone",
+        ":extract resi 50-60",
+        ":extract byres within 5 of $hem as binding_site"}, "Window");
+
+    // :split <obj> by chain
+    // Non-destructive: for each chain in <obj>, build a new MolObject
+    // containing just that chain's atoms. The source is left intact —
+    // user can :rm it after if they want pure chain-objects.
+    cmdRegistry_.registerCmd("split", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        constexpr const char* kUsage = "Usage: :split [<obj>] by chain";
+        if (cmd.args.empty()) return {false, kUsage};
+        auto& tab = app.tabs().currentTab();
+        std::string objName, by;
+        // Accept both `:split by chain` (uses current) and `:split 1abc by chain`.
+        if (cmd.args[0] == "by") {
             auto cur = tab.currentObject();
             if (!cur) return {false, "No object selected"};
-            srcName = cur->name();
-            newName = joinArgs(cmd.args, 1, cmd.args.size());
-        } else if (asIdx > 0) {
-            srcName = joinArgs(cmd.args, 0, static_cast<size_t>(asIdx));
-            newName = joinArgs(cmd.args, static_cast<size_t>(asIdx) + 1, cmd.args.size());
-        } else if (!cmd.args.empty()) {
-            srcName = cmd.args[0];
+            objName = cur->name();
+            by = cmd.args.size() > 1 ? cmd.args[1] : "";
         } else {
-            auto cur = tab.currentObject();
-            if (!cur) return {false, "No object selected"};
-            srcName = cur->name();
+            objName = cmd.args[0];
+            if (cmd.args.size() < 3 || cmd.args[1] != "by")
+                return {false, kUsage};
+            by = cmd.args[2];
         }
-        if (!app.store().get(srcName))
-            return {false, "Object not found: " + srcName};
-        if (newName.empty()) newName = srcName + "_copy";
-        auto cloned = app.store().clone(srcName, newName);
-        if (!cloned) return {false, "Clone failed for " + srcName};
-        tab.addObject(cloned);
-        return {true, "Copied " + srcName + " -> " + cloned->name() +
-                      " (" + std::to_string(cloned->atoms().size()) + " atoms)"};
-    }, ":copy [<obj>] [as <name>]",
-       "Clone an object (default: current). Auto-names <name>_copy if 'as' is omitted. Source unchanged.",
-       {":copy", ":copy 1ubq", ":copy as backup", ":copy 1ubq as ref"}, "Window");
+        if (by != "chain")
+            return {false, "Only `by chain` is supported. Other split modes "
+                           "(by model, by resname, ...) may land later."};
+        auto src = app.store().get(objName);
+        if (!src) return {false, "Object not found: " + objName};
+
+        // Group atom indices by chainId in source order. std::map keeps
+        // chain insertion order via lexicographic key, which is the
+        // same order PDB chains usually appear in.
+        std::map<std::string, std::vector<int>> byChain;
+        for (int i = 0; i < static_cast<int>(src->atoms().size()); ++i) {
+            byChain[src->atoms()[i].chainId].push_back(i);
+        }
+        if (byChain.empty()) return {false, "No atoms in " + objName};
+
+        std::string msg = "Split " + objName + " into";
+        int n = 0;
+        for (const auto& [chainId, indices] : byChain) {
+            std::string newName = objName + "_" + chainId;
+            auto sub = src->subset(indices, newName);
+            auto added = app.store().add(std::move(sub));
+            tab.addObject(added);
+            msg += " " + added->name() + "(" + std::to_string(indices.size()) + ")";
+            ++n;
+        }
+        return {true, msg + "  [" + std::to_string(n) + " chains]"};
+    }, ":split [<obj>] by chain",
+       "Build one new MolObject per chain of <obj> (or current). Source unchanged — :rm it after if you want pure chain-objects.",
+       {":split by chain", ":split 1abc by chain"}, "Window");
 
     // :rename
     cmdRegistry_.registerCmd("rename", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -5464,18 +5574,12 @@ void Application::registerCommands() {
         constexpr const char* kUsage = "Usage: :cmp <expr-A> vs <expr-B>";
         if (cmd.args.empty()) return {false, kUsage};
 
-        // Find the `vs` separator. Plain `=` / `==` / `,` would be
-        // ambiguous (= is :select name=expr; , can appear inside
-        // rgb(R,G,B); == suggests boolean predicate which this isn't).
-        int vsIdx = -1;
-        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
-            if (cmd.args[i] == "vs") { vsIdx = i; break; }
-        }
-        if (vsIdx < 1 || vsIdx >= static_cast<int>(cmd.args.size()) - 1)
-            return {false, kUsage};
-
-        std::string exprA = joinArgs(cmd.args, 0, static_cast<size_t>(vsIdx));
-        std::string exprB = joinArgs(cmd.args, static_cast<size_t>(vsIdx) + 1, cmd.args.size());
+        // Split on `vs` — `=` / `==` / `,` would all be ambiguous
+        // (= is :select name=expr; , can appear inside rgb(R,G,B); ==
+        // suggests a boolean predicate, which this isn't).
+        auto [aArgs, exprB] = splitAtToken(cmd.args, "vs");
+        std::string exprA = joinArgs(aArgs, 0, aArgs.size());
+        if (exprA.empty() || exprB.empty()) return {false, kUsage};
 
         // Pair each side's per-object selections by object identity and
         // compute the Venn breakdown within the same object — comparing

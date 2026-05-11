@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -102,6 +103,23 @@ public:
     void computeBoundingBox(float& minX, float& minY, float& minZ,
                             float& maxX, float& maxY, float& maxZ) const;
     void computeCenter(float& cx, float& cy, float& cz) const;
+
+    // Build a new MolObject containing only `keep` atom indices.
+    // Bonds are kept iff BOTH endpoints survive; their indices are
+    // remapped to the compacted 0..K-1 space. Per-atom state (color
+    // overrides, alpha, per-repr atom masks) carries over per surviving
+    // atom. Multi-state (NMR / trajectory) collapses to state 0 — the
+    // subset can't roundtrip cleanly across frames since the atom set
+    // is per-state. Used by :copy <sel>, :extract, :split by chain.
+    std::unique_ptr<MolObject> subset(const std::vector<int>& keep,
+                                      const std::string& newName) const;
+
+    // Destructive in-place version of subset(): drop `remove` indices.
+    // Bonds + per-atom state are remapped on the same rules. Backs
+    // :extract — the new object is built first via subset(), then the
+    // source self-trims here, so the user sees both "create new" and
+    // "shrink source" as a single atomic step.
+    void removeAtoms(const std::vector<int>& remove);
 
     // Apply smart defaults: cartoon for protein/NA, ballstick for ligands
     void applySmartDefaults();
