@@ -234,8 +234,26 @@ internally.
 :alignto ref_8yiv automap                   " same, broadcast over the tab
 ```
 
-`automap` rejects `chain X` / `chain X+Y` selections; strip them from
-the call and let USalign do the matching.
+`automap` rejects free-form per-side `chain X` / `chain X+Y` selections;
+either strip them and let USalign do the matching, or use the
+`chain=A,B,…` shorthand (issue #81) below — it's `automap`-compatible.
+
+**`chain=A,B,…`** (issue #81) trails `:align` / `:alignto` / `:loadalign`
+to restrict both sides to the listed chain IDs without writing the
+verbose `chain A or chain B or …` expression. Use `chain1=`/`chain2=`
+for asymmetric per-side filters:
+
+```text
+:align mob to ref chain=C,D,E                " pMHC-only superposition
+:alignto ref chain=C,D,E                     " broadcast pMHC anchor
+:align mob to ref automap chain=C,D,E        " auto-pair within the C,D,E subset
+:align mob to ref chain1=A,B chain2=H,L      " heavy/light → A/B mapping
+```
+
+The chain list is folded into the selection expression before USalign
+sees the temp PDB, so the same atom-level filter that drove per-side
+`[sel]` arguments before now drives this shorthand — `chain=` and a
+literal `chain X or chain Y` expression are interchangeable.
 
 ### Multi-object workflow
 

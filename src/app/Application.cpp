@@ -6071,21 +6071,61 @@ void Application::registerCommands() {
     // MM. :super = TM-only alias.
     enum class AlignMode { Auto, ForceTM, ForceMM };
 
-    // Pop a trailing tm/mm/automap token from a token vector. Returns the
-    // mode + an automap flag, removing the matched tokens in place. Order
-    // is irrelevant ("tm automap" and "automap tm" both work).
-    auto popModeToken = [](std::vector<std::string>& toks)
-        -> std::pair<AlignMode, bool> {
-        AlignMode m = AlignMode::Auto;
+    // Trailing modifiers for :align — recognised in any order at the end
+    // of the argument list. chain=A,B  shortcuts to both sides; chain1=
+    // and chain2= are per-side overrides (issue #81).
+    struct AlignMods {
+        AlignMode mode = AlignMode::Auto;
         bool automap = false;
+        std::string chain1;  // mobile-side chain list, e.g. "A,B,C"
+        std::string chain2;  // target-side chain list
+    };
+    // Build a selection expression "(chain A or chain B or …)" from a
+    // comma-separated chain-id list. Empty input → empty expression so
+    // callers can blindly compose with `and`.
+    auto chainListToExpr = [](const std::string& csv) -> std::string {
+        if (csv.empty()) return std::string();
+        std::string out = "(";
+        bool first = true;
+        size_t i = 0;
+        while (i < csv.size()) {
+            size_t j = csv.find(',', i);
+            if (j == std::string::npos) j = csv.size();
+            std::string tok = csv.substr(i, j - i);
+            // trim
+            while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.front()))) tok.erase(tok.begin());
+            while (!tok.empty() && std::isspace(static_cast<unsigned char>(tok.back())))  tok.pop_back();
+            if (!tok.empty()) {
+                if (!first) out += " or ";
+                out += "chain " + tok;
+                first = false;
+            }
+            i = j + 1;
+        }
+        out += ")";
+        return out;
+    };
+    // Pop trailing modifier tokens (tm/mm/automap/chain=/chain1=/chain2=)
+    // from `toks`. Order-insensitive; consumes a run of recognised tokens
+    // off the back so the remaining vector holds only the object + selection
+    // tokens.
+    auto popModeToken = [](std::vector<std::string>& toks) -> AlignMods {
+        AlignMods m;
         while (!toks.empty()) {
             const std::string& last = toks.back();
-            if      (last == "tm")      { m = AlignMode::ForceTM; toks.pop_back(); }
-            else if (last == "mm")      { m = AlignMode::ForceMM; toks.pop_back(); }
-            else if (last == "automap") { automap = true;          toks.pop_back(); }
+            if      (last == "tm")      { m.mode = AlignMode::ForceTM; toks.pop_back(); }
+            else if (last == "mm")      { m.mode = AlignMode::ForceMM; toks.pop_back(); }
+            else if (last == "automap") { m.automap = true;            toks.pop_back(); }
+            else if (last.rfind("chain=", 0) == 0) {
+                std::string v = last.substr(6);
+                m.chain1 = v; m.chain2 = v;
+                toks.pop_back();
+            }
+            else if (last.rfind("chain1=", 0) == 0) { m.chain1 = last.substr(7); toks.pop_back(); }
+            else if (last.rfind("chain2=", 0) == 0) { m.chain2 = last.substr(7); toks.pop_back(); }
             else break;
         }
-        return {m, automap};
+        return m;
     };
 
     auto chainCount = [](const MolObject& obj, const std::vector<int>& atoms) -> int {
@@ -6106,23 +6146,38 @@ void Application::registerCommands() {
     // caller decides whether the mobile name comes from cmd.args[0] or
     // from currentObject()). mobileLabel is the name to print in the
     // result message.
-    auto runAlign = [chainCount](Application& app,
+    auto runAlign = [chainCount, chainListToExpr](Application& app,
                                   std::shared_ptr<MolObject> mobile,
                                   std::shared_ptr<MolObject> target,
                                   const std::string& mobileLabel,
                                   const std::string& targetLabel,
                                   std::string mobileExpr,
                                   std::string targetExpr,
-                                  AlignMode mode,
-                                  bool automap) -> ExecResult {
-        if (automap) {
+                                  AlignMods mods) -> ExecResult {
+        // chain=/chain1=/chain2= shorthand (issue #81): fold the chain
+        // list into the selection expressions before atom resolution, so
+        // the downstream temp-PDB writer sees only the requested chains.
+        if (!mods.chain1.empty()) {
+            std::string c = chainListToExpr(mods.chain1);
+            mobileExpr = mobileExpr.empty() ? c : "(" + mobileExpr + ") and " + c;
+        }
+        if (!mods.chain2.empty()) {
+            std::string c = chainListToExpr(mods.chain2);
+            targetExpr = targetExpr.empty() ? c : "(" + targetExpr + ") and " + c;
+        }
+        AlignMode mode = mods.mode;
+        if (mods.automap) {
             // USalign's `-mm 1` (which molterm passes whenever the alignment
             // is `complex`) already does optimal chain pairing + permutation
-            // internally. So `automap` is just "force MM mode and let
-            // USalign see the whole assembly" — no caller selection allowed.
-            if (!mobileExpr.empty() || !targetExpr.empty()) {
+            // internally. With automap alone, no caller selection is allowed
+            // — USalign sees the whole assembly. With `chain=` shorthand the
+            // chain restriction *is* the selection, so we let those through
+            // and forbid only the free-form per-side expressions.
+            bool sharedSel = (mobileExpr == targetExpr) && !mobileExpr.empty();
+            if ((mods.chain1.empty() && mods.chain2.empty()) &&
+                (!mobileExpr.empty() || !targetExpr.empty()) && !sharedSel) {
                 return {false,
-                    "automap takes no selections: drop the chain/sel args"};
+                    "automap takes no per-side selections: use `chain=A,B,…` or drop the sel args"};
             }
             mode = AlignMode::ForceMM;
         }
@@ -6184,12 +6239,12 @@ void Application::registerCommands() {
         const ParsedCommand& cmd, bool mobileFromCurrent,
         std::string& mobileName, std::string& mobileExpr,
         std::string& targetName, std::string& targetExpr,
-        AlignMode& mode, bool& automap, std::string& err) -> bool {
+        AlignMods& mods, std::string& err) -> bool {
 
         std::vector<std::string> args = cmd.args;
         const char* usage = mobileFromCurrent
-            ? "Usage: :alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm] [automap]"
-            : "Usage: :align <obj> [sel] to <obj> [sel] [tm|mm] [automap]";
+            ? "Usage: :alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm] [automap] [chain=A,B]"
+            : "Usage: :align <obj> [sel] to <obj> [sel] [tm|mm] [automap] [chain=A,B|chain1=…|chain2=…]";
 
         int toIdx = -1;
         for (int i = 0; i < static_cast<int>(args.size()); ++i) {
@@ -6199,7 +6254,7 @@ void Application::registerCommands() {
         if (toIdx >= 0) {
             std::vector<std::string> left(args.begin(), args.begin() + toIdx);
             std::vector<std::string> right(args.begin() + toIdx + 1, args.end());
-            std::tie(mode, automap) = popModeToken(right);
+            mods = popModeToken(right);
             if (right.empty()) { err = "Missing target after 'to'"; return false; }
             targetName = right[0];
             targetExpr = joinTokens(right, 1);
@@ -6214,7 +6269,7 @@ void Application::registerCommands() {
         }
 
         // No 'to' separator.
-        std::tie(mode, automap) = popModeToken(args);
+        mods = popModeToken(args);
         if (mobileFromCurrent) {
             if (args.empty()) { err = usage; return false; }
             targetName = args[0];
@@ -6235,18 +6290,17 @@ void Application::registerCommands() {
         (Application& app, const ParsedCommand& cmd, AlignMode forced)
         -> ExecResult {
         std::string mobileName, mobileExpr, targetName, targetExpr, err;
-        AlignMode mode = AlignMode::Auto;
-        bool automap = false;
+        AlignMods mods;
         if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/false,
                             mobileName, mobileExpr, targetName, targetExpr,
-                            mode, automap, err)) return {false, err};
-        if (forced != AlignMode::Auto) mode = forced;
+                            mods, err)) return {false, err};
+        if (forced != AlignMode::Auto) mods.mode = forced;
         auto mobile = app.store().get(mobileName);
         auto target = app.store().get(targetName);
         if (!mobile) return {false, "Object not found: " + mobileName};
         if (!target) return {false, "Object not found: " + targetName};
         return runAlign(app, mobile, target, mobileName, targetName,
-                        mobileExpr, targetExpr, mode, automap);
+                        mobileExpr, targetExpr, mods);
     };
 
     // :alignto always broadcasts: every non-target object in the current
@@ -6259,12 +6313,11 @@ void Application::registerCommands() {
         (Application& app, const ParsedCommand& cmd, AlignMode forced)
         -> ExecResult {
         std::string mobileName, mobileExpr, targetName, targetExpr, err;
-        AlignMode mode = AlignMode::Auto;
-        bool automap = false;
+        AlignMods mods;
         if (!parseAlignArgs(cmd, /*mobileFromCurrent=*/true,
                             mobileName, mobileExpr, targetName, targetExpr,
-                            mode, automap, err)) return {false, err};
-        if (forced != AlignMode::Auto) mode = forced;
+                            mods, err)) return {false, err};
+        if (forced != AlignMode::Auto) mods.mode = forced;
         auto target = app.store().get(targetName);
         if (!target) return {false, "Object not found: " + targetName};
 
@@ -6280,7 +6333,7 @@ void Application::registerCommands() {
         std::string combined;
         for (auto& m : mobiles) {
             auto r = runAlign(app, m, target, m->name(), targetName,
-                              mobileExpr, targetExpr, mode, automap);
+                              mobileExpr, targetExpr, mods);
             if (r.ok) ++okCount;
             if (!combined.empty()) combined += "; ";
             combined += r.msg;
@@ -6292,24 +6345,27 @@ void Application::registerCommands() {
         [doAlignByName](Application& app, const ParsedCommand& cmd) -> ExecResult {
             return doAlignByName(app, cmd, AlignMode::Auto);
         },
-        ":align <obj> [sel] to <obj> [sel] [tm|mm] [automap]",
+        ":align <obj> [sel] to <obj> [sel] [tm|mm] [automap] [chain=A,B|chain1=…|chain2=…]",
         "Superpose structures (auto-pick TM vs MM by chain count; trailing tm/mm forces; "
-        "automap = sequence-based chain pairing for reordered deposits)",
+        "automap = sequence-based chain pairing for reordered deposits; "
+        "chain= restricts both sides to listed chains, chain1=/chain2= per-side)",
         {":align mob to ref",
          ":align mob chain A to ref chain A",
+         ":align mob to ref chain=C,D,E",
          ":align complex1 to complex2 mm",
-         ":align top1 to ref_8yiv automap"},
+         ":align top1 to ref_8yiv automap chain=C,D,E"},
         "Analysis");
 
     cmdRegistry_.registerCmd("alignto",
         [doAlignTo](Application& app, const ParsedCommand& cmd) -> ExecResult {
             return doAlignTo(app, cmd, AlignMode::Auto);
         },
-        ":alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm] [automap]",
-        "Superpose every other object in the tab onto target (auto TM/MM; trailing tm/mm forces; automap pairs chains by sequence)",
+        ":alignto <target> [sel] | <mobile_sel> to <target> [target_sel] [tm|mm] [automap] [chain=A,B]",
+        "Superpose every other object in the tab onto target (auto TM/MM; trailing tm/mm forces; automap pairs chains by sequence; chain=A,B restricts both sides)",
         {":alignto ref",
          ":alignto chain A to ref chain A",
          ":alignto chain A+B to model chain A+B",
+         ":alignto ref chain=C,D,E",
          ":alignto ref mm",
          ":alignto ref_8yiv automap"},
         "Analysis");
@@ -6351,9 +6407,9 @@ void Application::registerCommands() {
                 return {false, "Usage: :loadalign <pattern> [sel] [tm|mm]"};
 
             constexpr const char* kUsage =
-                "Usage: :loadalign <pattern> [sel] [tm|mm] [automap]";
+                "Usage: :loadalign <pattern> [sel] [tm|mm] [automap] [chain=A,B]";
             std::vector<std::string> args = cmd.args;
-            auto [mode, automap] = popModeToken(args);
+            AlignMods mods = popModeToken(args);
             if (args.empty()) return {false, kUsage};
 
             // Selection grammar has no terminator, so without invoking
@@ -6409,7 +6465,7 @@ void Application::registerCommands() {
             for (size_t i = 1; i < loaded.size(); ++i) {
                 auto r = runAlign(app, loaded[i], loaded.front(),
                                   loaded[i]->name(), targetName,
-                                  sharedExpr, sharedExpr, mode, automap);
+                                  sharedExpr, sharedExpr, mods);
                 if (r.ok) { ++aligned; detail += "\n  " + r.msg; }
                 else { ++alignFailed; detail += "\n  " + loaded[i]->name() + ": " + r.msg; }
             }
