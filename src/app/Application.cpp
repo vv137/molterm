@@ -354,6 +354,18 @@ splitAtEqToken(const std::vector<std::string>& args) {
     return {args, ""};
 }
 
+// Accept either the long form (topleft) or the two-letter short (tl)
+// — keeps :label corner and :unlabel corner in lockstep so a new alias
+// only has to be added in one place.
+std::optional<Application::FreeLabelCorner> parseCornerName(const std::string& w) {
+    using C = Application::FreeLabelCorner;
+    if (w == "topleft"     || w == "tl") return C::TopLeft;
+    if (w == "topright"    || w == "tr") return C::TopRight;
+    if (w == "bottomleft"  || w == "bl") return C::BottomLeft;
+    if (w == "bottomright" || w == "br") return C::BottomRight;
+    return std::nullopt;
+}
+
 // Canonical option names enumerated by `:set` (no args) / `:set all` AND
 // by tab-completion (which extends with kSetOptionsShort below). Long
 // forms only — listing should not double-print under each alias.
@@ -6110,12 +6122,9 @@ void Application::registerCommands() {
                 if (anchorArgs.size() < 2)
                     return {false, "Usage: :label corner topleft|topright|bottomleft|bottomright = \"text\""};
                 fl.anchor = FreeLabelAnchor::Corner;
-                const std::string& which = anchorArgs[1];
-                if      (which == "topleft" || which == "tl")     fl.corner = FreeLabelCorner::TopLeft;
-                else if (which == "topright" || which == "tr")    fl.corner = FreeLabelCorner::TopRight;
-                else if (which == "bottomleft" || which == "bl")  fl.corner = FreeLabelCorner::BottomLeft;
-                else if (which == "bottomright" || which == "br") fl.corner = FreeLabelCorner::BottomRight;
-                else return {false, "Bad corner: " + which};
+                auto c = parseCornerName(anchorArgs[1]);
+                if (!c) return {false, "Bad corner: " + anchorArgs[1]};
+                fl.corner = *c;
             } else if (mode == "screen") {
                 if (anchorArgs.size() < 3)
                     return {false, "Usage: :label screen <fx> <fy> = \"text\""};
@@ -6168,10 +6177,44 @@ void Application::registerCommands() {
 
     cmdRegistry_.registerCmd("unlabel", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         if (cmd.args.empty()) {
+            // "Remove all labels" must cover free labels too — corner /
+            // screen / world anchors live in a separate store but read
+            // as "labels" to the user.
             int n = static_cast<int>(app.labelAtoms().size());
+            int fn = static_cast<int>(app.freeLabels().size());
             app.labelAtoms().clear();
             app.labelText().clear();
-            return {true, "Cleared " + std::to_string(n) + " label(s)"};
+            app.freeLabels().clear();
+            if (fn == 0) return {true, "Cleared " + std::to_string(n) + " label(s)"};
+            return {true, "Cleared " + std::to_string(n) + " atom + " +
+                          std::to_string(fn) + " free label(s)"};
+        }
+        if (cmd.args[0] == "corner") {
+            auto& fls = app.freeLabels();
+            size_t before = fls.size();
+            std::optional<FreeLabelCorner> which;
+            if (cmd.args.size() >= 2) {
+                which = parseCornerName(cmd.args[1]);
+                if (!which) return {false, "Bad corner: " + cmd.args[1]};
+            }
+            fls.erase(std::remove_if(fls.begin(), fls.end(),
+                      [&](const FreeLabel& fl) {
+                          if (fl.anchor != FreeLabelAnchor::Corner) return false;
+                          return !which || fl.corner == *which;
+                      }), fls.end());
+            return {true, "Removed " + std::to_string(before - fls.size()) +
+                          " corner label(s)"};
+        }
+        if (cmd.args[0] == "screen" || cmd.args[0] == "world") {
+            auto target = (cmd.args[0] == "screen")
+                ? FreeLabelAnchor::Screen : FreeLabelAnchor::World;
+            auto& fls = app.freeLabels();
+            size_t before = fls.size();
+            fls.erase(std::remove_if(fls.begin(), fls.end(),
+                      [&](const FreeLabel& fl) { return fl.anchor == target; }),
+                      fls.end());
+            return {true, "Removed " + std::to_string(before - fls.size()) +
+                          " " + cmd.args[0] + " label(s)"};
         }
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
@@ -6188,9 +6231,10 @@ void Application::registerCommands() {
         for (int idx : drop) textMap.erase(idx);
         return {true, "Removed " + std::to_string(before - labels.size()) +
                       " label(s)"};
-    }, ":unlabel [selection]",
-       "Remove labels (no arg: all; with selection: just those atoms)",
-       {":unlabel", ":unlabel chain E and resi 1"}, "Display");
+    }, ":unlabel [selection|corner [<which>]|screen|world]",
+       "Remove labels (no arg: all atom + free; selection: matching atoms; corner/screen/world: that anchor kind)",
+       {":unlabel", ":unlabel chain E and resi 1",
+        ":unlabel corner topleft", ":unlabel corner", ":unlabel screen"}, "Display");
 
     // :overlay on|off | :overlay clear
     cmdRegistry_.registerCmd("overlay", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
