@@ -488,6 +488,25 @@ private:
             return Selection({}, objName + "/(...)");
         }
 
+        // Digit-led bareword promotion: PDB-style names like "1ubq"
+        // tokenize as Number "1" + Word "ubq", which would otherwise
+        // bypass the Word-only keyword section below. Recover the full
+        // identifier via readObjName so bare `<obj>` and `<obj>/*`
+        // wildcard forms work uniformly for digit-led names. Pure
+        // numeric tokens (no alpha chars) stay as Number so the
+        // resi/within/imgt keyword branches still consume them. Issue #89.
+        if (current_.type == Token::Number) {
+            auto savedPos = tokenizer_.savePos();
+            std::string id = tokenizer_.readObjName();
+            bool hasAlpha = std::any_of(id.begin(), id.end(),
+                [](char c){ return std::isalpha(static_cast<unsigned char>(c)); });
+            if (hasAlpha) {
+                current_ = Token{Token::Word, id};
+            } else {
+                tokenizer_.rewind(savedPos);
+            }
+        }
+
         // Parentheses
         if (match(Token::LParen)) {
             auto inner = parseOr();
@@ -515,7 +534,7 @@ private:
         std::transform(kwLower.begin(), kwLower.end(), kwLower.begin(), ::tolower);
         advance();
 
-        if (kwLower == "all") {
+        if (kwLower == "all" || kwLower == "*") {
             return Selection::all(totalAtoms_);
         }
         if (kwLower == "vis" || kwLower == "visible") {
@@ -860,6 +879,32 @@ private:
             advance();
             return matchPepSeq(seq);
         }
+
+        // `<obj>/*` and `<obj>/all` — whole-object sugar (issue #89).
+        // The parenthesized `<obj>/(<expr>)` form is handled earlier by
+        // peekObjSlashLParen. Any other `<obj>/<suffix>` shape is
+        // malformed: return empty rather than fall through to the
+        // bare-`<obj>` path below, which would silently swallow the
+        // trailing tokens and report a full-object hit.
+        if (current_.type == Token::Slash) {
+            advance();
+            std::string suffix;
+            if (current_.type == Token::Word) {
+                suffix = current_.value;
+                advance();
+            }
+            if (suffix == "*" || suffix == "all") {
+                if (kw == "all" || kw == "*" || mol_.name() == kw)
+                    return Selection::all(totalAtoms_);
+            }
+            return Selection({}, kw + "/" + suffix);
+        }
+
+        // Bare `<obj>` → all atoms when the name matches mol_ (issue #89).
+        // Cross-object dispatch lives in the :select fallback (#88), which
+        // re-parses against each loaded object until one matches.
+        if (mol_.name() == kw)
+            return Selection::all(totalAtoms_);
 
         // Unknown keyword — treat as empty selection
         return Selection({}, kw);
