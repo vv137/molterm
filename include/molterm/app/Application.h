@@ -160,6 +160,13 @@ public:
         int lastFailureLine() const {
             return failureList.empty() ? 0 : failureList.back().lineNum;
         }
+        // `<path>:<line>: `<cmd>`: <reason>` — used by the in-band
+        // stderr stream (issue #90) and the post-run failure dump
+        // for TUI mode. Single source so the two stay in lockstep.
+        std::string formatFailure(const Failure& f) const {
+            return sourcePath + ":" + std::to_string(f.lineNum) +
+                   ": `" + f.srcLine + "`: " + f.reason;
+        }
     };
 
     // Run commands from a stream. Skips blank lines and `#` comments.

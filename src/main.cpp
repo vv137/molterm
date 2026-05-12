@@ -121,33 +121,41 @@ int main(int argc, char* argv[]) {
                 app.runScriptStream(*in, strict, sourceLabel);
             if (strict && r.stopped) {
                 leaveCurses();
-                std::cerr << r.sourcePath << ":" << r.lastFailureLine()
-                          << ": `" << r.failLine << "`: " << r.firstFail << std::endl;
+                // Headless runs already streamed the error to stderr via
+                // dispatchScriptLines' recordFailure (issue #90); avoid
+                // duplicating it here.
+                if (!headless && !r.failureList.empty()) {
+                    std::cerr << r.formatFailure(r.failureList.back()) << std::endl;
+                }
                 return 1;
             }
-            // Failure dump goes to stderr so TUI users see it after :quit,
-            // not just the brief cmdline summary. Skip for single-fail
-            // headless runs — the summary line already carries the same text.
-            if (r.failures > 0 && !(headless && r.failures == 1)) {
-                for (const auto& f : r.failureList) {
-                    std::cerr << r.sourcePath << ":" << f.lineNum
-                              << ": `" << f.srcLine << "`: " << f.reason << "\n";
+            // TUI mode: dump failureList to stderr (visible after :quit) and
+            // route the last/summary message to the cmdline. Headless runs
+            // stream both success messages and per-failure detail inline as
+            // commands execute, so we just print a terminal failure summary
+            // to stderr if anything went wrong. Issue #90.
+            if (headless) {
+                if (r.failures > 0) {
+                    std::fprintf(stderr, "Script: %d command(s) failed\n", r.failures);
                 }
-            }
-            std::string lastMsg = r.lastMsg;
-            if (r.failures > 0) {
-                if (r.failures == 1 && !r.failureList.empty()) {
-                    const auto& f = r.failureList.front();
-                    lastMsg = r.sourcePath + ":" + std::to_string(f.lineNum) +
-                              ": " + f.reason;
-                } else {
-                    lastMsg = "Script: " + std::to_string(r.failures) +
-                              " command(s) failed (see stderr for file:line detail)";
+            } else {
+                if (r.failures > 0) {
+                    for (const auto& f : r.failureList) {
+                        std::cerr << r.formatFailure(f) << "\n";
+                    }
                 }
-            }
-            if (!lastMsg.empty()) {
-                app.cmdLine().setMessage(lastMsg);
-                if (headless) std::cout << lastMsg << "\n";
+                std::string lastMsg = r.lastMsg;
+                if (r.failures > 0) {
+                    if (r.failures == 1 && !r.failureList.empty()) {
+                        const auto& f = r.failureList.front();
+                        lastMsg = r.sourcePath + ":" + std::to_string(f.lineNum) +
+                                  ": " + f.reason;
+                    } else {
+                        lastMsg = "Script: " + std::to_string(r.failures) +
+                                  " command(s) failed (see stderr for file:line detail)";
+                    }
+                }
+                if (!lastMsg.empty()) app.cmdLine().setMessage(lastMsg);
             }
         }
 

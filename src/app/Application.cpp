@@ -461,6 +461,15 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             result.firstFail = reason;
             result.failLine = srcLine;
         }
+        // Stream errors to stderr in batch mode so they don't get buried
+        // by stdout redirection or collapsed into the final lastMsg line
+        // (which was previously routed to stdout for single-failure runs).
+        // main.cpp suppresses its post-run failureList dump when headless.
+        // Issue #90.
+        if (isHeadless()) {
+            std::fprintf(stderr, "%s\n",
+                         result.formatFailure(result.failureList.back()).c_str());
+        }
     };
     // Execute a single non-control line (the original runOne lambda).
     // bufIdx is the index of the source line in `lines`; srcLine is the
@@ -487,6 +496,14 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
         if (!r.ok) {
             recordFailure(bufIdx, srcLine.empty() ? cmd : srcLine, r.msg);
             if (strict) { result.stopped = true; return false; }
+        } else if (!r.msg.empty() && isHeadless()) {
+            // Stream success messages to stdout so multi-line outputs
+            // like `:objects` and `:registers` reach the user instead
+            // of being clobbered by the next command's result. TUI mode
+            // surfaces them via cmdLine.setMessage. Issue #90.
+            std::fwrite(r.msg.data(), 1, r.msg.size(), stdout);
+            std::fputc('\n', stdout);
+            std::fflush(stdout);
         }
         return true;
     };
