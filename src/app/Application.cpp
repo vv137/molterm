@@ -403,9 +403,12 @@ void trimWhitespace(std::string& s) {
 }
 
 // Strip a trailing '#' comment, respecting single/double quotes so a '#'
-// inside a quoted argument (e.g. a label string) is preserved. Backslash
-// escapes (`\#`) are NOT honoured — a hash anywhere outside quotes ends
-// the line.
+// inside a quoted argument (e.g. a label string) is preserved. `#` only
+// starts a comment when it's at the line start or preceded by whitespace
+// AND followed by whitespace or end-of-line — so mid-token hashes like
+// `:color #cfcfcf` (hex literal, issue #92) survive intact. Inline
+// trailing comments (`:foo bar # note`) still strip as expected.
+// Backslash escapes (`\#`) are NOT honoured.
 void stripScriptComment(std::string& s) {
     bool inQuote = false;
     char qc = '\0';
@@ -416,8 +419,14 @@ void stripScriptComment(std::string& s) {
         } else if (c == '"' || c == '\'') {
             inQuote = true; qc = c;
         } else if (c == '#') {
-            s.resize(i);
-            return;
+            bool leftBoundary = (i == 0) ||
+                std::isspace(static_cast<unsigned char>(s[i - 1]));
+            bool rightBoundary = (i + 1 == s.size()) ||
+                std::isspace(static_cast<unsigned char>(s[i + 1]));
+            if (leftBoundary && rightBoundary) {
+                s.resize(i);
+                return;
+            }
         }
     }
 }
@@ -4146,7 +4155,19 @@ void Application::registerCommands() {
             targets.push_back(cur);
         } else {
             targets = resolveObjectArg(app, cmd.args[0]);
-            if (targets.empty()) return {false, "No such object: " + cmd.args[0]};
+            if (targets.empty()) {
+                // Selection-style args trip users up (`:disable chain B`) —
+                // :enable/:disable are whole-object toggles, not selection
+                // ops. Point at :hide when the first arg starts a selection
+                // keyword. Issue #94.
+                if (Selection::isPrimaryKeyword(cmd.args[0])) {
+                    return {false, "':" + std::string(vis ? "enable" : "disable") +
+                                   "' takes an object name (or 'all' / index); "
+                                   "for a selection, use ':hide <repr> " +
+                                   cmd.args[0] + " ...'"};
+                }
+                return {false, "No such object: " + cmd.args[0]};
+            }
         }
         int changed = 0;
         for (auto& obj : targets) {
@@ -6006,19 +6027,54 @@ void Application::registerCommands() {
             });
         }
 
+        // Issue #91: a named Selection is per-mol-indices, so when the
+        // expression also matches in other loaded objects we silently
+        // narrow to the chosen object. Surface that — the user might
+        // want to qualify with `<obj>/(...)` for each side. Skip in the
+        // empty case (no match anywhere) and when the expression already
+        // contains an object qualifier (qualifier author opted in to a
+        // single-object scope).
+        int otherObjMatches = 0;
+        int otherObjCount = 0;
+        if (!sel.empty() && expr.find('/') == std::string::npos) {
+            forEachInScope(app, ScopeMode::All, expr, [&](ScopedTarget& t) {
+                if (t.obj == obj) return true;
+                otherObjMatches += static_cast<int>(t.sel.size());
+                ++otherObjCount;
+                return true;
+            });
+            // forEachInScope ends by saving the first matched object's
+            // selection to $sele; restore the chosen object's so $sele
+            // tracks the named-selection result the user just stored.
+            app.namedSelections()[kSele] = sel;
+        }
+        auto multiNote = [&]() -> std::string {
+            if (otherObjCount == 0) return "";
+            return " [note: " + std::to_string(otherObjMatches) +
+                   " more atom(s) in " + std::to_string(otherObjCount) +
+                   " other object(s); use '<obj>/(" + expr + ")' to scope]";
+        };
+
         if (!name.empty()) {
             // Store as named selection
             app.namedSelections()[name] = sel;
             if (sel.empty()) return {false, "Selection '" + name + "' is empty: " + expr};
             app.logSelectionInfo(name, expr, sel, *obj);
-            return {true, "Selection '" + name + "' = " + std::to_string(sel.size()) + " atoms"};
+            return {true, "Selection '" + name + "' = " + std::to_string(sel.size()) +
+                          " atoms" + multiNote()};
         }
 
         if (sel.empty()) return {false, "Selection empty: " + expr};
         app.logSelectionInfo("(anon)", expr, sel, *obj);
-        return {true, "Selected " + std::to_string(sel.size()) + " atoms: " + expr};
-    }, ":select <expr>", "Select atoms (use 'name = expr' for a named selection; 'clear' to drop $sele)",
-       {":select chain A", ":select s1 = resi 50-80", ":select clear"}, "Selection");
+        return {true, "Selected " + std::to_string(sel.size()) + " atoms: " + expr +
+                      multiNote()};
+    }, ":select <expr>",
+       "Select atoms (use 'name = expr' for a named selection; 'clear' to "
+       "drop $sele). Fields: chain | resi | resn (alias resname) | name | "
+       "element | within N of <sub> | byres / bychain. Object qualifier: "
+       "<obj>/(...) or <obj>/* for whole-object.",
+       {":select chain A", ":select s1 = resi 50-80",
+        ":select s2 = resn TRP", ":select clear"}, "Selection");
 
     // :count <expression> — count atoms matching selection
     cmdRegistry_.registerCmd("count", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
@@ -7287,8 +7343,10 @@ void Application::registerCommands() {
         app.measurements().push_back({{i1, i2}, shortLabel, caption});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":measure [s1 s2] [= \"caption\"]",
-       "Measure a distance and persist a dashed line + value (optional caption for figures)",
+    }, ":measure [serial1 serial2 | pk1 pk2] [= \"caption\"]",
+       "Measure a distance and persist a dashed line + value. Endpoints are "
+       "atom serials (PDB serial, not selections) or the pk1/pk2 picks; "
+       "for a selection, resolve to a serial first.",
        {":measure", ":measure pk1 pk2",
         ":measure 12 47 = \"Glu-OE1 ↔ Lys-Nζ\""}, "Measurement");
 
@@ -7405,8 +7463,9 @@ void Application::registerCommands() {
         app.measurements().push_back({{i1, i2, i3}, shortLabel, caption});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":angle [s1 s2 s3] [= \"caption\"]",
-       "Measure the angle at s2 between (s1, s2, s3); optional caption for figures",
+    }, ":angle [serial1 serial2 serial3 | pk1 pk2 pk3] [= \"caption\"]",
+       "Measure the angle at the middle atom; endpoints are atom serials "
+       "(PDB serial, not selections) or the pk1/pk2/pk3 picks.",
        {":angle", ":angle pk1 pk2 pk3 = \"φ1\""}, "Measurement");
 
     // :dihedral [s1 s2 s3 s4] — dihedral (no args = pk1-pk4)
@@ -7453,8 +7512,9 @@ void Application::registerCommands() {
         app.measurements().push_back({{i1, i2, i3, i4}, shortLabel, caption});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":dihedral [s1 s2 s3 s4] [= \"caption\"]",
-       "Measure a dihedral angle between four atoms; optional caption for figures",
+    }, ":dihedral [serial1..serial4 | pk1..pk4] [= \"caption\"]",
+       "Measure a dihedral angle; endpoints are atom serials (PDB serial, "
+       "not selections) or the pk1..pk4 picks.",
        {":dihedral", ":dihedral pk1 pk2 pk3 pk4 = \"χ1\""}, "Measurement");
 
     // :contactmap [cutoff] — toggle contact map panel

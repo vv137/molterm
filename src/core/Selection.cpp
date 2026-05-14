@@ -112,7 +112,7 @@ bool Selection::isPrimaryKeyword(std::string_view word) {
     // not — only words that can stand at the start of a selection.
     static constexpr std::string_view kKeywords[] = {
         "all", "vis", "visible",
-        "chain", "resn", "resi", "name",
+        "chain", "resn", "resname", "resi", "name",
         "element", "elem",
         "helix", "sheet", "loop",
         "backbone", "bb", "sidechain", "sc", "hydro",
@@ -573,7 +573,7 @@ private:
                 },
                 "chain " + ids[0]);
         }
-        if (kwLower == "resn") {
+        if (kwLower == "resn" || kwLower == "resname") {
             std::string resName = current_.value;
             // Convert to uppercase for matching
             std::transform(resName.begin(), resName.end(), resName.begin(), ::toupper);
