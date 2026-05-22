@@ -286,6 +286,8 @@ public:
     void setFogStrength(float s) { fogStrength_ = s; }
     bool outlineEnabled() const { return outlineEnabled_; }
     void setOutlineEnabled(bool v) { outlineEnabled_ = v; }
+    bool screenshotOverlay() const { return screenshotOverlay_; }
+    void setScreenshotOverlay(bool v) { screenshotOverlay_ = v; }
     float outlineThreshold() const { return outlineThreshold_; }
     void setOutlineThreshold(float t) { outlineThreshold_ = t; }
     float outlineDarken() const { return outlineDarken_; }
@@ -686,6 +688,14 @@ private:
 
 public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
+    // True iff drawPixelOverlay would draw a yellow ring this frame —
+    // i.e. `$sele` is non-empty or any pk1..pk4 register is set.
+    bool hasSelectionHighlight() const {
+        auto it = namedSelections_.find(kSele);
+        if (it != namedSelections_.end() && !it->second.empty()) return true;
+        for (int p = 0; p < 4; ++p) if (pickRegs_[p] >= 0) return true;
+        return false;
+    }
     std::vector<int>& labelAtoms() { return labelAtoms_; }
     std::unordered_map<int, std::string>& labelText() { return labelText_; }
     const std::string& labelFormat() const { return labelFormat_; }
@@ -746,6 +756,11 @@ private:
     int frameCounter_ = 0;
     float fogStrength_ = 0.35f;
     bool outlineEnabled_ = true;
+    // Include the $sele / pk halo in :screenshot PNGs. Default off so
+    // editor HUD state (transient selection cue) doesn't bake into
+    // figure exports. Live render and stereo render always show the
+    // halo. Issue #96.
+    bool screenshotOverlay_ = false;
     float outlineThreshold_ = 0.3f;
     StereoMode stereoMode_ = StereoMode::Off;
     float stereoAngle_ = 6.0f;  // total parallax in degrees (eyes ±half)
@@ -812,7 +827,11 @@ private:
                         const std::string& text);
     void paintAnnotationText(class PixelCanvas& pc, int sx, int sy, float depth,
                              const std::string& text);
-    void drawPixelOverlay(class PixelCanvas& pc);
+    // includeSeleHighlights gates the yellow $sele/pk1..pk4 ring layer
+    // — labels and measurements always draw. :screenshot passes false
+    // by default so figure exports don't carry the transient selection
+    // halo; opt back in with `:set screenshot_overlay on` (issue #96).
+    void drawPixelOverlay(class PixelCanvas& pc, bool includeSeleHighlights = true);
     // Render free-position labels (corner / screen / world anchors). Split
     // out so the object-less early-return in drawPixelOverlay can still
     // emit them, and so the screenshot path picks them up via the same

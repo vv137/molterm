@@ -3190,7 +3190,7 @@ void Application::paintAnnotationText(PixelCanvas& pc, int sx, int sy, float dep
                            annotationOutlineThickness_, fsize);
 }
 
-void Application::drawPixelOverlay(PixelCanvas& pc) {
+void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) {
     if (!overlayVisible_) return;
     auto& tab = tabMgr_.currentTab();
     int subW = pc.subW();
@@ -3281,8 +3281,11 @@ void Application::drawPixelOverlay(PixelCanvas& pc) {
         }
     }
 
-    // $sele highlight + pk1..pk4 pick registers as yellow rings.
-    {
+    // $sele highlight + pk1..pk4 pick registers as yellow rings. Skipped
+    // when the caller opts out (screenshots default to no halo so the
+    // editor's transient selection cue doesn't bake into figures —
+    // issue #96).
+    if (includeSeleHighlights) {
         const std::vector<int>* selIdx = nullptr;
         auto selIt = namedSelections_.find(kSele);
         if (selIt != namedSelections_.end() && !selIt->second.empty())
@@ -4617,6 +4620,13 @@ void Application::registerCommands() {
             app.setOutlineEnabled(*v);
             return {true, std::string("Outline: ") + (*v ? "on" : "off")};
         }
+        if (opt == "screenshot_overlay") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set screenshot_overlay on|off"};
+            auto v = parseBool(cmd.args[1]);
+            if (!v) return {false, "Usage: :set screenshot_overlay on|off"};
+            app.setScreenshotOverlay(*v);
+            return {true, std::string("screenshot_overlay: ") + (*v ? "on" : "off")};
+        }
         if (opt == "outline_threshold" || opt == "ot") {
             if (cmd.args.size() < 2) return {false, "Usage: :set outline_threshold <0.0-1.0>"};
             app.setOutlineThreshold(std::stof(cmd.args[1]));
@@ -5189,6 +5199,8 @@ void Application::registerCommands() {
             return {true, std::string("scope = ") +
                           (app.commandScope() == ScopeMode::All ? kAllToken : "current")};
         if (opt == "outline")      return {true, "outline = " + onoff(app.outlineEnabled())};
+        if (opt == "screenshot_overlay")
+            return {true, "screenshot_overlay = " + onoff(app.screenshotOverlay())};
         if (opt == "auto_center")  return {true, "auto_center = " + onoff(app.autoCenter())};
         if (opt == "seqbar")       return {true, "seqbar = " + onoff(app.layout().seqBarVisible())};
         if (opt == "seqwrap")      return {true, "seqwrap = " + onoff(app.layout().seqBarWrap())};
@@ -6769,7 +6781,11 @@ void Application::registerCommands() {
         // If already in pixel mode and no explicit size was requested,
         // grab the live framebuffer. The canvas already carries bgMode_
         // since renderViewport() applies it before clear().
-        if (app.rendererType() == RendererType::Pixel && reqPixW == 0) {
+        // Skip when the live frame carries a $sele/pk halo the user
+        // doesn't want in the PNG — fall through to the offscreen
+        // re-render path which honors `screenshot_overlay`. Issue #96.
+        bool fastPathOk = !app.hasSelectionHighlight() || app.screenshotOverlay();
+        if (app.rendererType() == RendererType::Pixel && reqPixW == 0 && fastPathOk) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
             if (pc && pc->savePNG(path, reqDpi)) {
                 double dt = std::chrono::duration<double>(
@@ -6874,7 +6890,7 @@ void Application::registerCommands() {
                 savedScreenshotRot = app.setupStereoEye(
                     eye, offscreen.subW(), offscreen.subH(),
                     offscreen.aspectYX());
-                app.drawPixelOverlay(offscreen);
+                app.drawPixelOverlay(offscreen, app.screenshotOverlay());
             }
             app.restoreStereoCamera(savedScreenshotRot);
         }
@@ -6893,7 +6909,9 @@ void Application::registerCommands() {
         }
         return {false, "Failed to save " + path};
     }, ":screenshot [file.png] [W H [DPI]]",
-       "Save a PNG; optional explicit size (W H) and DPI metadata for figure prep",
+       "Save a PNG; optional explicit size (W H) and DPI metadata for "
+       "figure prep. Excludes the active-selection halo by default; opt "
+       "back in with ':set screenshot_overlay on'.",
        {":screenshot", ":screenshot fig.png", ":screenshot fig.png 1920 1080 300"}, "Files");
 
     // :preset — apply smart default representation
