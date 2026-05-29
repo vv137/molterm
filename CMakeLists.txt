@@ -75,6 +75,7 @@ set(MOLTERM_SOURCES
     src/core/DSSP.cpp
     # IO
     src/io/CifLoader.cpp
+    src/io/CcdCache.cpp
     src/io/PdbWriter.cpp
     src/io/Aligner.cpp
     # Analysis
