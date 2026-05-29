@@ -1,4 +1,5 @@
 #include "molterm/io/CifLoader.h"
+#include "molterm/io/CcdCache.h"
 #include "molterm/core/BondTable.h"
 #include "molterm/core/DSSP.h"
 #include "molterm/core/SpatialHash.h"
@@ -29,6 +30,16 @@ static float covalentRadius(const std::string& element) {
     };
     auto it = radii.find(element);
     return (it != radii.end()) ? it->second : 1.5f;
+}
+
+// Map a CCD bond type to our integer bond order (renderers treat anything other
+// than 2/3 as a plain single bond).
+static int ccdBondOrder(gemmi::BondType t) {
+    switch (t) {
+        case gemmi::BondType::Double: return 2;
+        case gemmi::BondType::Triple: return 3;
+        default: return 1;
+    }
 }
 
 std::unique_ptr<MolObject> CifLoader::load(const std::string& filepath) {
@@ -147,15 +158,28 @@ static void buildBonds(MolObject& obj) {
         }
     };
 
-    // ── Tier 1: Standard residue bond table ────────────────────────────────
+    // ── Tier 1: Intra-residue bond templates ───────────────────────────────
+    // Standard residues use the built-in table. Everything else (ligands,
+    // modified residues) gets its exact connectivity and bond orders from the
+    // wwPDB Chemical Component Dictionary, resolved lazily and cached.
+    // Residues matching neither fall through to the Tier 2 distance heuristic.
     for (auto& [rk, atomMap] : resAtomMap) {
-        const auto* table = standardBonds(atoms[atomMap.begin()->second].resName);
-        if (!table) continue;
-        for (const auto& be : *table) {
-            auto it1 = atomMap.find(be.atom1);
-            auto it2 = atomMap.find(be.atom2);
-            if (it1 != atomMap.end() && it2 != atomMap.end())
-                addBond(it1->second, it2->second, be.order);
+        const std::string& resName = atoms[atomMap.begin()->second].resName;
+        if (const auto* table = standardBonds(resName)) {
+            for (const auto& be : *table) {
+                auto it1 = atomMap.find(be.atom1);
+                auto it2 = atomMap.find(be.atom2);
+                if (it1 != atomMap.end() && it2 != atomMap.end())
+                    addBond(it1->second, it2->second, be.order);
+            }
+        } else if (const gemmi::ChemComp* cc = ccd::lookup(resName)) {
+            for (const auto& bond : cc->rt.bonds) {
+                auto it1 = atomMap.find(bond.id1.atom);
+                auto it2 = atomMap.find(bond.id2.atom);
+                // Skip bonds to atoms absent from the model (typically hydrogens).
+                if (it1 != atomMap.end() && it2 != atomMap.end())
+                    addBond(it1->second, it2->second, ccdBondOrder(bond.type));
+            }
         }
     }
 
