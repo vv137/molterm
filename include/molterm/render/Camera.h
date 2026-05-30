@@ -25,6 +25,19 @@ public:
                  int screenW, int screenH,
                  int& sx, int& sy, float& depth) const;
 
+    // Orthographic scale (sub-pixels per Å) for a zoom and viewport — the
+    // single source of truth for the projection's size coupling. All of
+    // project()/projectf()/prepareProjection() go through scaleFromZoom();
+    // camera-fit math (Application::computeFitZoom) inverts it with
+    // zoomFromScale() so the two stay locked together if kRefSpan changes.
+    static constexpr float kRefSpan = 50.0f;
+    static float scaleFromZoom(float zoom, int screenW, int screenH) {
+        return zoom * static_cast<float>(std::min(screenW, screenH)) / kRefSpan;
+    }
+    static float zoomFromScale(float scale, int screenW, int screenH) {
+        return scale * kRefSpan / static_cast<float>(std::min(screenW, screenH));
+    }
+
     // Project to float sub-pixel coordinates (for high-res canvas)
     // aspectYX: Y/X sub-pixel aspect ratio (sub-pixel height / sub-pixel width)
     //   ASCII:   cellH/cellW ≈ 2.0  (1×1 sub-pixels, tall cells)

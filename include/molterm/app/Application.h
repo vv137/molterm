@@ -251,6 +251,10 @@ public:
 
     // Canvas access
     Canvas* canvas() { return canvas_.get(); }
+    // Parse a selection expression against a MolObject, recording the result
+    // as $sele. Public so command helpers (e.g. :measure/:bond selection
+    // endpoints) can resolve selections outside Application's own members.
+    Selection parseSelection(const std::string& expr, const MolObject& mol);
 
     // Representation access
     Representation* getRepr(ReprType type);
@@ -314,15 +318,17 @@ public:
     float overlayScale() const { return overlayScale_; }
     void setOverlayScale(float s) { overlayScale_ = s; }
 
-    // Per-render auto-scale model (issue #48). With Pixels (default), the
-    // *_font_size knobs are interpreted as raw screen pixels — what they
-    // were before #48 — so existing scripts still render identically.
-    // Physical treats them as point sizes (1 pt = liveDpi_/72 px live)
-    // and rescales by the screenshot's DPI so a `:screenshot W H 300`
-    // looks like the same figure printed at 300 dpi. Relative interprets
-    // them as "pixels at referenceCanvasHeight_ tall canvas" and rescales
-    // by canvasH/refH so a rough 1280x960 render and a final 2400x1800
-    // render show labels at the same fraction of the canvas.
+    // Per-render auto-scale model (issue #48). With Pixels the *_font_size
+    // knobs are interpreted as raw screen pixels, so a hi-DPI screenshot
+    // renders labels tiny relative to the canvas. Physical treats them as
+    // point sizes (1 pt = liveDpi_/72 px live) and rescales by the
+    // screenshot's DPI so a `:screenshot W H 300` looks like the same figure
+    // printed at 300 dpi. Relative (default) interprets them as "pixels at
+    // referenceCanvasHeight_ tall canvas" and rescales by canvasH/refH so a
+    // rough 1200x900 render and a final 2400x1800 render show labels at the
+    // same fraction of the canvas (issue #98) — a single script round-trips
+    // between rough and hi-DPI sizes. Set `:set size_mode pixels` for the
+    // pre-#48 fixed-pixel behavior.
     enum class OverlaySizeMode { Pixels, Physical, Relative };
     OverlaySizeMode overlaySizeMode() const { return overlaySizeMode_; }
     void setOverlaySizeMode(OverlaySizeMode m) { overlaySizeMode_ = m; }
@@ -579,6 +585,15 @@ private:
     float             focusFillFraction_ = 0.6f;
     float             focusExtraRadius_  = 4.0f;  // Å padding (matches Mol*)
     float             focusMinRadius_    = 2.0f;  // Å clamp (single-atom subject)
+    // issue #98 — see hasViewFit()/setViewFit() for the rationale.
+    struct ViewFit {
+        bool active = false;
+        std::vector<float> xs, ys, zs;  // subject atom coords (world Å)
+        float fill = 0.9f;              // fraction of frame to fill
+        float pad = 1.0f;               // Å padding added to the extent
+        float minExtent = 1.0f;         // Å floor (avoids over-zoom on a point)
+    };
+    ViewFit           viewFit_;
     FocusGranularity  focusGranularity_  = FocusGranularity::Residue;
     bool              focusComputedInterface_ = false;   // true if enterFocus
                                                           // ran computeInterface
@@ -769,7 +784,7 @@ private:
     int annotationFontSize_ = 14;
     int annotationLineWidth_ = 2;
     float overlayScale_ = 1.0f;
-    OverlaySizeMode overlaySizeMode_ = OverlaySizeMode::Pixels;
+    OverlaySizeMode overlaySizeMode_ = OverlaySizeMode::Relative;
     int referenceCanvasHeight_ = 1080;
     int liveDpi_ = 96;
     // Set transiently by RenderScaleScope at the top of each render pass.
@@ -811,7 +826,6 @@ private:
     void updateStatusBar();
 
     void registerCommands();
-    Selection parseSelection(const std::string& expr, const MolObject& mol);
     void buildProjCache();
 
     // Draw labels, measurement dashed lines/labels, and sele/pk highlight
@@ -870,6 +884,31 @@ private:
                     const std::string& exprDesc);
     void exitFocus();
     bool focusActive() const { return focusSnapshot_.active; }
+
+    // ── View-fit intent (issue #98) ────────────────────────────────────
+    // :focus/:zoom/:orient remember the world-space points they framed and
+    // the target fill fraction so the fit can be *recomputed* for whatever
+    // canvas actually renders — most importantly a :screenshot at a
+    // different resolution/aspect than the live viewport. Without this the
+    // zoom is a single scalar calibrated to one reference viewport, so a
+    // hi-DPI screenshot of the same view leaves the subject small with dead
+    // margins. The fit measures the subject's *projected* extent under the
+    // current rotation and sizes it to `fill` of the frame in the more
+    // constrained dimension, so it fills the frame at any resolution.
+    bool hasViewFit() const { return viewFit_.active; }
+    // Store a fit intent (copying the coords) and apply it immediately to
+    // the best-available live canvas. Reads the camera's current rotation +
+    // center, so callers must set those first.
+    void setViewFit(std::vector<float> xs, std::vector<float> ys,
+                    std::vector<float> zs, float fill, float pad,
+                    float minExtent);
+    void clearViewFit();
+    // Compute the zoom that fits the current intent to a W×H sub-pixel
+    // canvas (aspectYX = Y/X sub-pixel aspect); returns the camera's current
+    // zoom when no intent is active. Does not mutate the camera.
+    float computeFitZoom(int W, int H, float aspectYX) const;
+    // Apply computeFitZoom() to the camera for the given canvas.
+    void applyViewFit(int W, int H, float aspectYX);
     // Expand a single clicked atom into the focus subject according to
     // `focusGranularity_`. Used by both Action::FocusPick (F key) and
     // PickMode::Focus (gf + click) so they stay in lockstep.

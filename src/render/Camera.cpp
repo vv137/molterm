@@ -70,7 +70,7 @@ bool Camera::project(float wx, float wy, float wz,
 
     // Orthographic projection with zoom
     // Scale: 1 Angstrom = zoom_ * (screenH/50) pixels roughly
-    float scale = zoom_ * static_cast<float>(std::min(screenW, screenH)) / 50.0f;
+    float scale = scaleFromZoom(zoom_, screenW, screenH);
 
     sx = static_cast<int>((rx + panX_) * scale) + screenW / 2;
     sy = static_cast<int>(-(ry + panY_) * scale / 2.0f) + screenH / 2;
@@ -91,7 +91,7 @@ bool Camera::projectf(float wx, float wy, float wz,
     float ry = rot_[3]*x + rot_[4]*y + rot_[5]*z;
     float rz = rot_[6]*x + rot_[7]*y + rot_[8]*z;
 
-    float scale = zoom_ * static_cast<float>(std::min(screenW, screenH)) / 50.0f;
+    float scale = scaleFromZoom(zoom_, screenW, screenH);
 
     // Pan is in Angstrom units — multiply by scale to get screen offset
     sx = (rx + panX_) * scale + static_cast<float>(screenW) / 2.0f;
@@ -102,7 +102,7 @@ bool Camera::projectf(float wx, float wy, float wz,
 }
 
 void Camera::prepareProjection(int screenW, int screenH, float aspectYX) const {
-    projScale_ = zoom_ * static_cast<float>(std::min(screenW, screenH)) / 50.0f;
+    projScale_ = scaleFromZoom(zoom_, screenW, screenH);
     projScaleY_ = projScale_ / aspectYX;
     projOffX_ = static_cast<float>(screenW) / 2.0f;
     projOffY_ = static_cast<float>(screenH) / 2.0f;

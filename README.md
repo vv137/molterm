@@ -85,7 +85,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
 - **Silhouette outlines** — depth edge detection with configurable threshold/darkness (pixel mode)
 - **Screenshot from any renderer** — `:screenshot` renders offscreen via PixelCanvas even in braille/ASCII mode
 - **Multi-state animation** — NMR ensemble / trajectory state cycling with `[`/`]` keys
-- **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers or serial numbers
+- **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers, serial numbers, or `(selection)` endpoints; `:bond`/`:unbond` and `:disulfide` (auto-detect SG–SG pairs) for explicit connectivity in headless figures
 - **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode); dashed lines respect z-buffer so atoms in front occlude them
 - **Focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
 - **DSSP secondary structure** — full Kabsch-Sander pipeline: turns ▶ helices (3₁₀ / α / π) ▶ bridges (parallel / antiparallel) ▶ ladders with bulge propagation ▶ sheets, collapsed to molterm's 3-class SS. Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`. Validated against `mkdssp 4.5`: 13/15 PDB test structures match at 100% (4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ, 1MBN, 1HHO, 1LMB, 2HHB, 2NLS, 2GB1, 1L2Y, 1CRN); 1AKE/7TIM at 99% (residual mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff, where float precision flips the boundary)
@@ -412,6 +412,16 @@ set fog 0.4                        # atmospheric depth fog 0-1     (def 0.35)
 
 (Same commands as `:screenshot …`, `:set …` typed interactively.)
 
+**Resolution-independent framing (issue #98):** `:focus`, `:zoom`, and
+`:orient` fit the subject's *projected* extent to the **actual** output
+frame, recomputed for every `:screenshot` size. A view tuned at 1200×900
+fills the frame identically at 2400×1800 — same framing, just more pixels —
+and the fit is aspect-aware, so a wide or tall canvas no longer leaves the
+molecule small with dead margins. Combined with the default
+`size_mode relative` (labels scale with the canvas), a single script
+round-trips between rough and hi-DPI renders. Manual pan/zoom or
+`:camera load` drops the auto-fit so an explicit pose is preserved.
+
 **Script syntax:** `#` starts a comment that runs to end-of-line — anything
 after it is ignored, *including* `;`. So `# step 1; step 2` is a single
 comment, not two commands. `;` (outside a comment) separates commands on
@@ -606,6 +616,11 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   :loadalign model_?.cif chain A+B
 :assembly [id|list]             " Generate biological assembly (default: 1)
 :measure [s1 s2] [= "caption"]  " Distance (no args = pk1↔pk2 from last clicks).
+                                "   Endpoints may also be two parenthesized
+                                "   selections that each resolve to one atom:
+                                "   :measure (resi 2 and name SG) (resi 30 and
+                                "   name SG) = "C28-C56 SS"  — the headless way
+                                "   to pin an atom by selection (no picking).
 :angle [s1 s2 s3] [= "caption"] " Angle at s2 (no args = pk1-pk2-pk3).
 :dihedral [s1 s2 s3 s4] [= "..."] " Dihedral (no args = pk1-pk4).
                                 "   Args: serial number, pk1-pk4, or $selection.
@@ -613,6 +628,15 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   (rendered into screenshots and exported as
                                 "   PyMOL distance/angle/dihedral with `label`
                                 "   carrying the optional caption).
+:bond [s1 s2 | (selA) (selB)]   " Draw a bond between two atoms (real topology
+                                "   edge → renders as a stick wherever both
+                                "   atoms are shown in wireframe/ballstick).
+:unbond [s1 s2 | (selA)(selB)]  " Remove a bond between two atoms.
+:disulfide [selection]          " Auto-detect cysteine SG–SG pairs (1.6–2.5 Å)
+                                "   and draw them as bonds. Whole structure by
+                                "   default; pass a selection to limit scope.
+                                "   Fills in disulfides that prediction models
+                                "   (no struct_conn) omit from connectivity.
 :label <selection>              " Show residue labels on viewport (text from
                                 "   :set label_format, default <resname><resseq>)
 :label corner <pos> = "text"     " Free-position label pinned to a viewport corner.
@@ -789,11 +813,18 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   rough (1.0) and hi-DPI (2.0) renders.
 :set sm|size_mode <mode>         " How label / annotation / arrow sizes scale across
                                 "   different render resolutions:
-                                "     pixels    — (default) raw screen pixels. lfs 22 is
-                                "                 always 22 px; rough vs final renders look
-                                "                 like different figures because labels
-                                "                 occupy a different fraction of the canvas.
-                                "                 Back-compatible.
+                                "     relative  — (default) interpret sizes as "pixels at
+                                "                 reference_canvas_height tall canvas".
+                                "                 :screenshot W H rescales by
+                                "                 canvasH/refH so labels stay the same
+                                "                 fraction of the figure across resolutions
+                                "                 — a 1200x900 rough render and a 2400x1800
+                                "                 final render show the same figure.
+                                "     pixels    — raw screen pixels. lfs 22 is always
+                                "                 22 px, so a hi-DPI render shows labels
+                                "                 tiny relative to the canvas. Pre-0.45
+                                "                 behavior; set this for byte-stable
+                                "                 small-canvas output.
                                 "     physical  — interpret sizes as point sizes (1 pt =
                                 "                 live_dpi/72 px). :screenshot W H DPI
                                 "                 then auto-rescales by DPI/live_dpi so
@@ -801,16 +832,8 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "                 the screenshot's DPI metadata. Closer to
                                 "                 how scientific journals expect figure
                                 "                 sizing to work.
-                                "     relative  — interpret sizes as "pixels at
-                                "                 reference_canvas_height tall canvas".
-                                "                 :screenshot W H rescales by
-                                "                 canvasH/refH so labels stay the same
-                                "                 fraction of the figure across resolutions
-                                "                 — a 1280x960 rough render and a 2400x1800
-                                "                 final render show the same figure.
-                                "   Recommended workflow: set once near the top of a
-                                "   figure script (e.g. :set sm relative) and keep the
-                                "   same lfs / anf for both rough and final :screenshot.
+                                "   With the default `relative`, keep the same lfs / anf
+                                "   for both rough and final :screenshot — they round-trip.
 :set reference_canvas_height <h> " Canvas height (px) at which `lfs N`/`anf N` mean N
                                 "   pixels under size_mode = relative. Default: 1080
                                 "   (range: 240..8192). Larger value = labels shrink

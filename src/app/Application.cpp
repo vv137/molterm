@@ -788,6 +788,127 @@ splitAtEqToken(const std::vector<std::string>& args) {
     return splitAtToken(args, "=");
 }
 
+// Resolve a single endpoint token to an atom index — used by the
+// distance/bond commands (:measure, :bond, :arrow). Accepts a pk1..pk4
+// pick, a $named-selection (first atom), or a PDB serial number. Returns
+// -1 when unresolved.
+static int resolveEndpointToken(Application& app, const std::string& s) {
+    if (s.size() >= 3 && s[0] == 'p' && s[1] == 'k' && s[2] >= '1' && s[2] <= '4')
+        return app.pickReg(s[2] - '1');
+    if (!s.empty() && s[0] == '$') {
+        auto it = app.namedSelections().find(s.substr(1));
+        if (it != app.namedSelections().end() && !it->second.empty())
+            return it->second.indices()[0];
+        return -1;
+    }
+    auto obj = app.tabs().currentTab().currentObject();
+    if (!obj) return -1;
+    const auto& atoms = obj->atoms();
+    try {
+        int serial = std::stoi(s);
+        for (int i = 0; i < static_cast<int>(atoms.size()); ++i)
+            if (atoms[i].serial == serial) return i;
+    } catch (...) {}
+    return -1;
+}
+
+// Extract the contents of each top-level parenthesized group from `s`,
+// e.g. "(a (b) c) (d)" -> {"a (b) c", "d"}. Returns {} on unbalanced
+// parens. Lets :measure/:bond take two selection expressions (which may
+// themselves contain spaces and nested parens) as positional args.
+static std::vector<std::string> splitTopLevelParenGroups(const std::string& s) {
+    std::vector<std::string> groups;
+    int depth = 0;
+    size_t startPos = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '(') {
+            if (depth == 0) startPos = i + 1;
+            ++depth;
+        } else if (s[i] == ')') {
+            if (depth == 0) return {};       // unbalanced ')'
+            if (--depth == 0) {
+                std::string g = s.substr(startPos, i - startPos);
+                auto a = g.find_first_not_of(" \t");
+                auto b = g.find_last_not_of(" \t");
+                groups.push_back(a == std::string::npos ? "" : g.substr(a, b - a + 1));
+            }
+        }
+    }
+    return depth == 0 ? groups : std::vector<std::string>{};
+}
+
+// Resolve exactly one atom from a selection expression. Returns -1 and sets
+// `err` when the object is missing, the selection is empty, or it matches
+// more than one atom (a measurement/bond endpoint must be unambiguous).
+static int resolveSelectionToAtom(Application& app, const std::string& expr,
+                                  std::string& err) {
+    auto obj = app.tabs().currentTab().currentObject();
+    if (!obj) { err = "No object selected"; return -1; }
+    Selection sel = app.parseSelection(expr, *obj);
+    if (sel.empty()) { err = "Empty selection: " + expr; return -1; }
+    if (sel.size() != 1) {
+        err = "Selection must resolve to exactly one atom (got " +
+              std::to_string(sel.size()) + "): " + expr;
+        return -1;
+    }
+    return sel.indices()[0];
+}
+
+// Resolve a pair of distance/bond endpoints from positional args. Accepts
+//   (selA) (selB)  — two parenthesized selections, each one atom (issue #99)
+//   tok1 tok2      — two serial/pick/$ endpoints (legacy)
+// Returns false and sets `err` on any failure.
+static bool resolveEndpointPair(Application& app,
+                                const std::vector<std::string>& pos,
+                                int& i1, int& i2, std::string& err) {
+    std::string joined;
+    for (size_t k = 0; k < pos.size(); ++k) { if (k) joined += ' '; joined += pos[k]; }
+    auto groups = splitTopLevelParenGroups(joined);
+    if (groups.size() == 2) {
+        i1 = resolveSelectionToAtom(app, groups[0], err);
+        if (i1 < 0) return false;
+        i2 = resolveSelectionToAtom(app, groups[1], err);
+        return i2 >= 0;
+    }
+    if (!groups.empty()) {
+        err = "Expected two parenthesized selections, e.g. (resi 2 and name SG) "
+              "(resi 30 and name SG)";
+        return false;
+    }
+    if (pos.size() >= 2) {
+        i1 = resolveEndpointToken(app, pos[0]);
+        if (i1 < 0) { err = "Atom not found: " + pos[0]; return false; }
+        i2 = resolveEndpointToken(app, pos[1]);
+        if (i2 < 0) { err = "Atom not found: " + pos[1]; return false; }
+        return true;
+    }
+    err = "Need two endpoints: serials, picks, or (selA) (selB)";
+    return false;
+}
+
+// True if a bond between atom indices a and b already exists. Shared by
+// :bond and :disulfide so the symmetric-pair check lives in one place.
+static bool bondExists(const std::vector<BondData>& bonds, int a, int b) {
+    for (const auto& bd : bonds)
+        if ((bd.atom1 == a && bd.atom2 == b) || (bd.atom1 == b && bd.atom2 == a))
+            return true;
+    return false;
+}
+
+// Resolve the two endpoints for :bond / :unbond: empty args fall back to the
+// pk1/pk2 picks, otherwise the shared serial/pick/(selection) grammar. `verb`
+// names the command in the no-pick hint. Returns false and sets `err`.
+static bool resolveBondEndpoints(Application& app, const std::vector<std::string>& pos,
+                                 const char* verb, int& i1, int& i2, std::string& err) {
+    if (pos.empty()) {
+        i1 = app.pickReg(0); i2 = app.pickReg(1);
+        if (i1 >= 0 && i2 >= 0) return true;
+        err = std::string("Click two atoms first (pk1, pk2), then :") + verb;
+        return false;
+    }
+    return resolveEndpointPair(app, pos, i1, i2, err);
+}
+
 // Accept either the long form (topleft) or the two-letter short (tl)
 // — keeps :label corner and :unlabel corner in lockstep so a new alias
 // only has to be added in one place.
@@ -1515,6 +1636,7 @@ void Application::handleMouse(int /*key*/) {
     // Scroll wheel for zoom — only viewport + status bar
     if (event.bstate & BUTTON4_PRESSED) {
         cam.zoomBy(1.15f);
+        clearViewFit();   // manual zoom overrides any fit intent (issue #98)
         layout_.markDirty(C::Viewport);
         layout_.markDirty(C::StatusBar);
         return;
@@ -1522,6 +1644,7 @@ void Application::handleMouse(int /*key*/) {
 #ifdef BUTTON5_PRESSED
     if (event.bstate & BUTTON5_PRESSED) {
         cam.zoomBy(1.0f / 1.15f);
+        clearViewFit();
         layout_.markDirty(C::Viewport);
         layout_.markDirty(C::StatusBar);
         return;
@@ -1738,13 +1861,16 @@ void Application::handleAction(Action action) {
         case Action::RotateDown:   cam.rotateX(rs);   dirty({C::Viewport, C::StatusBar}); break;
         case Action::RotateCW:    cam.rotateZ(rs);    dirty({C::Viewport, C::StatusBar}); break;
         case Action::RotateCCW:   cam.rotateZ(-rs);   dirty({C::Viewport, C::StatusBar}); break;
-        case Action::PanLeft:     cam.pan(-cam.panSpeed(), 0);  dirty({C::Viewport, C::StatusBar}); break;
-        case Action::PanRight:    cam.pan(cam.panSpeed(), 0);   dirty({C::Viewport, C::StatusBar}); break;
-        case Action::PanUp:       cam.pan(0, -cam.panSpeed());  dirty({C::Viewport, C::StatusBar}); break;
-        case Action::PanDown:     cam.pan(0, cam.panSpeed());   dirty({C::Viewport, C::StatusBar}); break;
-        case Action::ZoomIn:      cam.zoomBy(1.2f);  dirty({C::Viewport, C::StatusBar}); break;
-        case Action::ZoomOut:     cam.zoomBy(1.0f/1.2f); dirty({C::Viewport, C::StatusBar}); break;
-        case Action::ResetView:   cam.reset(); tab.centerView(); dirty({C::Viewport, C::StatusBar}); break;
+        // Manual pan/zoom/reset overrides any active :focus/:zoom/:orient
+        // fit, so drop the intent (else the next :screenshot would re-fit
+        // and clobber the user's framing). Issue #98.
+        case Action::PanLeft:     cam.pan(-cam.panSpeed(), 0); clearViewFit(); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::PanRight:    cam.pan(cam.panSpeed(), 0);  clearViewFit(); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::PanUp:       cam.pan(0, -cam.panSpeed()); clearViewFit(); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::PanDown:     cam.pan(0, cam.panSpeed());  clearViewFit(); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::ZoomIn:      cam.zoomBy(1.2f); clearViewFit(); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::ZoomOut:     cam.zoomBy(1.0f/1.2f); clearViewFit(); dirty({C::Viewport, C::StatusBar}); break;
+        case Action::ResetView:   cam.reset(); tab.centerView(); clearViewFit(); dirty({C::Viewport, C::StatusBar}); break;
         case Action::CenterSelection: tab.centerView(); dirty({C::Viewport, C::StatusBar}); break;
         case Action::Redraw:
             clearScreenAndRepaint();
@@ -3534,6 +3660,76 @@ std::vector<int> Application::expandByFocusGranularity(const MolObject& mol,
     return out;
 }
 
+// ── View-fit (issue #98) ────────────────────────────────────────────────
+// Best sub-pixel dimensions to fit against when no real canvas is active
+// (e.g. a --no-tui script before the first screenshot). The screenshot
+// command re-fits to the actual output size, so this only needs to be a
+// reasonable default for the live preview.
+static void bestFitCanvasDims(const Canvas* c, int& W, int& H, float& ay) {
+    if (c && c->subW() > 0 && c->subH() > 0) {
+        W = c->subW(); H = c->subH(); ay = c->aspectYX();
+    } else {
+        W = 1440; H = 1080; ay = 1.0f;   // 4:3, square sub-pixels
+    }
+}
+
+float Application::computeFitZoom(int W, int H, float aspectYX) const {
+    const auto& cam = tabMgr_.currentTab().camera();
+    if (!viewFit_.active || viewFit_.xs.empty() || W <= 0 || H <= 0)
+        return cam.zoom();
+
+    // Project each subject atom through the current rotation+center and
+    // take the half-extents along screen X and Y (world Å).
+    const auto& R = cam.rotation();
+    const float cx = cam.centerX(), cy = cam.centerY(), cz = cam.centerZ();
+    float ex = 0.0f, ey = 0.0f;
+    for (size_t i = 0; i < viewFit_.xs.size(); ++i) {
+        const float x = viewFit_.xs[i] - cx;
+        const float y = viewFit_.ys[i] - cy;
+        const float z = viewFit_.zs[i] - cz;
+        ex = std::max(ex, std::fabs(R[0]*x + R[1]*y + R[2]*z));
+        ey = std::max(ey, std::fabs(R[3]*x + R[4]*y + R[5]*z));
+    }
+    ex = std::max(ex + viewFit_.pad, viewFit_.minExtent);
+    ey = std::max(ey + viewFit_.pad, viewFit_.minExtent);
+
+    // projectCached() maps Å→sub-pixels via Camera::scaleFromZoom on X and
+    // scale/aspectYX on Y. Solve for the scale that keeps the projected
+    // half-extent within fill*frame/2 in both dimensions, then invert through
+    // Camera::zoomFromScale so the two formulas stay locked together.
+    const float fW = viewFit_.fill * static_cast<float>(W) * 0.5f;
+    const float fH = viewFit_.fill * static_cast<float>(H) * 0.5f * aspectYX;
+    const float scale = std::min(fW / ex, fH / ey);
+    return std::clamp(Camera::zoomFromScale(scale, W, H), 0.01f, 100.0f);
+}
+
+void Application::applyViewFit(int W, int H, float aspectYX) {
+    if (!viewFit_.active) return;
+    tabMgr_.currentTab().camera().setZoom(computeFitZoom(W, H, aspectYX));
+}
+
+void Application::setViewFit(std::vector<float> xs, std::vector<float> ys,
+                             std::vector<float> zs, float fill, float pad,
+                             float minExtent) {
+    viewFit_.active = true;
+    viewFit_.xs = std::move(xs);
+    viewFit_.ys = std::move(ys);
+    viewFit_.zs = std::move(zs);
+    viewFit_.fill = fill;
+    viewFit_.pad = pad;
+    viewFit_.minExtent = minExtent;
+    int W, H; float ay;
+    bestFitCanvasDims(canvas_.get(), W, H, ay);
+    applyViewFit(W, H, ay);
+}
+
+void Application::clearViewFit() {
+    viewFit_.active = false;
+    viewFit_.xs.clear();
+    viewFit_.ys.clear();
+    viewFit_.zs.clear();
+}
+
 void Application::enterFocus(MolObject& mol,
                              const std::vector<int>& subjectIndices,
                              const std::string& exprDesc) {
@@ -3580,32 +3776,28 @@ void Application::enterFocus(MolObject& mol,
     // (for subject-size aware zoom — Mol*-style).
     float sx = 0, sy = 0, sz = 0;
     int n = 0;
+    std::vector<float> fxs, fys, fzs;
+    fxs.reserve(subjectIndices.size());
+    fys.reserve(subjectIndices.size());
+    fzs.reserve(subjectIndices.size());
     for (int idx : subjectIndices) {
         if (idx < 0 || idx >= (int)atoms.size()) continue;
         sx += atoms[idx].x; sy += atoms[idx].y; sz += atoms[idx].z;
+        fxs.push_back(atoms[idx].x);
+        fys.push_back(atoms[idx].y);
+        fzs.push_back(atoms[idx].z);
         ++n;
     }
     if (n == 0) { focusSnapshot_.active = false; return; }
     sx /= n; sy /= n; sz /= n;
 
-    float r2max = 0.0f;
-    for (int idx : subjectIndices) {
-        if (idx < 0 || idx >= (int)atoms.size()) continue;
-        float dx = atoms[idx].x - sx;
-        float dy = atoms[idx].y - sy;
-        float dz = atoms[idx].z - sz;
-        float r2 = dx*dx + dy*dy + dz*dz;
-        if (r2 > r2max) r2max = r2;
-    }
-    const float rEnc = std::sqrt(r2max);
-    const float rPad = std::max(rEnc + focusExtraRadius_, focusMinRadius_);
-    // K=20 calibrates fillFraction=1.0 to the existing `:zoom` formula
-    // (40 / span ≈ 20 / R) so :zoom and a "full-fill" focus agree.
-    const float targetZoom = (rPad > 0.0f)
-        ? focusFillFraction_ * 20.0f / rPad
-        : focusZoom_;
-
-    cam.focusOn(sx, sy, sz, targetZoom);
+    // Snap the camera to the subject centroid, then fit its *projected*
+    // extent to the frame (issue #98). The fit is recomputed per output
+    // canvas (live + each :screenshot), so it fills the frame at any
+    // resolution/aspect instead of a fixed reference viewport.
+    cam.focusOn(sx, sy, sz, cam.zoom());
+    setViewFit(fxs, fys, fzs, focusFillFraction_, focusExtraRadius_,
+               focusMinRadius_);
 
     // Build subject mask first.
     focusAtomMask_.assign(atoms.size(), false);
@@ -3706,14 +3898,16 @@ void Application::enterFocus(MolObject& mol,
     focusExpr_ = exprDesc.empty() ? std::string("focus") : exprDesc;
     char msg[160];
     std::snprintf(msg, sizeof(msg),
-        "Focus: %d atoms (radius=%.1fA zoom=%.1f) — F or Esc to exit",
-        (int)nbhdIndices.size(), focusRadius_, focusZoom_);
+        "Focus: %d atoms (radius=%.1fA zoom=%.2f) — F or Esc to exit",
+        (int)nbhdIndices.size(), focusRadius_,
+        tabMgr_.currentTab().camera().zoom());
     cmdLine_.setMessage(msg);
     needsRedraw_ = true;
 }
 
 void Application::exitFocus() {
     if (!focusSnapshot_.active) return;
+    clearViewFit();   // restoring the saved zoom — drop the fit intent
     auto obj = tabMgr_.currentTab().currentObject();
     if (!obj) {
         focusSnapshot_.active = false;
@@ -4385,7 +4579,10 @@ void Application::registerCommands() {
         if (g.xs.empty()) return {false, "No atoms match"};
         auto [cx, cy, cz, span] = computeUnion(g);
         app.tabs().currentTab().camera().setCenter(cx, cy, cz);
-        if (span > 0.0f) app.tabs().currentTab().camera().setZoom(40.0f / span);
+        // Fit the projected extent to the frame, re-fittable per output
+        // canvas so a hi-DPI :screenshot keeps the same framing (issue #98).
+        app.setViewFit(g.xs, g.ys, g.zs, /*fill*/ 0.9f, /*pad*/ 1.0f,
+                       /*minExtent*/ 1.0f);
         std::string msg = "Zoomed to " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
         app.logViewState(cmd, static_cast<int>(g.xs.size()));
@@ -4423,9 +4620,13 @@ void Application::registerCommands() {
         auto [cx, cy, cz, span] = computeUnion(g);
         auto& cam = app.tabs().currentTab().camera();
         cam.setCenter(cx, cy, cz);
-        if (span > 0.0f) cam.setZoom(40.0f / span);
-
+        // Fit the projected extent to the frame (issue #98), recomputed per
+        // output canvas. Applied under whatever rotation is current, so the
+        // <2-atom and degenerate-PCA early returns fit before the rotation
+        // and the main path fits after.
+        auto fitToFrame = [&] { app.setViewFit(g.xs, g.ys, g.zs, 0.9f, 1.0f, 1.0f); };
         if (g.xs.size() < 2) {
+            fitToFrame();
             return {true, "Centered (need >=2 atoms for orientation)"};
         }
 
@@ -4435,7 +4636,10 @@ void Application::registerCommands() {
         // PCA frame chosen by `:orient` always matches the one a script
         // sees.
         auto pca = geom::pcaOf(g.xs, g.ys, g.zs);
-        if (!pca.valid) return {true, "Centered (need >=2 atoms for orientation)"};
+        if (!pca.valid) {
+            fitToFrame();
+            return {true, "Centered (need >=2 atoms for orientation)"};
+        }
         const auto& e1 = pca.axis1;
         const auto& e2 = pca.axis2;
         const auto& e3 = pca.axis3;
@@ -4474,6 +4678,7 @@ void Application::registerCommands() {
         rot[3] = (float)sy[0]; rot[4] = (float)sy[1]; rot[5] = (float)sy[2];
         rot[6] = (float)sz[0]; rot[7] = (float)sz[1]; rot[8] = (float)sz[2];
         cam.setRotation(rot);
+        fitToFrame();   // measure the extent in the final screen frame (issue #98)
 
         std::string msg = "Oriented " + std::to_string(g.xs.size()) + " atoms";
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
@@ -5709,6 +5914,7 @@ void Application::registerCommands() {
 
         if (sub == "reset") {
             cam.reset();
+            app.clearViewFit();   // explicit camera state, not a fit (issue #98)
             return {true, "Camera reset"};
         }
 
@@ -5758,6 +5964,7 @@ void Application::registerCommands() {
             cam.setZoom(zoom);
             cam.setPan(panX, panY);
             cam.setRotation(rot);
+            app.clearViewFit();   // restore an exact saved pose (issue #98)
             return {true, "Camera loaded from " + path};
         }
 
@@ -6821,6 +7028,16 @@ void Application::registerCommands() {
 
         auto& tab = app.tabs().currentTab();
 
+        // Re-fit a :focus/:zoom/:orient view to the *actual* output size so
+        // the subject fills the frame at any resolution/aspect (issue #98).
+        // Saved and restored around the render so the live viewport keeps
+        // its own zoom.
+        const float savedFitZoom = tab.camera().zoom();
+        const bool reFitForShot = app.hasViewFit();
+        if (reFitForShot)
+            app.applyViewFit(offscreen.subW(), offscreen.subH(),
+                             offscreen.aspectYX());
+
         if (auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe))) {
             wf->setHeteroatomCarbonScheme(app.interfaceOverlay_ || app.focusSnapshot_.active);
         }
@@ -6895,7 +7112,9 @@ void Application::registerCommands() {
             app.restoreStereoCamera(savedScreenshotRot);
         }
 
-        // Restore projection for the active canvas
+        // Restore the live viewport's zoom (the re-fit above was for the
+        // screenshot's dimensions only) and projection. Issue #98.
+        if (reFitForShot) tab.camera().setZoom(savedFitZoom);
         auto* canvas = app.canvas();
         if (canvas)
             tab.camera().prepareProjection(canvas->subW(), canvas->subH(), canvas->aspectYX());
@@ -7294,30 +7513,11 @@ void Application::registerCommands() {
     }, ":resume", "Restore the last session from ~/.molterm/autosave.toml",
        {":resume"}, "Session");
 
-    // Helper: resolve atom index from serial number string or pick register
+    // Helper: resolve atom index from serial / pick / $named-selection.
+    // Thin wrapper over the file-local resolveEndpointToken so :arrow,
+    // :angle, :dihedral and :measure all share one resolution rule.
     auto resolveAtomIdx = [](Application& app, const std::string& s) -> int {
-        // Pick register: pk1..pk4
-        if (s.size() >= 3 && s[0] == 'p' && s[1] == 'k' && s[2] >= '1' && s[2] <= '4') {
-            return app.pickReg(s[2] - '1');
-        }
-        // Named selection reference: $name → first atom
-        if (!s.empty() && s[0] == '$') {
-            auto it = app.namedSelections().find(s.substr(1));
-            if (it != app.namedSelections().end() && !it->second.empty())
-                return it->second.indices()[0];
-            return -1;
-        }
-        // Serial number
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return -1;
-        const auto& atoms = obj->atoms();
-        try {
-            int serial = std::stoi(s);
-            for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
-                if (atoms[i].serial == serial) return i;
-            }
-        } catch (...) {}
-        return -1;
+        return resolveEndpointToken(app, s);
     };
 
     // Helper: format atom label for measurement display
@@ -7327,7 +7527,7 @@ void Application::registerCommands() {
 
 
     // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
-    cmdRegistry_.registerCmd("measure", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    cmdRegistry_.registerCmd("measure", [atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
@@ -7338,13 +7538,9 @@ void Application::registerCommands() {
         if (pos.empty()) {
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
             if (i1 < 0 || i2 < 0) return {false, "Click two atoms first (pk1, pk2), then :measure"};
-        } else if (pos.size() >= 2) {
-            i1 = resolveAtomIdx(app, pos[0]);
-            i2 = resolveAtomIdx(app, pos[1]);
-            if (i1 < 0) return {false, "Atom not found: serial " + pos[0]};
-            if (i2 < 0) return {false, "Atom not found: serial " + pos[1]};
         } else {
-            return {false, "Usage: :measure [serial1 serial2] [= \"caption\"]"};
+            std::string err;
+            if (!resolveEndpointPair(app, pos, i1, i2, err)) return {false, err};
         }
         if (i1 >= n || i2 >= n) return {false, "Invalid atom index"};
 
@@ -7361,12 +7557,128 @@ void Application::registerCommands() {
         app.measurements().push_back({{i1, i2}, shortLabel, caption});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
-    }, ":measure [serial1 serial2 | pk1 pk2] [= \"caption\"]",
+    }, ":measure [s1 s2 | pk1 pk2 | (selA) (selB)] [= \"caption\"]",
        "Measure a distance and persist a dashed line + value. Endpoints are "
-       "atom serials (PDB serial, not selections) or the pk1/pk2 picks; "
-       "for a selection, resolve to a serial first.",
+       "PDB serials, the pk1/pk2 picks, or two parenthesized selections that "
+       "each resolve to exactly one atom — the only headless way to pin an "
+       "atom by selection.",
        {":measure", ":measure pk1 pk2",
-        ":measure 12 47 = \"Glu-OE1 ↔ Lys-Nζ\""}, "Measurement");
+        ":measure 12 47 = \"Glu-OE1 ↔ Lys-Nζ\"",
+        ":measure (resi 2 and name SG) (resi 30 and name SG) = \"C28-C56 SS\""},
+       "Measurement");
+
+    // :bond — draw an explicit bond between two atoms (issue #99). Adds a
+    // real edge to the object's topology so it renders as a stick wherever
+    // both endpoints are shown in a bond-drawing repr (wireframe/ballstick).
+    // Endpoints follow the same grammar as :measure.
+    cmdRegistry_.registerCmd("bond", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+        auto [pos, caption] = splitAtEqToken(cmd.args);  // caption unused — bonds carry no label
+        int i1, i2;
+        std::string err;
+        if (!resolveBondEndpoints(app, pos, "bond", i1, i2, err)) return {false, err};
+        if (i1 == i2) return {false, "Cannot bond an atom to itself"};
+        auto& bonds = obj->bonds();
+        if (bondExists(bonds, i1, i2)) return {true, "Bond already exists"};
+        bonds.push_back({std::min(i1, i2), std::max(i1, i2), 1});
+        const auto& a = obj->atoms();
+        float dx = a[i1].x - a[i2].x, dy = a[i1].y - a[i2].y, dz = a[i1].z - a[i2].z;
+        char buf[16]; std::snprintf(buf, sizeof(buf), "%.2f", std::sqrt(dx*dx + dy*dy + dz*dz));
+        return {true, std::string("Bond added (") + buf + " A)"};
+    }, ":bond [s1 s2 | pk1 pk2 | (selA) (selB)]",
+       "Draw a bond between two atoms (each endpoint must resolve to exactly "
+       "one atom). Renders as a stick wherever both atoms are shown in a "
+       "wireframe/ballstick repr.",
+       {":bond pk1 pk2",
+        ":bond (resi 2 and name SG) (resi 30 and name SG)"}, "Measurement");
+
+    // :unbond — remove an existing bond between two atoms (issue #99). The
+    // inverse of :bond/:disulfide; useful to drop a spurious auto-detected
+    // edge. Same endpoint grammar.
+    cmdRegistry_.registerCmd("unbond", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+        auto [pos, caption] = splitAtEqToken(cmd.args);
+        int i1, i2;
+        std::string err;
+        if (!resolveBondEndpoints(app, pos, "unbond", i1, i2, err)) return {false, err};
+        auto& bonds = obj->bonds();
+        auto before = bonds.size();
+        bonds.erase(std::remove_if(bonds.begin(), bonds.end(), [&](const BondData& b) {
+            return (b.atom1 == i1 && b.atom2 == i2) || (b.atom1 == i2 && b.atom2 == i1);
+        }), bonds.end());
+        if (bonds.size() == before) return {false, "No bond between those atoms"};
+        return {true, "Bond removed"};
+    }, ":unbond [s1 s2 | pk1 pk2 | (selA) (selB)]",
+       "Remove a bond between two atoms (inverse of :bond / :disulfide).",
+       {":unbond pk1 pk2",
+        ":unbond (resi 2 and name SG) (resi 30 and name SG)"}, "Measurement");
+
+    // :disulfide [selection] — auto-detect CYS SG–SG pairs and draw them as
+    // bonds (issue #99). Disulfides are inter-residue, so loaders that only
+    // apply intra-residue connectivity miss them; this fills the gap with a
+    // one-liner that "just works" for figure scripts.
+    cmdRegistry_.registerCmd("disulfide", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+        const auto& atoms = obj->atoms();
+
+        // Scope: whole structure by default, else the given selection.
+        std::vector<int> scope;
+        if (cmd.args.empty()) {
+            scope.resize(atoms.size());
+            for (int i = 0; i < static_cast<int>(atoms.size()); ++i) scope[i] = i;
+        } else {
+            std::string expr;
+            for (size_t i = 0; i < cmd.args.size(); ++i) { if (i) expr += ' '; expr += cmd.args[i]; }
+            Selection sel = app.parseSelection(expr, *obj);
+            if (sel.empty()) return {false, "Empty selection: " + expr};
+            scope = sel.indices();
+        }
+
+        // Collect candidate SG sulfur atoms in scope.
+        std::vector<int> sgs;
+        for (int idx : scope)
+            if (atoms[idx].name == "SG") sgs.push_back(idx);
+        if (sgs.size() < 2)
+            return {false, "No SG–SG pairs in scope (need ≥2 cysteine SG atoms)"};
+
+        auto& bonds = obj->bonds();
+
+        // A disulfide S–S bond is ~2.05 Å; accept a tolerant 1.6–2.5 Å window.
+        constexpr float kMin = 1.6f, kMax = 2.5f;
+        int added = 0, already = 0;
+        std::string detail;
+        for (size_t i = 0; i < sgs.size(); ++i) {
+            for (size_t j = i + 1; j < sgs.size(); ++j) {
+                int a = sgs[i], b = sgs[j];
+                float dx = atoms[a].x - atoms[b].x;
+                float dy = atoms[a].y - atoms[b].y;
+                float dz = atoms[a].z - atoms[b].z;
+                float d = std::sqrt(dx*dx + dy*dy + dz*dz);
+                if (d < kMin || d > kMax) continue;
+                if (bondExists(bonds, a, b)) { ++already; continue; }
+                bonds.push_back({std::min(a, b), std::max(a, b), 1});
+                ++added;
+                char buf[16]; std::snprintf(buf, sizeof(buf), "%.2f", d);
+                detail += (detail.empty() ? "  " : ", ");
+                detail += atoms[a].chainId + std::to_string(atoms[a].resSeq) + "–" +
+                          atoms[b].chainId + std::to_string(atoms[b].resSeq) +
+                          " (" + buf + " A)";
+            }
+        }
+        if (added == 0)
+            return {already > 0
+                        ? ExecResult{true, "All disulfides already bonded (" +
+                                            std::to_string(already) + ")"}
+                        : ExecResult{false, "No disulfide bonds found (SG–SG 1.6–2.5 A)"}};
+        return {true, "Drew " + std::to_string(added) + " disulfide bond" +
+                      (added == 1 ? "" : "s") + detail};
+    }, ":disulfide [selection]",
+       "Auto-detect cysteine SG–SG pairs (1.6–2.5 Å) and draw them as bonds. "
+       "Defaults to the whole structure; pass a selection to limit scope.",
+       {":disulfide", ":disulfide chain A"}, "Measurement");
 
     // :arrow — solid arrow with caption (issue #38). Distinct from :measure
     // (dashed + auto distance) because the visual semantics matter: a solid
