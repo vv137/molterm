@@ -993,6 +993,8 @@ inline constexpr const char* kSetOptionsLong[] = {
     "bs_units",
     "bs_factor",
     "spacefill_scale",
+    "surface_mode",
+    "surface_probe",
     "surface_resolution",
     "surface_scale",
     "surface_smoothness",
@@ -5301,6 +5303,26 @@ void Application::registerCommands() {
             sf->setScale(v);
             return {true, "Spacefill scale (×vdW): " + std::to_string(v)};
         }
+        if (opt == "surface_mode" || opt == "surf_mode") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set surface_mode ses|sas|vdw|gaussian"};
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            const std::string& m = cmd.args[1];
+            if (m == "ses")           sr->setMode(SurfaceRepr::Mode::Ses);
+            else if (m == "sas")      sr->setMode(SurfaceRepr::Mode::Sas);
+            else if (m == "vdw")      sr->setMode(SurfaceRepr::Mode::Vdw);
+            else if (m == "gaussian" || m == "gauss")
+                                      sr->setMode(SurfaceRepr::Mode::Gaussian);
+            else return {false, "surface_mode: ses|sas|vdw|gaussian"};
+            return {true, "Surface mode: " + m};
+        }
+        if (opt == "surface_probe" || opt == "surf_probe") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set surface_probe <0.0-3.0>"};
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            sr->setProbe(std::stof(cmd.args[1]));
+            return {true, "Surface probe radius: " + std::to_string(sr->probe()) + " Å"};
+        }
         if (opt == "surface_resolution" || opt == "surf_res") {
             if (cmd.args.size() < 2) return {false, "Usage: :set surface_resolution <0.2-3.0>"};
             auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
@@ -5763,6 +5785,23 @@ void Application::registerCommands() {
             auto* sf = dynamic_cast<SpacefillRepr*>(app.getRepr(ReprType::Spacefill));
             if (!sf) return {false, "Spacefill repr not found"};
             return {true, "spacefill_scale = " + std::to_string(sf->scale())};
+        }
+        if (opt == "surface_mode" || opt == "surf_mode") {
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            const char* m = "ses";
+            switch (sr->mode()) {
+                case SurfaceRepr::Mode::Ses:      m = "ses"; break;
+                case SurfaceRepr::Mode::Sas:      m = "sas"; break;
+                case SurfaceRepr::Mode::Vdw:      m = "vdw"; break;
+                case SurfaceRepr::Mode::Gaussian: m = "gaussian"; break;
+            }
+            return {true, std::string("surface_mode = ") + m};
+        }
+        if (opt == "surface_probe" || opt == "surf_probe") {
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            return {true, "surface_probe = " + std::to_string(sr->probe())};
         }
         if (opt == "surface_resolution" || opt == "surf_res") {
             auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));

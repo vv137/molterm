@@ -71,7 +71,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
 - **3-tier bond detection** — standard residue table (20 AA + 8 nucleotides, with bond order) → inter-residue peptide/phosphodiester bonds → distance fallback for ligands
 - **Multi-renderer pipeline** — Unicode Braille (8x resolution), half-block, ASCII, and native pixel protocols (Sixel, Kitty, iTerm2) with auto-detection
 - **VIM-like modal interface** — Normal, Command, Search modes with trie-based multi-key bindings (`sw`, `dd`, `gt`, etc.)
-- **Rich representations** — wireframe, ball-and-stick, spacefill, cartoon (Catmull-Rom spline + elliptical/tubular helix + tension-tuned spline + 3-point frame smoothing + smoothstep SS transitions + nucleic flat-ribbon backbone + hexagonal/bicyclic base ring prisms), flat ribbon, backbone trace — per-object or per-selection visibility
+- **Rich representations** — wireframe, ball-and-stick, spacefill, cartoon (Catmull-Rom spline + elliptical/tubular helix + tension-tuned spline + 3-point frame smoothing + smoothstep SS transitions + nucleic flat-ribbon backbone + hexagonal/bicyclic base ring prisms), flat ribbon, backbone trace, molecular surface (marching-cubes SES/SAS/vdW/Gaussian, solvent-excluded by default) — per-object or per-selection visibility
 - **Selection algebra** — recursive descent parser: `chain A and helix`, `resi 50-60 or name CA`, boolean `and/or/not` with parentheses
 - **Mouse selection** — `gs`/`gS`/`gc` pick modes for atom/residue/chain selection with `$sele` highlight overlay
 - **Multi-level inspect** — click to inspect at atom/residue/chain/object level (`I` cycles), pick registers pk1-pk4 for measurements
@@ -409,6 +409,12 @@ set outline on                     # silhouette outlines (pixel)
 set ot 0.2                         # outline depth threshold       (def 0.3)
 set od 0.2                         # outline darken (0=black)      (def 0.15)
 set fog 0.4                        # atmospheric depth fog 0-1     (def 0.35)
+set surface_mode ses               # ses|sas|vdw|gaussian          (def ses)
+set surface_probe 1.4              # SES/SAS probe radius Å 0-3.0  (def 1.4)
+set surface_resolution 0.5         # surface grid spacing Å 0.2-3.0 (def 0.7)
+set surface_scale 1.0              # blob radius (×vdW)    0.2-3.0 (def 1.0)
+set surface_smoothness 2.0         # gaussian kernel k     0.5-8.0 (def 2.0)
+set surface_iso 1.0                # gaussian iso-level    0.05-5.0 (def 1.0)
 ```
 
 (Same commands as `:screenshot …`, `:set …` typed interactively.)
@@ -504,6 +510,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `sc` / `xc` | Cartoon (3D tube) |
 | `sr` / `xr` | Ribbon (flat) |
 | `sk` / `xk` | Backbone trace |
+| `:show surface` | Molecular surface (no default key) |
 | `xa` | Hide all |
 | `so` / `xo` | Show / hide overlays (labels, measurements, sele) |
 | `gd` | Apply default preset (cartoon + ballstick ligands) |
@@ -780,6 +787,12 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :set bs_units vdw|cell          " BallStick sizing: vdw (Å×factor) or cell (legacy sub-pixel)
 :set bsf|bs_factor <n>          " BallStick sizeFactor × vdW when bs_units=vdw (default: 0.15)
 :set sfs|spacefill_scale <n>    " Spacefill ×vdW (default: 1.0, full vdW = CPK)
+:set surface_mode|surf_mode <m>        " Surface type: ses (default, solvent-excluded) | sas | vdw | gaussian
+:set surface_probe|surf_probe <n>      " SES/SAS probe sphere radius Å (0.0-3.0, default: 1.4 ≈ water)
+:set surface_resolution|surf_res <n>   " Surface grid spacing Å (0.2-3.0, default: 0.7; smaller = finer/slower)
+:set surface_scale|surf_scale <n>      " Surface atom radius ×vdW (0.2-3.0, default: 1.0)
+:set surface_smoothness|surf_smooth <n> " Gaussian-mode kernel sharpness k (0.5-8.0, default: 2.0)
+:set surface_iso|surf_iso <n>          " Gaussian-mode iso-level for mesh extraction (0.05-5.0, default: 1.0)
 :set scope all|current           " Multi-object dispatch (default: all). With `all`, per-object
                                 "   commands (color/show/hide, hotkey repr toggles, zoom/center)
                                 "   apply to every object in the tab. Narrow with `obj <name>`
@@ -1556,7 +1569,8 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Geometric SS fallback** — φ/ψ Ramachandran classifier with 3+/4+ run smoothing, runs when a file has no HELIX/SHEET records (CASP TS, AlphaFold, raw coords)
 - [x] **DSSP-quality SS** — Kabsch & Sander H-bond model with n-turn helix (α / 3₁₀ / π) + bridge β-sheet detection + ladder propagation with bulge connection (`:dssp`, per-state cached for trajectories). Validated against `mkdssp 4.5` on 15 PDB structures: 13 match at 100% (incl. 4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ); 1AKE / 7TIM at 99% — remaining mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff. Optional 8-class output not yet exposed
 - [x] **Pixel-mode label rendering** — embedded TTF (SpaceMono-Regular) rasterized via stb_truetype into the RGB framebuffer; covers residue labels, measurement values, and $sele/pk highlight rings in both live pixel mode and offscreen `:screenshot`
-- [x] **Solvent-accessible surface area (SASA)** — faithful port of PDB-REDO/dssp accessibility (401-point Fibonacci surface-dot integration, dssp-specific radii). `:sasa` (total + per-chain Å², mean relative accessibility), `:color sasa` / `ca` buried→exposed gradient (relative to Tien-2013 max-ASA), per-state cached. Validated against `mkdssp 4.x`: 1CRN/1UBQ/1KX5 within <0.1% total SASA. Surface *mesh / silhouette* rendering still pending
+- [x] **Solvent-accessible surface area (SASA)** — faithful port of PDB-REDO/dssp accessibility (401-point Fibonacci surface-dot integration, dssp-specific radii). `:sasa` (total + per-chain Å², mean relative accessibility), `:color sasa` / `ca` buried→exposed gradient (relative to Tien-2013 max-ASA), per-state cached. Validated against `mkdssp 4.x`: 1CRN/1UBQ/1KX5 within <0.1% total SASA
+- [x] **Molecular surface** — marching-cubes iso-surface (`:show surface`) in four modes via `:set surface_mode`: **ses** (solvent-excluded, default), **sas** (solvent-accessible), **vdw**, and **gaussian** (metaball blobs). Tunable via `surface_probe` (SES/SAS probe radius), `surface_resolution` (grid spacing), `surface_scale` (atom radius ×vdW), and `surface_smoothness`/`surface_iso` (gaussian mode). Honours color schemes and per-atom colors
 - [x] **Stereoscopic view** — `:set stereo walleye|crosseye` splits the viewport into two ±half-angle Y-rotated renders; `:set stereo_angle <deg>` (default 6°) controls parallax. Labels, measurements, focus-dim, and interface overlay all render per eye. `:export` emits the matching `stereo` / `set stereo_angle` lines so the same view loads in PyMOL
 - [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
 

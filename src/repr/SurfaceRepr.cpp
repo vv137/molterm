@@ -318,6 +318,12 @@ const int kTriTable[256][16] = {
     {-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1},
 };
 
+// Marching-cube corner -> (di,dj,dk) grid offsets (matches kEdgeCorners).
+constexpr int kCornerOffset[8][3] = {
+    {0,0,0},{1,0,0},{1,0,1},{0,0,1},
+    {0,1,0},{1,1,0},{1,1,1},{0,1,1},
+};
+
 // FNV-1a accumulation helpers for the cache key.
 inline void fnv(std::uint64_t& h, std::uint64_t v) {
     h ^= v;
@@ -337,6 +343,8 @@ void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
 
     // ---- cache key over everything that affects geometry or colour ---------
     std::uint64_t key = 1469598103934665603ULL;
+    fnv(key, static_cast<std::uint64_t>(mode_));
+    fnvf(key, probe_);
     fnvf(key, resolution_);
     fnvf(key, scale_);
     fnvf(key, smoothness_);
@@ -356,8 +364,8 @@ void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
     cacheValid_ = true;
     mesh_.clear();
 
-    // ---- collect visible atoms with radius and per-atom colour -------------
-    struct Blob { float x, y, z; float r; int idx; int color; };
+    // ---- collect visible atoms (radius = scale*vdW) ------------------------
+    struct Blob { float x, y, z; float r; int idx; };
     std::vector<Blob> blobs;
     blobs.reserve(atoms.size());
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
@@ -365,16 +373,22 @@ void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
         const auto& a = atoms[i];
         float r = scale_ * vdwRadius(a.element);
         if (r < 0.1f) r = 0.1f;
-        blobs.push_back({a.x, a.y, a.z, r, i, ctx.colorFor(i)});
+        blobs.push_back({a.x, a.y, a.z, r, i});
     }
     if (blobs.empty()) return;
 
-    const float k = smoothness_;
-    // Kernel contribution falls below ~0.02*iso at d = r*sqrt(1 + cut/k).
-    const float cutTerm = 3.9f;  // -ln(0.02)
-    float maxCutFactor = std::sqrt(1.0f + cutTerm / k);
+    const bool gaussian = (mode_ == Mode::Gaussian);
+    // probe enters the geometry only for SES/SAS; SES collapses to vdW at p≈0.
+    const float probe = (mode_ == Mode::Ses || mode_ == Mode::Sas)
+                            ? probe_ : 0.0f;
+    const bool ses = (mode_ == Mode::Ses && probe > 0.05f);
 
-    // ---- bounding box (expanded by the largest blob's cutoff) --------------
+    // Gaussian kernel: contribution exp(-k*(d^2/r^2-1)) drops below ~0.02 at
+    // d = r*sqrt(1 + 3.9/k). Geometric modes reach out to one probe past vdW.
+    const float k = smoothness_;
+    const float gaussCutFactor = std::sqrt(1.0f + 3.9f / k);
+
+    // ---- bounding box, padded so the grid border is outside the surface ----
     float minX = blobs[0].x, minY = blobs[0].y, minZ = blobs[0].z;
     float maxX = minX, maxY = minY, maxZ = minZ;
     float maxR = 0.0f;
@@ -384,13 +398,14 @@ void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
         minZ = std::min(minZ, b.z); maxZ = std::max(maxZ, b.z);
         maxR = std::max(maxR, b.r);
     }
-    float pad = maxR * maxCutFactor + 1.0f;
+    float pad = gaussian ? (maxR * gaussCutFactor + 1.0f)
+                         : (maxR + probe + 3.0f * resolution_);
     minX -= pad; minY -= pad; minZ -= pad;
     maxX += pad; maxY += pad; maxZ += pad;
 
     // ---- grid sizing, coarsened if it would exceed the cell budget ---------
     float spacing = resolution_;
-    constexpr std::int64_t kMaxCells = 12000000;  // ~48 MB float grid
+    constexpr std::int64_t kMaxCells = 8000000;  // ~32 MB per float grid
     auto dimsFor = [&](float sp, int& nx, int& ny, int& nz) {
         nx = static_cast<int>((maxX - minX) / sp) + 2;
         ny = static_cast<int>((maxY - minY) / sp) + 2;
@@ -400,73 +415,161 @@ void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
     dimsFor(spacing, nx, ny, nz);
     std::int64_t cells = static_cast<std::int64_t>(nx) * ny * nz;
     if (cells > kMaxCells) {
-        float growth = std::cbrt(static_cast<float>(cells) /
-                                 static_cast<float>(kMaxCells));
-        spacing *= growth;
+        spacing *= std::cbrt(static_cast<float>(cells) /
+                             static_cast<float>(kMaxCells));
         dimsFor(spacing, nx, ny, nz);
     }
     if (nx < 2 || ny < 2 || nz < 2) return;
 
+    const std::size_t nCells = static_cast<std::size_t>(nx) * ny * nz;
     auto gidx = [nx, ny](int i, int j, int kk) {
         return (static_cast<std::size_t>(kk) * ny + j) * nx + i;
     };
-    std::vector<float> density(static_cast<std::size_t>(nx) * ny * nz, 0.0f);
-    std::vector<int> owner(density.size(), -1);
-    std::vector<float> ownerVal(density.size(), 0.0f);
+    std::vector<float> field(nCells, gaussian ? 0.0f : 1e9f);
+    std::vector<int> owner(nCells, -1);
 
-    // ---- splat each blob's Gaussian into the grid --------------------------
-    // contribution(d) = exp(-k*(d^2/r^2 - 1)); equals 1.0 at d=r.
-    for (const auto& b : blobs) {
-        float cut = b.r * maxCutFactor;
-        int i0 = std::max(0, static_cast<int>((b.x - cut - minX) / spacing));
-        int i1 = std::min(nx - 1, static_cast<int>((b.x + cut - minX) / spacing) + 1);
-        int j0 = std::max(0, static_cast<int>((b.y - cut - minY) / spacing));
-        int j1 = std::min(ny - 1, static_cast<int>((b.y + cut - minY) / spacing) + 1);
-        int k0 = std::max(0, static_cast<int>((b.z - cut - minZ) / spacing));
-        int k1 = std::min(nz - 1, static_cast<int>((b.z + cut - minZ) / spacing) + 1);
-        float invr2 = 1.0f / (b.r * b.r);
-        for (int kk = k0; kk <= k1; ++kk) {
-            float wz = minZ + kk * spacing;
-            float dz = wz - b.z;
-            for (int j = j0; j <= j1; ++j) {
-                float wy = minY + j * spacing;
-                float dy = wy - b.y;
-                float dyz2 = dy * dy + dz * dz;
-                for (int i = i0; i <= i1; ++i) {
-                    float wx = minX + i * spacing;
-                    float dx = wx - b.x;
-                    float d2 = dx * dx + dyz2;
-                    float e = k - k * d2 * invr2;  // -k*(d^2/r^2 - 1)
-                    if (e < -4.0f) continue;       // contribution < ~0.018
-                    float c = std::exp(e);
-                    std::size_t g = gidx(i, j, kk);
-                    density[g] += c;
-                    if (c > ownerVal[g]) { ownerVal[g] = c; owner[g] = b.idx; }
+    // For each blob, the grid sub-box of cells it can influence.
+    auto blobBox = [&](const Blob& b, float cut,
+                       int& i0, int& i1, int& j0, int& j1, int& k0, int& k1) {
+        i0 = std::max(0, static_cast<int>((b.x - cut - minX) / spacing));
+        i1 = std::min(nx - 1, static_cast<int>((b.x + cut - minX) / spacing) + 1);
+        j0 = std::max(0, static_cast<int>((b.y - cut - minY) / spacing));
+        j1 = std::min(ny - 1, static_cast<int>((b.y + cut - minY) / spacing) + 1);
+        k0 = std::max(0, static_cast<int>((b.z - cut - minZ) / spacing));
+        k1 = std::min(nz - 1, static_cast<int>((b.z + cut - minZ) / spacing) + 1);
+    };
+
+    float iso;
+    if (gaussian) {
+        // Sum of Gaussian blobs; iso=isoValue_, surface at scale*vdW.
+        std::vector<float> ownerVal(nCells, 0.0f);
+        for (const auto& b : blobs) {
+            int i0, i1, j0, j1, k0, k1;
+            blobBox(b, b.r * gaussCutFactor, i0, i1, j0, j1, k0, k1);
+            float invr2 = 1.0f / (b.r * b.r);
+            for (int kk = k0; kk <= k1; ++kk) {
+                float dz = (minZ + kk * spacing) - b.z;
+                for (int j = j0; j <= j1; ++j) {
+                    float dy = (minY + j * spacing) - b.y;
+                    float dyz2 = dy * dy + dz * dz;
+                    for (int i = i0; i <= i1; ++i) {
+                        float dx = (minX + i * spacing) - b.x;
+                        float e = k - k * (dx * dx + dyz2) * invr2;
+                        if (e < -4.0f) continue;
+                        float c = std::exp(e);
+                        std::size_t g = gidx(i, j, kk);
+                        field[g] += c;
+                        if (c > ownerVal[g]) { ownerVal[g] = c; owner[g] = b.idx; }
+                    }
                 }
             }
         }
+        iso = isoValue_;
+    } else {
+        // Signed distance to the nearest atom surface: nearVdw = min(|p-c|-r).
+        // Reuse `field` as nearVdw, then convert per mode below.
+        for (const auto& b : blobs) {
+            int i0, i1, j0, j1, k0, k1;
+            blobBox(b, b.r + probe + 2.0f * spacing, i0, i1, j0, j1, k0, k1);
+            for (int kk = k0; kk <= k1; ++kk) {
+                float dz = (minZ + kk * spacing) - b.z;
+                for (int j = j0; j <= j1; ++j) {
+                    float dy = (minY + j * spacing) - b.y;
+                    float dyz2 = dy * dy + dz * dz;
+                    for (int i = i0; i <= i1; ++i) {
+                        float dx = (minX + i * spacing) - b.x;
+                        float sd = std::sqrt(dx * dx + dyz2) - b.r;
+                        std::size_t g = gidx(i, j, kk);
+                        if (sd < field[g]) { field[g] = sd; owner[g] = b.idx; }
+                    }
+                }
+            }
+        }
+
+        if (!ses) {
+            // vdW (iso=0) or SAS (iso=-probe): inside ⇔ nearVdw <= probe.
+            // Flip sign so marching-cubes "inside = field>=iso" holds.
+            for (std::size_t g = 0; g < nCells; ++g) field[g] = -field[g];
+            iso = -probe;  // 0 for plain vdW (probe==0)
+        } else {
+            // SES: a cell is a probe centre if nearVdw>=probe ("accessible").
+            // distAcc(p) = distance to nearest accessible cell; the molecule
+            // (SES interior) is everything farther than `probe` from any probe
+            // centre, so iso=probe carves out exactly what the probe reaches.
+            std::vector<float> nearVdw = std::move(field);
+            field.assign(nCells, 1e9f);
+            // One linear pass to a byte mask, so the per-cell 7-neighbour
+            // boundary test below is contiguous byte reads instead of repeated
+            // float compares + index math.
+            std::vector<char> acc(nCells);
+            for (std::size_t g = 0; g < nCells; ++g)
+                acc[g] = nearVdw[g] >= probe ? 1 : 0;
+            int boxCells = static_cast<int>(probe / spacing) + 1;
+            for (int kk = 0; kk < nz; ++kk) {
+                for (int j = 0; j < ny; ++j) {
+                    for (int i = 0; i < nx; ++i) {
+                        std::size_t g0 = gidx(i, j, kk);
+                        if (!acc[g0]) continue;
+                        field[g0] = 0.0f;  // probe centre: exterior
+                        // Only boundary probe centres carve the surface.
+                        bool boundary =
+                            i == 0 || i == nx - 1 || j == 0 || j == ny - 1 ||
+                            kk == 0 || kk == nz - 1 ||
+                            !acc[gidx(i - 1, j, kk)] || !acc[gidx(i + 1, j, kk)] ||
+                            !acc[gidx(i, j - 1, kk)] || !acc[gidx(i, j + 1, kk)] ||
+                            !acc[gidx(i, j, kk - 1)] || !acc[gidx(i, j, kk + 1)];
+                        if (!boundary) continue;
+                        float qx = minX + i * spacing;
+                        float qy = minY + j * spacing;
+                        float qz = minZ + kk * spacing;
+                        int i0 = std::max(0, i - boxCells), i1 = std::min(nx - 1, i + boxCells);
+                        int j0 = std::max(0, j - boxCells), j1 = std::min(ny - 1, j + boxCells);
+                        int k0 = std::max(0, kk - boxCells), k1 = std::min(nz - 1, kk + boxCells);
+                        for (int z = k0; z <= k1; ++z) {
+                            float dz = (minZ + z * spacing) - qz;
+                            for (int y = j0; y <= j1; ++y) {
+                                float dy = (minY + y * spacing) - qy;
+                                float dyz2 = dy * dy + dz * dz;
+                                for (int x = i0; x <= i1; ++x) {
+                                    std::size_t g = gidx(x, y, z);
+                                    if (acc[g]) continue;  // skip accessible cells
+                                    float dx = (minX + x * spacing) - qx;
+                                    float d = std::sqrt(dx * dx + dyz2);
+                                    if (d < field[g]) field[g] = d;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            iso = probe;
+        }
     }
 
-    // ---- marching cubes ----------------------------------------------------
-    const float iso = isoValue_;
-    auto cornerOffset = [](int corner, int& di, int& dj, int& dk) {
-        static const int off[8][3] = {
-            {0,0,0},{1,0,0},{1,0,1},{0,0,1},
-            {0,1,0},{1,1,0},{1,1,1},{0,1,1},
-        };
-        di = off[corner][0]; dj = off[corner][1]; dk = off[corner][2];
+    marchingCubes(field, owner, nx, ny, nz, minX, minY, minZ, spacing, iso,
+                  ctx, blobs[0].idx);
+}
+
+void SurfaceRepr::marchingCubes(const std::vector<float>& field,
+                                const std::vector<int>& owner,
+                                int nx, int ny, int nz,
+                                float minX, float minY, float minZ,
+                                float spacing, float iso,
+                                const RenderContext& ctx, int fallbackAtom) {
+    auto gidx = [nx, ny](int i, int j, int kk) {
+        return (static_cast<std::size_t>(kk) * ny + j) * nx + i;
     };
 
-    mesh_.reserve(blobs.size() * 4);
+    mesh_.reserve(field.size() / 64 + 16);
     for (int kk = 0; kk < nz - 1; ++kk) {
         for (int j = 0; j < ny - 1; ++j) {
             for (int i = 0; i < nx - 1; ++i) {
                 float val[8];
                 int cubeIndex = 0;
                 for (int c = 0; c < 8; ++c) {
-                    int di, dj, dk;
-                    cornerOffset(c, di, dj, dk);
-                    val[c] = density[gidx(i + di, j + dj, kk + dk)];
+                    val[c] = field[gidx(i + kCornerOffset[c][0],
+                                        j + kCornerOffset[c][1],
+                                        kk + kCornerOffset[c][2])];
                     if (val[c] >= iso) cubeIndex |= (1 << c);
                 }
                 int edges = kEdgeTable[cubeIndex];
@@ -478,32 +581,31 @@ void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
                 for (int e = 0; e < 12; ++e) {
                     if (!(edges & (1 << e))) continue;
                     int ca = kEdgeCorners[e][0], cb = kEdgeCorners[e][1];
-                    int dia, dja, dka, dib, djb, dkb;
-                    cornerOffset(ca, dia, dja, dka);
-                    cornerOffset(cb, dib, djb, dkb);
-                    float xa = minX + (i + dia) * spacing;
-                    float ya = minY + (j + dja) * spacing;
-                    float za = minZ + (kk + dka) * spacing;
-                    float xb = minX + (i + dib) * spacing;
-                    float yb = minY + (j + djb) * spacing;
-                    float zb = minZ + (kk + dkb) * spacing;
+                    const int* oa = kCornerOffset[ca];
+                    const int* ob = kCornerOffset[cb];
+                    float xa = minX + (i + oa[0]) * spacing;
+                    float ya = minY + (j + oa[1]) * spacing;
+                    float za = minZ + (kk + oa[2]) * spacing;
+                    float xb = minX + (i + ob[0]) * spacing;
+                    float yb = minY + (j + ob[1]) * spacing;
+                    float zb = minZ + (kk + ob[2]) * spacing;
                     float va = val[ca], vb = val[cb];
                     float t = (std::abs(vb - va) > 1e-6f)
                                   ? (iso - va) / (vb - va) : 0.5f;
                     vx[e] = xa + t * (xb - xa);
                     vy[e] = ya + t * (yb - ya);
                     vz[e] = za + t * (zb - za);
-                    // Colour by the nearer (denser) corner's owning atom.
+                    // Colour by the nearer corner's owning atom.
                     std::size_t go = (va >= vb)
-                        ? gidx(i + dia, j + dja, kk + dka)
-                        : gidx(i + dib, j + djb, kk + dkb);
+                        ? gidx(i + oa[0], j + oa[1], kk + oa[2])
+                        : gidx(i + ob[0], j + ob[1], kk + ob[2]);
                     vOwner[e] = owner[go];
                 }
 
                 const int* tri = kTriTable[cubeIndex];
                 for (int t = 0; tri[t] != -1; t += 3) {
                     int e0 = tri[t], e1 = tri[t + 1], e2 = tri[t + 2];
-                    int ownerIdx = vOwner[e0] >= 0 ? vOwner[e0] : blobs[0].idx;
+                    int ownerIdx = vOwner[e0] >= 0 ? vOwner[e0] : fallbackAtom;
                     WorldTri wt;
                     wt.x[0] = vx[e0]; wt.y[0] = vy[e0]; wt.z[0] = vz[e0];
                     wt.x[1] = vx[e1]; wt.y[1] = vy[e1]; wt.z[1] = vz[e1];
