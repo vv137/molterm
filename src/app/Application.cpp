@@ -5178,6 +5178,86 @@ void Application::registerCommands() {
             ct->setTubularRadius(v);
             return {true, "Cartoon tubular helix radius: " + std::to_string(v) + " Å"};
         }
+        if (opt == "cartoon_sheet_smooth" || opt == "css") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet_smooth <0-10>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setSheetSmooth(std::stoi(cmd.args[1]));
+            return {true, "Cartoon sheet smoothing passes: " +
+                          std::to_string(ct->sheetSmooth())};
+        }
+        if (opt == "cartoon_sheet_height" || opt == "cshh") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet_height <0.01-2.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setSheetHeight(std::stof(cmd.args[1]));
+            return {true, "Cartoon sheet half-height: " +
+                          std::to_string(ct->sheetHeight()) + " Å"};
+        }
+        if (opt == "cartoon_tension" || opt == "cstn") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_tension <0.0-1.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setTension(std::stof(cmd.args[1]));
+            return {true, "Cartoon loop/sheet tension: " +
+                          std::to_string(ct->tension())};
+        }
+        if (opt == "cartoon_helix_tension" || opt == "chtn") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_helix_tension <0.0-1.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setHelixTension(std::stof(cmd.args[1]));
+            return {true, "Cartoon helix tension: " +
+                          std::to_string(ct->helixTension())};
+        }
+        if (opt == "cartoon_sheet_flat" || opt == "csf") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet_flat <0.0-1.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setSheetFlat(std::stof(cmd.args[1]));
+            return {true, "Cartoon sheet flatten (C→O blend): " +
+                          std::to_string(ct->sheetFlat())};
+        }
+        if (opt == "cartoon_arrow_width" || opt == "caw") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_arrow_width <1.0-4.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setArrowWidth(std::stof(cmd.args[1]));
+            return {true, "Cartoon arrowhead width scale: " +
+                          std::to_string(ct->arrowWidth()) + "×"};
+        }
+        if (opt == "cartoon_frame_smooth" || opt == "cfs") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_frame_smooth <0-10>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setFrameSmooth(std::stoi(cmd.args[1]));
+            return {true, "Cartoon frame smoothing passes: " +
+                          std::to_string(ct->frameSmooth())};
+        }
+        if (opt == "cartoon_width_smooth" || opt == "cws") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_width_smooth <0-10>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setWidthSmooth(std::stoi(cmd.args[1]));
+            return {true, "Cartoon width smoothing passes: " +
+                          std::to_string(ct->widthSmooth())};
+        }
+        if (opt == "cartoon_nucleic_width" || opt == "cnw") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_nucleic_width <0.05-2.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setNucleicWidth(std::stof(cmd.args[1]));
+            return {true, "Cartoon nucleic ribbon half-width: " +
+                          std::to_string(ct->nucleicWidth()) + " Å"};
+        }
+        if (opt == "cartoon_nucleic_height" || opt == "cnh") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_nucleic_height <0.05-2.0>"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            ct->setNucleicHeight(std::stof(cmd.args[1]));
+            return {true, "Cartoon nucleic ribbon half-height: " +
+                          std::to_string(ct->nucleicHeight()) + " Å"};
+        }
         if (opt == "bs_units") {
             if (cmd.args.size() < 2) return {false, "Usage: :set bs_units vdw|cell"};
             auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
@@ -5580,6 +5660,56 @@ void Application::registerCommands() {
             if (!ct) return {false, "Cartoon repr not found"};
             return {true, "cartoon_tubular_radius = " +
                           std::to_string(ct->tubularRadius())};
+        }
+        if (opt == "cartoon_sheet_smooth" || opt == "css") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_sheet_smooth = " + std::to_string(ct->sheetSmooth())};
+        }
+        if (opt == "cartoon_sheet_height" || opt == "cshh") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_sheet_height = " + std::to_string(ct->sheetHeight())};
+        }
+        if (opt == "cartoon_tension" || opt == "cstn") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_tension = " + std::to_string(ct->tension())};
+        }
+        if (opt == "cartoon_helix_tension" || opt == "chtn") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_helix_tension = " + std::to_string(ct->helixTension())};
+        }
+        if (opt == "cartoon_sheet_flat" || opt == "csf") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_sheet_flat = " + std::to_string(ct->sheetFlat())};
+        }
+        if (opt == "cartoon_arrow_width" || opt == "caw") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_arrow_width = " + std::to_string(ct->arrowWidth())};
+        }
+        if (opt == "cartoon_frame_smooth" || opt == "cfs") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_frame_smooth = " + std::to_string(ct->frameSmooth())};
+        }
+        if (opt == "cartoon_width_smooth" || opt == "cws") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_width_smooth = " + std::to_string(ct->widthSmooth())};
+        }
+        if (opt == "cartoon_nucleic_width" || opt == "cnw") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_nucleic_width = " + std::to_string(ct->nucleicWidth())};
+        }
+        if (opt == "cartoon_nucleic_height" || opt == "cnh") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            return {true, "cartoon_nucleic_height = " + std::to_string(ct->nucleicHeight())};
         }
         if (opt == "bs_units") {
             auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));

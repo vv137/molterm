@@ -35,6 +35,9 @@ bool CartoonRepr::CacheKey::operator==(const CacheKey& o) const {
            subdiv == o.subdiv &&
            coilSegments == o.coilSegments &&
            helixR == o.helixR && sheetR == o.sheetR && loopR == o.loopR &&
+           sheetSmooth == o.sheetSmooth && frameSmooth == o.frameSmooth &&
+           stdTension == o.stdTension && helixTension == o.helixTension &&
+           sheetFlat == o.sheetFlat &&
            nb == o.nb &&
            colorScheme == o.colorScheme &&
            atomColorsSize == o.atomColorsSize &&
@@ -74,6 +77,11 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     key.helixR = helixRadius_;
     key.sheetR = sheetRadius_;
     key.loopR = loopRadius_;
+    key.sheetSmooth = sheetSmooth_;
+    key.frameSmooth = frameSmooth_;
+    key.stdTension = stdTension_;
+    key.helixTension = helixTension_;
+    key.sheetFlat = sheetFlat_;
     key.nb = nucleicBackbone_;
     key.colorScheme = static_cast<int>(mol.colorScheme());
     {
@@ -209,6 +217,34 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
                        hx, hy, hz, hasHint, nucleic});
     }
 
+    // ── Phase A.5: flatten β-strands by smoothing sheet Cα anchors ───────
+    // β-sheets are pleated, so a spline through raw Cα positions zig-zags
+    // and the strand ribbon visibly wobbles. Averaging each sheet residue's
+    // anchor with its in-chain neighbours (PyMOL `cartoon_flat_sheets`)
+    // takes the pleat out before the spline is built. Iterated sheetSmooth_
+    // times; 0 restores raw Cα tracing. Chain-boundary residues are left
+    // untouched so strands don't bleed across chain breaks.
+    if (sheetSmooth_ > 0 && traces.size() >= 3) {
+        // Snapshot buffers allocated once and reused each pass: we read
+        // neighbours from the snapshot while writing the smoothed result
+        // straight back into traces, so an in-pass write can't contaminate
+        // its own neighbours.
+        std::vector<float> px(traces.size()), py(traces.size()), pz(traces.size());
+        for (int pass = 0; pass < sheetSmooth_; ++pass) {
+            for (std::size_t k = 0; k < traces.size(); ++k) {
+                px[k] = traces[k].x; py[k] = traces[k].y; pz[k] = traces[k].z;
+            }
+            for (std::size_t k = 1; k + 1 < traces.size(); ++k) {
+                if (traces[k].ss != SSType::Sheet) continue;
+                if (traces[k - 1].chain != traces[k].chain ||
+                    traces[k + 1].chain != traces[k].chain) continue;
+                traces[k].x = 0.25f * px[k - 1] + 0.5f * px[k] + 0.25f * px[k + 1];
+                traces[k].y = 0.25f * py[k - 1] + 0.5f * py[k] + 0.25f * py[k + 1];
+                traces[k].z = 0.25f * pz[k - 1] + 0.5f * pz[k] + 0.25f * pz[k + 1];
+            }
+        }
+    }
+
     // ── Phase B: per chain, build local spine + frame, append to cache ──
     std::size_t cStart = 0;
     while (cStart < traces.size()) {
@@ -235,12 +271,11 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
             // Mol*-style helix tension: a tighter spline through helices
             // makes the ribbon hug the residue centres so the elliptical
             // tube doesn't bulge out at curved helix ends. Both endpoints
-            // helix → use HelixTension; otherwise standard.
-            const float kHelixTension = 0.9f;
-            const float kStdTension   = 0.5f;
+            // helix → use helixTension_; otherwise stdTension_ (both are
+            // :set-tunable via cartoon_helix_tension / cartoon_tension).
             float tension = (traces[i1].ss == SSType::Helix &&
                              traces[i2].ss == SSType::Helix)
-                              ? kHelixTension : kStdTension;
+                              ? helixTension_ : stdTension_;
 
             for (int s = 0; s < subdiv; ++s) {
                 float t = static_cast<float>(s) / static_cast<float>(subdiv);
@@ -330,9 +365,10 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
                     prevPx = px; prevPy = py; prevPz = pz;
                     hasPrev = true;
 
-                    float bbx = 0.65f * px + 0.35f * bx[j];
-                    float bby = 0.65f * py + 0.35f * by[j];
-                    float bbz = 0.65f * pz + 0.35f * bz[j];
+                    float f = sheetFlat_, g = 1.0f - sheetFlat_;
+                    float bbx = f * px + g * bx[j];
+                    float bby = f * py + g * by[j];
+                    float bbz = f * pz + g * bz[j];
                     if (normalize3(bbx, bby, bbz) < 1e-6f) continue;
 
                     float newNx, newNy, newNz;
@@ -349,8 +385,9 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
         // the rough edges off SS-boundary frame transitions. We average
         // each interior normal with its neighbours, re-orthogonalise
         // against the tangent, and rebuild the binormal. Endpoints keep
-        // their original frame to anchor the chain ends.
-        if (nPts >= 3) {
+        // their original frame to anchor the chain ends. Repeated
+        // frameSmooth_ times (0 = leave the parallel-transport frame raw).
+        if (nPts >= 3) for (int pass = 0; pass < frameSmooth_; ++pass) {
             std::vector<float> nx2(nPts), ny2(nPts), nz2(nPts);
             nx2[0] = nx[0]; ny2[0] = ny[0]; nz2[0] = nz[0];
             nx2[nPts-1] = nx[nPts-1]; ny2[nPts-1] = ny[nPts-1]; nz2[nPts-1] = nz[nPts-1];
@@ -409,8 +446,8 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
     // Nucleic backbone uses a flat ribbon ("square" profile in Mol*
     // parlance — wider than tall) so DNA/RNA reads as a ribbon rather
     // than a thin coil indistinguishable from a protein loop.
-    constexpr float kNucleicHalfW = 0.60f;     // Å
-    constexpr float kNucleicHalfH = 0.30f;     // Å
+    const float kNucleicHalfW = nucleicWidth_;     // Å (:set cartoon_nucleic_width)
+    const float kNucleicHalfH = nucleicHeight_;    // Å (:set cartoon_nucleic_height)
 
     auto ssHalfW = [&](SSType ss, bool nucleic) -> float {
         if (nucleic) return kNucleicHalfW;
@@ -429,7 +466,7 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
                 // Elliptical: half-width / aspect → flat ribbon.
                 return tubularHelix_ ? tubularRadius_
                                      : helixRadius_ / helixAspect_;
-            case SSType::Sheet: return 0.20f;
+            case SSType::Sheet: return sheetHeight_;  // :set cartoon_sheet_height
             default:            return loopRadius_;
         }
     };
@@ -452,10 +489,10 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
             halfW[j] = ssHalfW(C.ss[gi], nucleic);
             halfH[j] = ssHalfH(C.ss[gi], nucleic);
         }
-        // Two passes of 3-point averaging — close to a smoothstep over
-        // a 5-point window without the boundary artefacts of a single
-        // wider blur.
-        for (int pass = 0; pass < 2; ++pass) {
+        // widthSmooth_ passes of 3-point averaging — two passes (default)
+        // is close to a smoothstep over a 5-point window without the
+        // boundary artefacts of a single wider blur. :set cartoon_width_smooth.
+        for (int pass = 0; pass < widthSmooth_; ++pass) {
             std::vector<float> w2 = halfW, h2 = halfH;
             for (int j = 1; j < nPts - 1; ++j) {
                 w2[j] = (halfW[j-1] + halfW[j] + halfW[j+1]) / 3.0f;
@@ -479,9 +516,10 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
             const bool isHelix = !isNuc && (C.ss[gi] == SSType::Helix);
 
             if (C.arrowFrac[gi] >= 0.0f) {
-                constexpr float kArrowTipScale = 2.20f / 1.50f;
+                // Arrowhead base flares to arrowWidth_× the strand half-width
+                // at the tip (af=1). :set cartoon_arrow_width.
                 float af = C.arrowFrac[gi];
-                hw *= 1.0f + (kArrowTipScale - 1.0f) * af;
+                hw *= 1.0f + (arrowWidth_ - 1.0f) * af;
             }
 
             std::vector<Vert> ring;
