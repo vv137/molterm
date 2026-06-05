@@ -7221,6 +7221,13 @@ void Application::registerCommands() {
         bool fastPathOk = !app.hasSelectionHighlight() || app.screenshotOverlay();
         if (app.rendererType() == RendererType::Pixel && reqPixW == 0 && fastPathOk) {
             auto* pc = dynamic_cast<PixelCanvas*>(app.canvas());
+            // The live framebuffer can still hold the *previous* frame: a
+            // screenshot runs inside processInput(), before the loop renders
+            // the deferred frame. When a redraw is pending, reconcile it first
+            // so pending state — :set bg, repr toggles, camera moves made this
+            // turn — lands in the PNG instead of lagging a frame behind. Gated
+            // on needsRedraw_ so the steady state isn't double-rendered.
+            if (pc && app.needsRedraw_) app.renderViewport();
             if (pc && pc->savePNG(path, reqDpi)) {
                 double dt = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - t0).count();
