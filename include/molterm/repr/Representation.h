@@ -15,11 +15,13 @@ struct RenderContext {
     const MolObject& mol;
     const std::vector<AtomData>& atoms;
     ColorScheme scheme;
-    const std::vector<float>* rainbowData;  // nullptr if not Rainbow
+    // Per-atom scalar channel for gradient schemes (nullptr otherwise).
+    // See Representation::scalarChannel for which schemes feed it.
+    const std::vector<float>* scalarData;
     std::vector<bool> atomVis;               // per-atom visibility mask (empty = all visible)
 
-    float rainbowFrac(int i) const {
-        return rainbowData ? (*rainbowData)[i] : -1.0f;
+    float scalarFrac(int i) const {
+        return scalarData ? (*scalarData)[i] : -1.0f;
     }
 
     bool visible(int i) const {
@@ -28,7 +30,7 @@ struct RenderContext {
 
     int colorFor(int i) const {
         return ColorMapper::colorForAtom(atoms[i], scheme,
-                                         mol.atomColor(i), rainbowFrac(i));
+                                         mol.atomColor(i), scalarFrac(i));
     }
 };
 
@@ -44,15 +46,28 @@ public:
     virtual void render(const MolObject& mol, const Camera& cam,
                         Canvas& canvas) = 0;
 
+public:
+    // The per-atom scalar channel a colour scheme reads, or nullptr if it
+    // uses none. Rainbow feeds N→C fractions; SASA feeds relative
+    // accessibility. Single source of truth so every renderer routes the
+    // same way (used by makeContext and by reprs that build their own ctx).
+    static const std::vector<float>* scalarChannel(const MolObject& mol,
+                                                   ColorScheme scheme) {
+        switch (scheme) {
+            case ColorScheme::Rainbow: return &mol.rainbowFractions();
+            case ColorScheme::SASA:    return &mol.sasaRelFractions();
+            default:                   return nullptr;
+        }
+    }
+
 protected:
     // Build a RenderContext for the given mol and repr type.
     // Returns nullopt-like empty context if repr should not render.
     // Call at the start of every render() to replace the boilerplate.
     static RenderContext makeContext(const MolObject& mol, ReprType repr) {
         auto scheme = mol.colorScheme();
-        const std::vector<float>* rbw =
-            (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
-        return {mol, mol.atoms(), scheme, rbw, mol.atomVisMask(repr)};
+        return {mol, mol.atoms(), scheme, scalarChannel(mol, scheme),
+                mol.atomVisMask(repr)};
     }
 
     // Convert a repr parameter (thickness, radius) to sub-pixels, clamped to min.

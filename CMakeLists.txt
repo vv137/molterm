@@ -73,6 +73,7 @@ set(MOLTERM_SOURCES
     src/core/Logger.cpp
     src/core/BondTable.cpp
     src/core/DSSP.cpp
+    src/core/SASA.cpp
     # IO
     src/io/CifLoader.cpp
     src/io/CcdCache.cpp

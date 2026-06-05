@@ -4,6 +4,7 @@
 #include "molterm/app/PathPatterns.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/RegisterExpr.h"
+#include "molterm/core/SASA.h"
 #include "molterm/io/Aligner.h"
 #include "molterm/io/CifLoader.h"
 #include "molterm/io/PdbWriter.h"
@@ -4450,6 +4451,9 @@ void Application::registerCommands() {
         if (first == "restype" || first == "type") {
             return applyScheme(ColorScheme::ResType, "Coloring by residue type (nonpolar/polar/acidic/basic)");
         }
+        if (first == "sasa" || first == "accessibility") {
+            return applyScheme(ColorScheme::SASA, "Coloring by accessibility (buried→exposed)");
+        }
         if (first == "clear" || first == "reset") {
             int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
                 t.obj->clearAtomColors();
@@ -8148,6 +8152,68 @@ void Application::registerCommands() {
                       std::to_string(obj->activeState() + 1) + ")"};
     }, ":dssp", "Recompute secondary structure (Kabsch-Sander) for the current state",
        {":dssp"}, "Analysis");
+
+    // :sasa — Compute solvent accessible surface area (SASA) for the current
+    // state using the PDB-REDO/dssp accessibility model, and report total /
+    // per-chain absolute area (Å²) plus mean relative accessibility.
+    cmdRegistry_.registerCmd("sasa", [](Application& app, const ParsedCommand&) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object loaded"};
+        obj->invalidateSASACache();
+        const auto& sasa = obj->sasaAtState(obj->activeState());
+        const auto& atoms = obj->atoms();
+        if (sasa.size() != atoms.size()) {
+            return {false, "SASA: size mismatch (state " +
+                           std::to_string(obj->activeState() + 1) + ")"};
+        }
+
+        double total = 0.0;
+        std::vector<std::pair<std::string, double>> chains;   // ordered
+        for (size_t i = 0; i < atoms.size(); ++i) {
+            total += sasa[i];
+            const std::string& c = atoms[i].chainId;
+            auto it = std::find_if(chains.begin(), chains.end(),
+                                   [&](const auto& p) { return p.first == c; });
+            if (it == chains.end()) chains.push_back({c, sasa[i]});
+            else it->second += sasa[i];
+        }
+
+        // Mean relative accessibility over standard amino-acid residues.
+        const auto& rel = obj->sasaRelFractions();
+        double relSum = 0.0;
+        int relCount = 0;
+        for (size_t i = 0; i < atoms.size();) {
+            size_t j = i;
+            while (j < atoms.size() &&
+                   atoms[j].chainId == atoms[i].chainId &&
+                   atoms[j].resSeq  == atoms[i].resSeq &&
+                   atoms[j].insCode == atoms[i].insCode) ++j;
+            if (!atoms[i].isHet && molterm::sasa::maxAsa(atoms[i].resName) > 0.0f &&
+                rel.size() == atoms.size()) {
+                relSum += rel[i];
+                ++relCount;
+            }
+            i = j;
+        }
+
+        char buf[64];
+        auto fmt = [&](const char* spec, double v) {
+            std::snprintf(buf, sizeof(buf), spec, v);
+            return std::string(buf);
+        };
+
+        std::string chainStr;
+        for (const auto& [chainId, chainSasa] : chains) {
+            if (!chainStr.empty()) chainStr += ", ";
+            chainStr += (chainId.empty() ? "_" : chainId) + ": " + fmt("%.1f", chainSasa);
+        }
+
+        std::string msg = "SASA: " + fmt("%.1f", total) + " Å² total (" + chainStr + ")";
+        if (relCount > 0) msg += "; mean rel " + fmt("%.2f", relSum / relCount);
+        msg += " (state " + std::to_string(obj->activeState() + 1) + ")";
+        return {true, msg};
+    }, ":sasa", "Compute solvent accessible surface area (PDB-REDO/dssp) for the current state",
+       {":sasa"}, "Analysis");
 }
 
 // ----------------------------------------------------------------------

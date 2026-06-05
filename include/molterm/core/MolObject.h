@@ -27,6 +27,7 @@ enum class ColorScheme {
     PLDDT,
     Rainbow,
     ResType,   // VMD-like: nonpolar/polar/acidic/basic
+    SASA,      // solvent accessibility: buried → exposed
     Uniform,
 };
 
@@ -147,6 +148,17 @@ public:
     // labels rather than triggering a fresh DSSP run.
     void seedSSCacheFromAtoms(int stateIdx) const;
 
+    // Per-state SASA cache (solvent accessible surface area, Å²). Computed
+    // via molterm::sasa::compute on demand and stored per state index, like
+    // the DSSP cache above. Returns per-atom absolute SASA for `stateIdx`
+    // (length == atoms in that state).
+    const std::vector<float>& sasaAtState(int stateIdx) const;
+    void invalidateSASACache();   // call when atoms / coordinates change
+    // Per-atom relative accessibility [0,1] for the active state — residue
+    // SASA / residue max-ASA, expanded per atom. Drives ColorScheme::SASA,
+    // mirroring rainbowFractions(). Lazily built and cached.
+    const std::vector<float>& sasaRelFractions() const;
+
 private:
     std::string name_;
     std::string sourcePath_;
@@ -170,6 +182,13 @@ private:
     // state's atoms. Lazily populated by ssAtState(). Cleared by
     // invalidateSSCache() (e.g. when atoms or settings change).
     mutable std::vector<std::vector<SSType>> ssPerState_;
+
+    // Per-state SASA cache: sasaPerState_[stateIdx] = per-atom absolute SASA
+    // (Å²). Lazily populated by sasaAtState(); sasaRelCache_ holds the
+    // active state's per-atom relative accessibility for colouring. Both
+    // cleared by invalidateSASACache().
+    mutable std::vector<std::vector<float>> sasaPerState_;
+    mutable std::vector<float> sasaRelCache_;
 };
 
 } // namespace molterm

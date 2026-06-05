@@ -1,6 +1,7 @@
 #include "molterm/core/MolObject.h"
 #include "molterm/core/BondTable.h"
 #include "molterm/core/DSSP.h"
+#include "molterm/core/SASA.h"
 #include "molterm/repr/Representation.h"
 #include <algorithm>
 #include <limits>
@@ -190,6 +191,7 @@ void MolObject::removeAtoms(const std::vector<int>& remove) {
     reprAtomMask_ = std::move(trimmed->reprAtomMask_);
     rainbowCache_.clear();
     invalidateSSCache();
+    invalidateSASACache();
     // states_ is dropped — see subset() rationale.
     states_.clear();
 }
@@ -270,6 +272,7 @@ bool MolObject::setActiveState(int idx) {
     activeState_ = idx;
     atoms_ = states_[idx];
     rainbowCache_.clear();
+    sasaRelCache_.clear();   // relative accessibility is per-state
     // Sync atoms_[i].ssType from the per-state DSSP cache (computed on
     // demand). Trajectory frames may have different SS, so the cartoon
     // mesh cache (keyed on activeState) will pick up the change.
@@ -327,6 +330,41 @@ void MolObject::seedSSCacheFromAtoms(int stateIdx) const {
     auto& cell = ssPerState_[stateIdx];
     cell.resize(atoms_.size());
     for (size_t i = 0; i < atoms_.size(); ++i) cell[i] = atoms_[i].ssType;
+}
+
+const std::vector<float>& MolObject::sasaAtState(int stateIdx) const {
+    static const std::vector<float> kEmpty;
+
+    int nStates = std::max<int>(1, static_cast<int>(states_.size()));
+    if (stateIdx < 0 || stateIdx >= nStates) return kEmpty;
+
+    if ((int)sasaPerState_.size() < nStates) sasaPerState_.resize(nStates);
+
+    auto& cell = sasaPerState_[stateIdx];
+    if (!cell.empty()) return cell;
+
+    const std::vector<AtomData>* src = &atoms_;
+    if (!states_.empty() && stateIdx < (int)states_.size()) {
+        src = &states_[stateIdx];
+    }
+    cell = molterm::sasa::compute(*src);
+    return cell;
+}
+
+void MolObject::invalidateSASACache() {
+    sasaPerState_.clear();
+    sasaRelCache_.clear();
+}
+
+const std::vector<float>& MolObject::sasaRelFractions() const {
+    if (sasaRelCache_.size() == atoms_.size()) return sasaRelCache_;
+    const auto& abs = sasaAtState(activeState_);
+    if (abs.size() != atoms_.size()) {
+        sasaRelCache_.assign(atoms_.size(), 0.0f);
+        return sasaRelCache_;
+    }
+    sasaRelCache_ = molterm::sasa::relativePerAtom(atoms_, abs);
+    return sasaRelCache_;
 }
 
 std::vector<bool> MolObject::atomVisMask(ReprType r) const {

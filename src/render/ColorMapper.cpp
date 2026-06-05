@@ -37,6 +37,11 @@ void ColorMapper::initColors() {
     init_pair(kColorBFactorMid,  COLOR_GREEN,  -1);
     init_pair(kColorBFactorHigh, COLOR_RED,    -1);
 
+    // SASA gradient (buried → exposed); 256-color overrides below
+    init_pair(kColorSASABuried,  COLOR_BLUE,   -1);
+    init_pair(kColorSASAMid,     COLOR_WHITE,  -1);
+    init_pair(kColorSASAExposed, COLOR_RED,    -1);
+
     // UI colors
     init_pair(kColorStatusBar,    COLOR_BLACK, COLOR_WHITE);
     init_pair(kColorCommandLine,  COLOR_WHITE, -1);
@@ -122,6 +127,10 @@ void ColorMapper::initColors() {
         init_pair(kColorHeatmap2, 250, -1);   // light gray
         init_pair(kColorHeatmap3, 208, -1);   // orange
         init_pair(kColorHeatmap4, 196, -1);   // bright red
+        // SASA with 256-color precision (buried → exposed)
+        init_pair(kColorSASABuried,  21,  -1);   // deep blue (buried core)
+        init_pair(kColorSASAMid,     250, -1);   // light gray (intermediate)
+        init_pair(kColorSASAExposed, 196, -1);   // bright red (exposed surface)
     } else {
         init_pair(kColorOrange,  COLOR_YELLOW,  -1);
         init_pair(kColorPink,    COLOR_MAGENTA, -1);
@@ -142,7 +151,7 @@ int ColorMapper::colorForRainbow(float fraction) {
 }
 
 int ColorMapper::colorForAtom(const AtomData& atom, ColorScheme scheme,
-                               int overrideColor, float rainbowFrac) {
+                               int overrideColor, float scalarFrac) {
     if (overrideColor >= 0) return overrideColor;
 
     switch (scheme) {
@@ -162,7 +171,14 @@ int ColorMapper::colorForAtom(const AtomData& atom, ColorScheme scheme,
             return kColorPLDDTVeryLow;
         }
         case ColorScheme::Rainbow:
-            return (rainbowFrac >= 0.0f) ? colorForRainbow(rainbowFrac) : kColorRainbow2;
+            return (scalarFrac >= 0.0f) ? colorForRainbow(scalarFrac) : kColorRainbow2;
+        case ColorScheme::SASA: {
+            // scalarFrac carries relative accessibility [0,1] for this scheme.
+            float rel = (scalarFrac >= 0.0f) ? scalarFrac : 0.0f;
+            if (rel <= 0.10f) return kColorSASABuried;
+            if (rel <  0.40f) return kColorSASAMid;
+            return kColorSASAExposed;
+        }
         case ColorScheme::ResType:
             return colorForResType(atom.resName);
         default: return kColorOther;

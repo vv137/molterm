@@ -104,6 +104,10 @@ enum ColorPairId : int {
     kColorHeatmap2 = 102,  // white/gray (medium)
     kColorHeatmap3 = 103,  // orange
     kColorHeatmap4 = 104,  // red (close contact)
+    // SASA gradient (relative solvent accessibility): buried → exposed
+    kColorSASABuried = 110,   // ≤10% exposed: buried core (blue)
+    kColorSASAMid    = 111,   // 10-40%: intermediate (white/gray)
+    kColorSASAExposed = 112,  // ≥40%: surface (red)
 };
 
 class ColorMapper {
@@ -112,9 +116,10 @@ public:
     static void initColors();
 
     // Get color pair for an atom given a color scheme + per-atom override.
-    // rainbowFrac: [0,1] position along chain for Rainbow scheme (-1 = unused)
+    // scalarFrac: [0,1] per-atom value for gradient schemes — chain position
+    // (Rainbow) or relative accessibility (SASA); -1 = unused.
     static int colorForAtom(const AtomData& atom, ColorScheme scheme,
-                            int overrideColor = -1, float rainbowFrac = -1.0f);
+                            int overrideColor = -1, float scalarFrac = -1.0f);
 
     // Get color pair for an element
     static int colorForElement(const std::string& element);

@@ -46,9 +46,7 @@ void InterfaceRepr::render(const MolObject& mol, const Camera& cam, Canvas& canv
     // which the sidechain pass deliberately skips, so without explicit
     // markers there's nothing visible at the dash endpoints.
     const ColorScheme scheme = mol.colorScheme();
-    const std::vector<float>* rbw =
-        (scheme == ColorScheme::Rainbow) ? &mol.rainbowFractions() : nullptr;
-    RenderContext ctx{mol, atoms, scheme, rbw, {}};
+    RenderContext ctx{mol, atoms, scheme, Representation::scalarChannel(mol, scheme), {}};
     auto colorOf = [&](int i) {
         if (atoms[i].element != "C")
             return ColorMapper::colorForElement(atoms[i].element);
