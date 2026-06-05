@@ -17,6 +17,7 @@ enum class ReprType {
     Cartoon,    // thick tube style (ProteinView-like)
     Ribbon,     // flat ribbon with sheet arrowheads
     Backbone,
+    Surface,    // Gaussian-density iso-surface (marching cubes)
 };
 
 enum class ColorScheme {

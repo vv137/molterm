@@ -289,6 +289,7 @@ std::string SessionExporter::pymolReprName(ReprType r) {
         case ReprType::Cartoon:   return "cartoon";
         case ReprType::Ribbon:    return "ribbon";
         case ReprType::Backbone:  return "cartoon";
+        case ReprType::Surface:   return "surface";
     }
     return "lines";
 }

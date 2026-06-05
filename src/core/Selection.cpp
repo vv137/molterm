@@ -549,6 +549,7 @@ private:
                         ReprType::Wireframe, ReprType::BallStick,
                         ReprType::Spacefill, ReprType::Cartoon,
                         ReprType::Ribbon,    ReprType::Backbone,
+                        ReprType::Surface,
                     };
                     for (ReprType r : kReprs) {
                         if (mp->reprVisibleForAtom(r, idx)) return true;

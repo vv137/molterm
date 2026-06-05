@@ -86,6 +86,7 @@ bool SessionSaver::saveSession(const Application& app) {
             if (obj->reprVisible(ReprType::Cartoon))   reprs += "cartoon,";
             if (obj->reprVisible(ReprType::Ribbon))    reprs += "ribbon,";
             if (obj->reprVisible(ReprType::Backbone))  reprs += "backbone,";
+            if (obj->reprVisible(ReprType::Surface))   reprs += "surface,";
             if (!reprs.empty()) reprs.pop_back();  // remove trailing comma
             out << "reprs = \"" << reprs << "\"\n";
 
@@ -346,6 +347,7 @@ std::string SessionSaver::restoreSession(Application& app) {
             if (os.reprs.find("cartoon") != std::string::npos)   obj->showRepr(ReprType::Cartoon);
             if (os.reprs.find("ribbon") != std::string::npos)    obj->showRepr(ReprType::Ribbon);
             if (os.reprs.find("backbone") != std::string::npos)  obj->showRepr(ReprType::Backbone);
+            if (os.reprs.find("surface") != std::string::npos)   obj->showRepr(ReprType::Surface);
 
             // Restore multi-state
             if (os.activeState > 0 && obj->stateCount() > 1)

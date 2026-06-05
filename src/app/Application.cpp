@@ -20,6 +20,7 @@
 #include "molterm/repr/SpacefillRepr.h"
 #include "molterm/repr/CartoonRepr.h"
 #include "molterm/repr/RibbonRepr.h"
+#include "molterm/repr/SurfaceRepr.h"
 #include "molterm/repr/ReprUtil.h"
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
@@ -992,6 +993,10 @@ inline constexpr const char* kSetOptionsLong[] = {
     "bs_units",
     "bs_factor",
     "spacefill_scale",
+    "surface_resolution",
+    "surface_scale",
+    "surface_smoothness",
+    "surface_iso",
     "lod_medium",
     "lod_low",
     "backbone_cutoff",
@@ -1351,6 +1356,7 @@ void Application::initRepresentations() {
     representations_[ReprType::Spacefill] = std::make_unique<SpacefillRepr>();
     representations_[ReprType::Cartoon]   = std::make_unique<CartoonRepr>();
     representations_[ReprType::Ribbon]    = std::make_unique<RibbonRepr>();
+    representations_[ReprType::Surface]   = std::make_unique<SurfaceRepr>();
 }
 
 Representation* Application::getRepr(ReprType type) {
@@ -2087,7 +2093,7 @@ void Application::handleAction(Action action) {
                     // Repr name completion
                     for (const auto& r : {"wireframe", "wire", "ballstick", "sticks",
                                            "spacefill", "spheres", "cartoon", "ribbon",
-                                           "backbone", "trace", "all"}) {
+                                           "backbone", "trace", "surface", "all"}) {
                         std::string rs(r);
                         if (rs.find(partial) == 0) candidates.push_back(rs);
                     }
@@ -4224,6 +4230,7 @@ void Application::registerCommands() {
         if (name == "cartoon" || name == "tube")     { out = ReprType::Cartoon; return true; }
         if (name == "ribbon")                        { out = ReprType::Ribbon; return true; }
         if (name == "backbone" || name == "trace" || name == "ca") { out = ReprType::Backbone; return true; }
+        if (name == "surface" || name == "surf")     { out = ReprType::Surface; return true; }
         return false;
     };
 
@@ -5294,6 +5301,34 @@ void Application::registerCommands() {
             sf->setScale(v);
             return {true, "Spacefill scale (×vdW): " + std::to_string(v)};
         }
+        if (opt == "surface_resolution" || opt == "surf_res") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set surface_resolution <0.2-3.0>"};
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            sr->setResolution(std::stof(cmd.args[1]));
+            return {true, "Surface grid spacing: " + std::to_string(sr->resolution()) + " Å"};
+        }
+        if (opt == "surface_scale" || opt == "surf_scale") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set surface_scale <0.2-3.0>"};
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            sr->setScale(std::stof(cmd.args[1]));
+            return {true, "Surface blob radius (×vdW): " + std::to_string(sr->scale())};
+        }
+        if (opt == "surface_smoothness" || opt == "surf_smooth") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set surface_smoothness <0.5-8.0>"};
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            sr->setSmoothness(std::stof(cmd.args[1]));
+            return {true, "Surface smoothness (kernel k): " + std::to_string(sr->smoothness())};
+        }
+        if (opt == "surface_iso" || opt == "surf_iso") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set surface_iso <0.05-5.0>"};
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            sr->setIsoValue(std::stof(cmd.args[1]));
+            return {true, "Surface iso-level: " + std::to_string(sr->isoValue())};
+        }
         if (opt == "nucleic_backbone" || opt == "nb") {
             if (cmd.args.size() < 2)
                 return {false, "Usage: :set nucleic_backbone p|c4"};
@@ -5728,6 +5763,26 @@ void Application::registerCommands() {
             auto* sf = dynamic_cast<SpacefillRepr*>(app.getRepr(ReprType::Spacefill));
             if (!sf) return {false, "Spacefill repr not found"};
             return {true, "spacefill_scale = " + std::to_string(sf->scale())};
+        }
+        if (opt == "surface_resolution" || opt == "surf_res") {
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            return {true, "surface_resolution = " + std::to_string(sr->resolution())};
+        }
+        if (opt == "surface_scale" || opt == "surf_scale") {
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            return {true, "surface_scale = " + std::to_string(sr->scale())};
+        }
+        if (opt == "surface_smoothness" || opt == "surf_smooth") {
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            return {true, "surface_smoothness = " + std::to_string(sr->smoothness())};
+        }
+        if (opt == "surface_iso" || opt == "surf_iso") {
+            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
+            if (!sr) return {false, "Surface repr not found"};
+            return {true, "surface_iso = " + std::to_string(sr->isoValue())};
         }
         if (opt == "nucleic_backbone" || opt == "nb") {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));

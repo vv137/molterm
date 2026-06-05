@@ -116,6 +116,7 @@ set(MOLTERM_SOURCES
     src/repr/CartoonRepr.cpp
     src/repr/RibbonRepr.cpp
     src/repr/InterfaceRepr.cpp
+    src/repr/SurfaceRepr.cpp
     # Input
     src/input/Keymap.cpp
     src/input/KeymapManager.cpp
