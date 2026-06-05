@@ -89,6 +89,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
 - **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode); dashed lines respect z-buffer so atoms in front occlude them
 - **Focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
 - **DSSP secondary structure** — full Kabsch-Sander pipeline: turns ▶ helices (3₁₀ / α / π) ▶ bridges (parallel / antiparallel) ▶ ladders with bulge propagation ▶ sheets, collapsed to molterm's 3-class SS. Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`. Validated against `mkdssp 4.5`: 13/15 PDB test structures match at 100% (4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ, 1MBN, 1HHO, 1LMB, 2HHB, 2NLS, 2GB1, 1L2Y, 1CRN); 1AKE/7TIM at 99% (residual mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff, where float precision flips the boundary)
+- **SASA (solvent accessibility)** — faithful port of the PDB-REDO/dssp accessibility model: 401-point Fibonacci surface-dot integration with dssp-specific atom radii. `:sasa` reports total / per-chain area (Å²) and mean relative accessibility; `:color sasa` (or `ca`) shades buried→exposed (relative to Tien-2013 max-ASA). **Per-state cached** like DSSP. Validated against `mkdssp 4.x`: 1CRN/1UBQ/1KX5 match to <0.1% total SASA (per-residue diffs are just mkdssp's integer rounding)
 - **Full customization** — keybindings, color themes, and settings via TOML configs in `~/.molterm/`
 - **Structured logging** — session log to `~/.molterm/molterm.log`
 
@@ -521,6 +522,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 | `cp` | pLDDT (AlphaFold confidence) |
 | `cr` | Rainbow (N→C terminus) |
 | `ct` | Residue type (nonpolar/polar/acidic/basic) |
+| `ca` | SASA / accessibility (buried→exposed) |
 
 </details>
 
@@ -578,7 +580,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :fetch afdb:<uniprot_id>        " Download from AlphaFold DB (e.g. fetch afdb:P12345)
 :show <repr> [selection]         " Show repr (optionally for selection only); applies across scope (see Multi-object scope)
 :hide [repr|all] [selection]    " Hide repr (optionally for selection only); applies across scope
-:color <scheme>                 " element/cpk, chain, ss, bfactor, plddt, rainbow, restype, heteroatom, clear
+:color <scheme>                 " element/cpk, chain, ss, bfactor, plddt, rainbow, restype, sasa, heteroatom, clear
 :color <name> [selection]       " Per-atom color (red, blue, salmon, etc.) with optional selection
                                 "   Multi-object: a bare selection covers every loaded object;
                                 "   narrow with `obj <name>` or `/objname/...`. Append `!`
@@ -715,6 +717,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   Whole interacting residues are auto-promoted into the neighborhood
 :focus off                      " Exit focus session, restore camera + reprs
 :dssp                           " Recompute DSSP secondary structure for current state (per-state cached)
+:sasa                           " Compute solvent accessible surface area (PDB-REDO/dssp); reports total + per-chain Å² and mean relative accessibility
 :set renderer <type>            " ascii, braille, block, pixel, sixel, kitty, iterm2
 :set stereo off|walleye|crosseye " Side-by-side stereoscopic split. Walleye =
                                  "   parallel viewing (left image to left eye);
@@ -1218,6 +1221,7 @@ Switch at runtime: `:set renderer braille|block|ascii|pixel` or `m` to toggle.
 | pLDDT | `cp` | AlphaFold confidence (>90 blue, 70-90 light blue, 50-70 yellow, <50 orange) |
 | Rainbow | `cr` | Per-chain N→C terminus blue→red gradient |
 | Residue type | `ct` | VMD-like: nonpolar (white), polar (green), acidic (red), basic (blue) |
+| SASA | `ca` | Relative accessibility: buried ≤10% (blue), 10–40% (gray), exposed ≥40% (red) |
 
 **Per-atom coloring:** `:color <name> [selection]` — 15 named colors: `red green blue yellow magenta cyan white orange pink lime teal purple salmon slate gray`
 
@@ -1296,7 +1300,7 @@ set outline on
 
 **Representations:** `show_wireframe`, `show_ballstick`, `show_spacefill`, `show_cartoon`, `show_ribbon`, `show_backbone`, `hide_wireframe`, `hide_ballstick`, `hide_spacefill`, `hide_cartoon`, `hide_ribbon`, `hide_backbone`, `hide_all`, `show_overlay`, `hide_overlay`, `apply_preset`
 
-**Coloring:** `color_by_element`, `color_by_chain`, `color_by_ss`, `color_by_bfactor`, `color_by_plddt`, `color_by_rainbow`, `color_by_restype`
+**Coloring:** `color_by_element`, `color_by_chain`, `color_by_ss`, `color_by_bfactor`, `color_by_plddt`, `color_by_rainbow`, `color_by_restype`, `color_by_sasa`
 
 **Objects:** `next_object`, `prev_object`, `toggle_visible`, `delete_object`, `yank_object`, `paste_object`, `rename_object`, `toggle_panel`
 
@@ -1552,7 +1556,7 @@ Generates `load`, `show`, `color`, `select`, and `set_view` commands with the cu
 - [x] **Geometric SS fallback** — φ/ψ Ramachandran classifier with 3+/4+ run smoothing, runs when a file has no HELIX/SHEET records (CASP TS, AlphaFold, raw coords)
 - [x] **DSSP-quality SS** — Kabsch & Sander H-bond model with n-turn helix (α / 3₁₀ / π) + bridge β-sheet detection + ladder propagation with bulge connection (`:dssp`, per-state cached for trajectories). Validated against `mkdssp 4.5` on 15 PDB structures: 13 match at 100% (incl. 4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ); 1AKE / 7TIM at 99% — remaining mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff. Optional 8-class output not yet exposed
 - [x] **Pixel-mode label rendering** — embedded TTF (SpaceMono-Regular) rasterized via stb_truetype into the RGB framebuffer; covers residue labels, measurement values, and $sele/pk highlight rings in both live pixel mode and offscreen `:screenshot`
-- [ ] **Solvent-accessible surface** — Shrake-Rupley SAS, rendered as silhouette contour or filled mesh
+- [x] **Solvent-accessible surface area (SASA)** — faithful port of PDB-REDO/dssp accessibility (401-point Fibonacci surface-dot integration, dssp-specific radii). `:sasa` (total + per-chain Å², mean relative accessibility), `:color sasa` / `ca` buried→exposed gradient (relative to Tien-2013 max-ASA), per-state cached. Validated against `mkdssp 4.x`: 1CRN/1UBQ/1KX5 within <0.1% total SASA. Surface *mesh / silhouette* rendering still pending
 - [x] **Stereoscopic view** — `:set stereo walleye|crosseye` splits the viewport into two ±half-angle Y-rotated renders; `:set stereo_angle <deg>` (default 6°) controls parallax. Labels, measurements, focus-dim, and interface overlay all render per eye. `:export` emits the matching `stereo` / `set stereo_angle` lines so the same view loads in PyMOL
 - [ ] **Electrostatic coloring** — Coulombic surface color from partial charges
 

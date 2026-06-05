@@ -2296,6 +2296,7 @@ void Application::handleAction(Action action) {
         case Action::ColorByPLDDT:   { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::PLDDT);   return true; }); dirty({C::Viewport, C::SeqBar}); break; }
         case Action::ColorByRainbow: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::Rainbow); return true; }); dirty({C::Viewport, C::SeqBar}); break; }
         case Action::ColorByResType: { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::ResType); return true; }); dirty({C::Viewport, C::SeqBar}); break; }
+        case Action::ColorBySASA:    { forEachInScope(*this, "", [](ScopedTarget& t){ t.obj->setColorScheme(ColorScheme::SASA);    return true; }); dirty({C::Viewport, C::SeqBar}); break; }
 
         // Multi-state cycling — viewport + seqbar + status
         case Action::NextState: {
@@ -4500,7 +4501,7 @@ void Application::registerCommands() {
         if (objs > 1) msg += " in " + std::to_string(objs) + " objects";
         return {true, msg};
     }, ":color <scheme|name> [selection]",
-       "Set coloring scheme (element, chain, ss, bfactor, plddt, rainbow, restype, heteroatom) or named color",
+       "Set coloring scheme (element, chain, ss, bfactor, plddt, rainbow, restype, sasa, heteroatom) or named color",
        {":color ss", ":color chain", ":color red chain A", ":color rainbow"}, "Coloring");
 
     // :zoom / :center / :orient — atoms gathered across every in-scope
@@ -8251,7 +8252,7 @@ void Application::showKeybindingHelp() {
         "",
         "COLORING (c + key)",
         " ce element  cc chain  cs SS  cb B-factor",
-        " cp pLDDT    cr rainbow",
+        " cp pLDDT    cr rainbow  ct restype  ca SASA",
         "",
         "OBJECTS & TABS",
         " Tab/S-Tab  Next/prev object   Space  Toggle visible",
