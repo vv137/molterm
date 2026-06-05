@@ -6,9 +6,10 @@
 namespace molterm {
 
 // sqrt(zoom) clamped to [0.75, 1.8] — applied to thickness/marker sizes
-// in Wireframe, Backbone, Interface, and the selection-highlight overlay
-// so they grow gently with camera zoom (4× zoom → ~2× thickness) without
-// bloating at close-up. Negative/zero zoom collapses to the lower clamp.
+// in Backbone, Interface, and the selection-highlight overlay so they grow
+// gently with camera zoom (4× zoom → ~2× thickness) without bloating at
+// close-up. Negative/zero zoom collapses to the lower clamp. (Wireframe
+// instead scales physically with projScale — see WireframeRepr::render.)
 inline float cameraZoomScale(float zoom) {
     return std::clamp(std::sqrt(std::max(zoom, 0.0f)), 0.75f, 1.8f);
 }

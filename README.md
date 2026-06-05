@@ -795,7 +795,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   Default 'specific' = hbond + salt only.
                                 "   The legend stats remain complete regardless.
 :set bt <n>                     " Backbone trace thickness, cells (default: 0.5)
-:set wt <n>                     " Wireframe line thickness, cells (default: 0.35)
+:set wt|wireframe_thickness <n> " Wireframe line radius Å, scales with zoom (0.01-1.0, default: 0.10)
 :set br <int>                   " BallStick legacy sub-pixel radius (default: 1, only when bs_units=cell)
 :set ff|focus_fill <0.05-1.0>    " Focus fill fraction — fraction of screen the subject occupies (default: 0.6)
 :set fe|focus_extra <Å>          " Focus extra radius padding around the subject (default: 4.0)

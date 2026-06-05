@@ -3867,7 +3867,7 @@ void Application::enterFocus(MolObject& mol,
     // Bump wireframe thickness modestly so the local scaffold reads;
     // the zoom-scaling in WireframeRepr::render does the rest.
     if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
-        wf->setThickness(std::max(0.5f, focusSnapshot_.wireframeThickness * 1.4f));
+        wf->setThickness(std::max(0.14f, focusSnapshot_.wireframeThickness * 1.4f));
     }
     mol.showRepr(ReprType::Wireframe);
     mol.showReprForAtoms(ReprType::Wireframe, nbhdIndices);
@@ -4787,7 +4787,7 @@ void Application::registerCommands() {
             return {false, "Backbone repr not found"};
         }
         if (opt == "wireframe_thickness" || opt == "wt") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set wireframe_thickness <0.5-10>"};
+            if (cmd.args.size() < 2) return {false, "Usage: :set wireframe_thickness <0.01-1.0>"};
             float val = std::stof(cmd.args[1]);
             auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe));
             if (wf) {
@@ -5073,14 +5073,12 @@ void Application::registerCommands() {
         }
         if (opt == "wf_thickness" || opt == "wft") {
             if (cmd.args.size() < 2)
-                return {false, "Usage: :set wf_thickness <0.1-2.0>"};
-            float v = std::stof(cmd.args[1]);
-            v = std::max(0.1f, std::min(2.0f, v));
+                return {false, "Usage: :set wf_thickness <0.01-1.0>"};
             auto* wf = dynamic_cast<WireframeRepr*>(
                 app.getRepr(ReprType::Wireframe));
             if (!wf) return {false, "Wireframe repr not found"};
-            wf->setThickness(v);
-            return {true, "Wireframe thickness: " + std::to_string(v)};
+            wf->setThickness(std::stof(cmd.args[1]));
+            return {true, "Wireframe thickness: " + std::to_string(wf->thickness())};
         }
         if (opt == "interface_zoom" || opt == "iz") {
             if (cmd.args.size() < 2) {

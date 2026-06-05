@@ -1,5 +1,4 @@
 #include "molterm/repr/WireframeRepr.h"
-#include "molterm/repr/ReprUtil.h"
 #include <cmath>
 
 namespace molterm {
@@ -23,9 +22,14 @@ void WireframeRepr::render(const MolObject& mol, const Camera& cam,
         return ctx.colorFor(i);
     };
 
-    float scale = cameraZoomScale(cam.zoom());
-    float effThickness = thickness_ * scale;
-    int r = toSubPixels(effThickness, canvas.scaleX());
+    // Line thickness scales physically with zoom: thickness_ is a radius in
+    // Å, and projScale (= zoom × min(W,H)/kRefSpan, sub-pixels per Å) turns
+    // it into sub-pixels. So the wireframe thickens proportionally as you
+    // zoom in — tracking the molecule like Spacefill/BallStick-vdW do —
+    // instead of the old sqrt-clamped screen-space width. projScale already
+    // folds in the canvas cell aspect, so no scaleX factor is needed here.
+    float effThickness = thickness_ * cam.projScale();
+    int r = toSubPixels(effThickness, /*scale=*/1);
     bool thick = (r > 1);
 
     // Pre-project all atoms using cached projection

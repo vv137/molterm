@@ -564,8 +564,8 @@ private:
         bool cartoonVisible  = false;
         bool ribbonVisible   = false;
         bool backboneVisible = false;
-        // Original wireframe thickness — temporarily bumped during focus.
-        float wireframeThickness = 0.3f;
+        // Original wireframe thickness (Å) — temporarily bumped during focus.
+        float wireframeThickness = 0.10f;
     };
     FocusSnapshot     focusSnapshot_;
     std::vector<bool> focusAtomMask_;       // focus subject (kept vivid)
