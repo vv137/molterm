@@ -1083,6 +1083,9 @@ PixelCanvas::RGB PixelCanvas::colorPairToRGB(int colorPair) {
         case kColorHeatmap2:    return {210, 210, 210};   // light gray
         case kColorHeatmap3:    return {255, 165, 0};     // orange
         case kColorHeatmap4:    return {220, 30, 30};     // red
+        case kColorSASABuried:  return {0, 60, 255};      // deep blue (buried)
+        case kColorSASAMid:     return {190, 190, 190};   // gray (intermediate)
+        case kColorSASAExposed: return {255, 40, 40};     // red (exposed)
         default:                return {200, 200, 200};
     }
 }
