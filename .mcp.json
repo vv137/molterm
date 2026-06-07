@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "molterm": {
+      "command": "node",
+      "args": ["mcp/dist/index.js"]
+    }
+  }
+}
