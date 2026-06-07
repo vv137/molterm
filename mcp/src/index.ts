@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
 import { basename } from "node:path";
-import { runMolterm, runWithScreenshot, runShell, REPO_ROOT } from "./molterm.js";
+import { runMolterm, runWithScreenshot, runShell, MOLTERM_BIN } from "./molterm.js";
 
 /** Extract molterm object name from a file path (stem without extensions). */
 function objName(filePath: string): string {
@@ -13,7 +13,13 @@ function objName(filePath: string): string {
   return name;
 }
 
-/** Detect if a string is a PDB ID vs a file path. */
+/**
+ * Detect if a string is a PDB ID vs a file path.
+ * Edge case: a bare 4-char alphanumeric string is always read as a PDB ID, so a
+ * local file literally named e.g. `1abc` (no extension) would be `fetch`ed
+ * rather than `load`ed. Give such files an extension, or use `run_script` with
+ * an explicit `load` to disambiguate.
+ */
 function isPdbId(s: string): boolean {
   return /^[a-zA-Z0-9]{4}$/.test(s) || /^afdb:/i.test(s) || /^AF-/i.test(s);
 }
@@ -228,60 +234,37 @@ server.registerTool("version", {
   inputSchema: {},
 }, async () => {
   const [ver, git] = await Promise.all([
-    runMolterm(["echo molterm ${MOLTERM_VERSION}"]).catch(() => ({ stdout: "", stderr: "molterm binary not found" })),
-    runShell("git log --oneline -5 && echo '---' && git describe --tags --always"),
+    runShell(`"${MOLTERM_BIN}" --version`),
+    runShell("git describe --tags --always"),
   ]);
   const parts: string[] = [];
   if (ver.stdout) parts.push(ver.stdout);
-  if (git.stdout) parts.push(git.stdout);
-  if (ver.stderr) parts.push(`[stderr] ${ver.stderr}`);
-  return { content: [{ type: "text", text: parts.join("\n") }] };
+  else if (ver.stderr) parts.push(`[molterm] ${ver.stderr}`);
+  if (git.stdout) parts.push(`repo: ${git.stdout}`);
+  return { content: [{ type: "text", text: parts.join("\n") || "(no version info)" }] };
 });
 
 server.registerTool("update", {
-  description: "Update molterm: git pull, rebuild the C++ binary, and rebuild the MCP server. " +
-    "Run this to get the latest version from GitHub.",
+  description: "Update the molterm binary to the latest GitHub release via scripts/update.sh. " +
+    "Disabled by default — set MOLTERM_MCP_ALLOW_UPDATE=1 in the server env to enable it.",
   inputSchema: {},
 }, async () => {
-  const steps: string[] = [];
-
-  // 1. git pull
-  const pull = await runShell("git pull --ff-only");
-  steps.push(`[git pull] ${pull.stdout || pull.stderr}`);
-  if (!pull.ok) {
-    return { content: [{ type: "text", text: steps.join("\n\n") + "\n\nUpdate failed at git pull." }] };
+  // Updating runs a privileged download-and-install script, so it is opt-in:
+  // a tool that mutates the binary the server then executes should not be
+  // reachable by default (e.g. via prompt-injection through structure data).
+  if (process.env.MOLTERM_MCP_ALLOW_UPDATE !== "1") {
+    return { content: [{ type: "text", text:
+      "Update is disabled. Set MOLTERM_MCP_ALLOW_UPDATE=1 in the server " +
+      "environment to allow it, then call this tool again." }] };
   }
 
-  // 2. cmake configure
-  const configure = await runShell(
-    "cmake -B build -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -3"
-  );
-  steps.push(`[cmake configure] ${configure.stdout || configure.stderr}`);
-
-  // 3. cmake build
-  const build = await runShell(
-    "cmake --build build -j$(sysctl -n hw.ncpu 2>/dev/null || nproc) 2>&1 | tail -5",
-    { timeout: 300_000 }
-  );
-  steps.push(`[cmake build] ${build.stdout || build.stderr}`);
-  if (!build.ok) {
-    return { content: [{ type: "text", text: steps.join("\n\n") + "\n\nUpdate failed at cmake build." }] };
-  }
-
-  // 4. rebuild MCP server
-  const mcp = await runShell("npm install && npm run build 2>&1 | tail -3", {
-    cwd: `${REPO_ROOT}/mcp`,
-  });
-  steps.push(`[mcp build] ${mcp.stdout || mcp.stderr}`);
-
-  // 5. show new version
-  const ver = await runShell("./build/molterm --version");
-  steps.push(`[version] ${ver.stdout || ver.stderr}`);
-
-  const status = build.ok && mcp.ok ? "Update complete." : "Update finished with errors.";
-  steps.push(status);
-
-  return { content: [{ type: "text", text: steps.join("\n\n") }] };
+  // scripts/update.sh downloads the latest release binary (and shipped lib)
+  // and installs it to the given path — the same binary the server loads.
+  const update = await runShell(`./scripts/update.sh "${MOLTERM_BIN}"`,
+                                { timeout: 300_000 });
+  const text = update.stdout || update.stderr;
+  const status = update.ok ? "Update complete." : "Update failed.";
+  return { content: [{ type: "text", text: `${text}\n\n${status}` }] };
 });
 
 // ═══════════════════════════════════════════════════════════════════════

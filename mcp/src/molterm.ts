@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
 
-const DEFAULT_MOLTERM =
+/** Resolved molterm binary: $MOLTERM_BIN, else ../../build/molterm from dist/. */
+export const MOLTERM_BIN =
   process.env.MOLTERM_BIN || join(__dirname, "..", "..", "build", "molterm");
 
 /** Root of the molterm git repo (two levels up from dist/). */
@@ -52,7 +53,7 @@ export function runMolterm(
 
   return new Promise((resolve) => {
     const child = execFile(
-      DEFAULT_MOLTERM,
+      MOLTERM_BIN,
       ["--script", "-", "--no-tui"],
       { cwd, timeout, maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {

@@ -16,12 +16,18 @@ MCP (Model Context Protocol) server for [MolTerm](https://github.com/vv137/molte
 | `align` | Structural alignment (TM-align) with RMSD/TM-score |
 | `dssp` | DSSP secondary structure assignment |
 | `run_script` | Execute arbitrary molterm command sequences |
+| `help` | List molterm commands, or show usage for one |
+| `version` | Report the molterm binary version and repo tag |
+| `update` | Install the latest released binary (opt-in; see below) |
 
 ## Setup
 
 ### Prerequisites
 
-- **molterm** binary — build from the project root:
+- **molterm** binary — **v0.47.1 or newer** (earlier headless builds resolve
+  the `<obj>/(...)` object qualifier and scoped named selections incorrectly,
+  which affects the `select`/`measure`/`align` tools). Build from the project
+  root:
   ```sh
   cmake -B build -DCMAKE_BUILD_TYPE=Release
   cmake --build build -j$(nproc)
@@ -39,7 +45,10 @@ npm run build
 
 ### Configure
 
-Add to your `.mcp.json` (project root) or Claude Desktop config:
+This repo ships a project-scoped `.mcp.json` at the root, so opening the repo in
+Claude Code registers the server automatically (it runs `node mcp/dist/index.js`
+from the project root). For Claude Desktop or another host, add an entry with
+absolute paths:
 
 ```json
 {
@@ -55,7 +64,15 @@ Add to your `.mcp.json` (project root) or Claude Desktop config:
 }
 ```
 
-If `MOLTERM_BIN` is not set, it defaults to `../../build/molterm` relative to the `dist/` directory.
+If `MOLTERM_BIN` is not set, it defaults to `../../build/molterm` relative to the
+`dist/` directory.
+
+#### Optional: enable the `update` tool
+
+The `update` tool downloads and installs the latest released molterm binary
+(`scripts/update.sh`). Because it mutates the binary the server then runs, it is
+**disabled by default**. To allow it, set `MOLTERM_MCP_ALLOW_UPDATE=1` in the
+server's `env`.
 
 ## Usage examples
 
