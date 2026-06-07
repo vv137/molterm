@@ -11,12 +11,14 @@ namespace molterm {
 class SessionExporter {
 public:
     // Persistent annotation: a 2/3/4-atom measurement with optional caption.
-    // Atom indices are into the first object in the tab (the same object
-    // the measurement was registered against).
+    // Atom indices are into `obj` (the object the measurement was registered
+    // against); empty `obj` falls back to the first object in the tab for
+    // legacy entries (issue #101).
     struct Measurement {
         std::vector<int> atoms;
         std::string label;
         std::string caption;
+        std::string obj;
     };
 
     // Export a .pml (PyMOL script) that reconstructs the current tab.

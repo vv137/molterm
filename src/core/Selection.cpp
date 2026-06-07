@@ -14,6 +14,19 @@
 
 namespace molterm {
 
+namespace {
+// Combine the object scope of two operands. An index-empty operand
+// contributes no atoms, so it should not veto the other's scope (e.g.
+// `1ubq/(resi 50) or 1crn/(...)` parsed against 1ubq leaves the 1crn term
+// empty and the union stays scoped to 1ubq). Two non-empty operands keep a
+// shared scope and drop to unscoped when they disagree.
+std::string mergeScope(const Selection& a, const Selection& b) {
+    if (a.empty()) return b.objectScope();
+    if (b.empty()) return a.objectScope();
+    return (a.objectScope() == b.objectScope()) ? a.objectScope() : std::string();
+}
+}  // namespace
+
 Selection::Selection(std::vector<int> indices, std::string expr)
     : indices_(std::move(indices)), expr_(std::move(expr)) {
     std::sort(indices_.begin(), indices_.end());
@@ -24,7 +37,8 @@ Selection Selection::operator&(const Selection& other) const {
     std::set_intersection(indices_.begin(), indices_.end(),
                           other.indices_.begin(), other.indices_.end(),
                           std::back_inserter(result));
-    return Selection(std::move(result), "(" + expr_ + " and " + other.expr_ + ")");
+    return Selection(std::move(result), "(" + expr_ + " and " + other.expr_ + ")")
+        .setObjectScope(mergeScope(*this, other));
 }
 
 Selection Selection::operator-(const Selection& other) const {
@@ -32,7 +46,10 @@ Selection Selection::operator-(const Selection& other) const {
     std::set_difference(indices_.begin(), indices_.end(),
                         other.indices_.begin(), other.indices_.end(),
                         std::back_inserter(result));
-    return Selection(std::move(result), "(" + expr_ + " minus " + other.expr_ + ")");
+    // Set-difference is a subset of the left operand, so it keeps the left
+    // scope regardless of what is being subtracted.
+    return Selection(std::move(result), "(" + expr_ + " minus " + other.expr_ + ")")
+        .setObjectScope(objScope_);
 }
 
 Selection Selection::operator^(const Selection& other) const {
@@ -40,7 +57,8 @@ Selection Selection::operator^(const Selection& other) const {
     std::set_symmetric_difference(indices_.begin(), indices_.end(),
                                   other.indices_.begin(), other.indices_.end(),
                                   std::back_inserter(result));
-    return Selection(std::move(result), "(" + expr_ + " xor " + other.expr_ + ")");
+    return Selection(std::move(result), "(" + expr_ + " xor " + other.expr_ + ")")
+        .setObjectScope(mergeScope(*this, other));
 }
 
 Selection Selection::operator|(const Selection& other) const {
@@ -48,7 +66,8 @@ Selection Selection::operator|(const Selection& other) const {
     std::set_union(indices_.begin(), indices_.end(),
                    other.indices_.begin(), other.indices_.end(),
                    std::back_inserter(result));
-    return Selection(std::move(result), "(" + expr_ + " or " + other.expr_ + ")");
+    return Selection(std::move(result), "(" + expr_ + " or " + other.expr_ + ")")
+        .setObjectScope(mergeScope(*this, other));
 }
 
 Selection Selection::complement(int totalAtoms) const {
@@ -437,7 +456,7 @@ private:
         std::string objName = objPat;
         std::string molName = mol_.name();
 
-        return Selection::fromPredicate(mol_,
+        auto sel = Selection::fromPredicate(mol_,
             [objName, molName, chains, resiRanges, names](int, const AtomData& a) {
                 if (!objName.empty() && molName != objName) return false;
                 if (!chains.empty()) {
@@ -459,6 +478,12 @@ private:
                 return true;
             },
             "/" + objPat + "/" + chainPat + "/" + resiPat + "/" + namePat);
+        // A concrete object segment scopes the result the same way the
+        // `<obj>/(...)` paren form does (issue #101). Globs ("*"/"all") stay
+        // unscoped so they keep matching every object.
+        if (!objPat.empty() && objPat != "*" && objPat != "all")
+            sel.setObjectScope(objPat);
+        return sel;
     }
 
     Selection parseAtom() {
@@ -484,8 +509,12 @@ private:
             Selection inner = parseOr();
             match(Token::RParen);
             bool wildcard = (objName == "all" || objName == "*");
-            if (wildcard || mol_.name() == objName) return inner;
-            return Selection({}, objName + "/(...)");
+            if (wildcard) return inner;                  // every object — unscoped
+            // Tag the scope so the qualifier survives storage in a named
+            // selection: `$name` re-expansion is then gated to this object
+            // instead of leaking into every loaded object (issue #101).
+            if (mol_.name() == objName) return inner.setObjectScope(objName);
+            return Selection({}, objName + "/(...)").setObjectScope(objName);
         }
 
         // Digit-led bareword promotion: PDB-style names like "1ubq"
@@ -520,7 +549,16 @@ private:
             advance();
             if (resolver_) {
                 const Selection* sel = resolver_(name);
-                if (sel) return *sel;
+                if (sel) {
+                    // Honor a stored object scope: a named selection built
+                    // from `<obj>/(...)` must not re-resolve against a
+                    // different object. When scoped elsewhere it matches
+                    // nothing here (issue #101).
+                    if (!sel->objectScope().empty() &&
+                        sel->objectScope() != mol_.name())
+                        return Selection({}, "$" + name);
+                    return *sel;
+                }
             }
             return Selection({}, "$" + name);  // unresolved → empty
         }

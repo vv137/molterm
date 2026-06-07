@@ -416,6 +416,82 @@ static void testNamedAndChain(const MolObject& mol) {
     CHECK(sel.size() == 3, "$mysel and chain A = 3");
 }
 
+// ── Object qualifier scope (issue #101) ──────────────────────────────────────
+
+static void testObjQualifierMatch(const MolObject& mol) {
+    // mol is named "test". `test/(...)` resolves and carries the scope tag.
+    auto sel = Selection::parse("test/(resi 10 and name CA)", mol);
+    CHECK(sel.size() == 1, "test/(...) resolves against the matching object");
+    CHECK(sel.objectScope() == "test", "test/(...) tags object scope");
+}
+
+static void testObjQualifierMismatch(const MolObject& mol) {
+    // A qualifier naming a different object matches nothing here.
+    auto sel = Selection::parse("other/(resi 10 and name CA)", mol);
+    CHECK(sel.empty(), "other/(...) is empty against object 'test'");
+}
+
+static void testObjWildcardUnscoped(const MolObject& mol) {
+    auto a = Selection::parse("all/(resi 10 and name CA)", mol);
+    CHECK(a.size() == 1 && a.objectScope().empty(),
+          "all/(...) matches and stays unscoped");
+    auto b = Selection::parse("*/(resi 10 and name CA)", mol);
+    CHECK(b.size() == 1 && b.objectScope().empty(),
+          "*/(...) matches and stays unscoped");
+}
+
+static void testSlashFormScope(const MolObject& mol) {
+    auto sel = Selection::parse("/test/A/10/CA", mol);
+    CHECK(sel.size() == 1, "/test/A/10/CA resolves");
+    CHECK(sel.objectScope() == "test", "/test/.../ tags object scope");
+    auto glob = Selection::parse("/*/A/10/CA", mol);
+    CHECK(glob.objectScope().empty(), "/*/.../ stays unscoped");
+}
+
+static void testNamedSelectionScopeGate(const MolObject& mol) {
+    // A named selection scoped to "test" re-expands only against an object
+    // of that name; against a differently-named object it matches nothing
+    // (the core of issue #101 — no leak into other loaded objects).
+    Selection scoped({0, 1, 2}, "test/(...)");
+    scoped.setObjectScope("test");
+    auto resolver = [&](const std::string& n) -> const Selection* {
+        return (n == "a") ? &scoped : nullptr;
+    };
+    auto same = Selection::parse("$a", mol, resolver);
+    CHECK(same.size() == 3, "$a re-expands against its own object");
+
+    MolObject other("other");
+    auto& oa = other.atoms();
+    for (int i = 0; i < 5; ++i)
+        oa.push_back({0,0,0, "CA", "C", "ALA", "A", 10 + i, ' ', 0, 1,
+                      i + 1, 0, false, SSType::Loop});
+    auto cross = Selection::parse("$a", other, resolver);
+    CHECK(cross.empty(), "$a does not leak into a different object");
+}
+
+static void testUnscopedNamedSelectionStillResolves(const MolObject& mol) {
+    // An unscoped named selection keeps the legacy behaviour (resolves
+    // against whatever object it is parsed against).
+    Selection plain({0, 1, 2}, "resi 10");
+    auto resolver = [&](const std::string& n) -> const Selection* {
+        return (n == "p") ? &plain : nullptr;
+    };
+    MolObject other("other");
+    auto& oa = other.atoms();
+    for (int i = 0; i < 5; ++i)
+        oa.push_back({0,0,0, "CA", "C", "ALA", "A", 10 + i, ' ', 0, 1,
+                      i + 1, 0, false, SSType::Loop});
+    auto sel = Selection::parse("$p", other, resolver);
+    CHECK(sel.size() == 3, "unscoped $p still resolves against other object");
+}
+
+static void testScopedOrKeepsScope(const MolObject& mol) {
+    auto sel = Selection::parse(
+        "test/(resi 10 and name CA) or test/(resi 11 and name CA)", mol);
+    CHECK(sel.size() == 2, "scoped OR unions both residues");
+    CHECK(sel.objectScope() == "test", "OR of same-scope terms keeps scope");
+}
+
 // ── Complex combos ───────────────────────────────────────────────────────────
 
 static void testChainAndResiAndName(const MolObject& mol) {
@@ -532,6 +608,15 @@ int main() {
     // Named selections
     testNamedSelection(mol);
     testNamedAndChain(mol);
+
+    // Object qualifier scope (issue #101)
+    testObjQualifierMatch(mol);
+    testObjQualifierMismatch(mol);
+    testObjWildcardUnscoped(mol);
+    testSlashFormScope(mol);
+    testNamedSelectionScopeGate(mol);
+    testUnscopedNamedSelectionStillResolves(mol);
+    testScopedOrKeepsScope(mol);
 
     // Complex combos
     testChainAndResiAndName(mol);

@@ -5,8 +5,10 @@
 #include <cmath>
 #include <cstdint>
 #include <iosfwd>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -638,11 +640,19 @@ private:
     uint8_t bgCustomR_ = 0, bgCustomG_ = 0, bgCustomB_ = 0;
     bool verbose_ = false;
 
-    // Labels: atom indices to render text labels for
-    std::vector<int> labelAtoms_;
-    // Per-atom override text. If absent for an atom in `labelAtoms_`,
-    // labelFormat_ (or the built-in default) supplies the text.
-    std::unordered_map<int, std::string> labelText_;
+public:
+    // Atom labels, scoped per object. Atom indices are per-MolObject, so a
+    // flat list silently aliases atom #idx across objects — labels would
+    // bleed onto the wrong atoms after an object swap and `:label
+    // <obj>/(...)` could not target a non-current object. Keying by object
+    // name fixes both and lets every object's labels render in a multi-
+    // object overlay (issue #101).
+    struct ObjectLabels {
+        std::vector<int> atoms;                       // atom indices in that object
+        std::unordered_map<int, std::string> text;    // per-atom override text
+    };
+private:
+    std::map<std::string, ObjectLabels> labelsByObject_;  // MolObject::name() → labels
     // Template applied when no per-atom override exists. Empty = built-in
     // default ("{resname}{resseq}"). Tokens: {resname}, {resseq}/{seqid},
     // {chain}, {name}, {element}, {restype} (1-letter AA code).
@@ -651,10 +661,14 @@ private:
     // Persistent measurements: pairs/triples/quads of atom indices + label.
     // `label` is the auto-formatted value ("5.85A" / "127.3°"); `caption` is
     // the optional user string from `:measure ... = "..."` for figure prep.
+    // `obj` names the owning object — atom indices are per-object, so the
+    // measurement renders against and computes from that object's atoms,
+    // even when it isn't the current one (issue #101).
     struct Measurement {
         std::vector<int> atoms;
         std::string label;
         std::string caption;
+        std::string obj;
         std::string displayLabel() const {
             return caption.empty() ? label : label + " " + caption;
         }
@@ -711,13 +725,27 @@ public:
         for (int p = 0; p < 4; ++p) if (pickRegs_[p] >= 0) return true;
         return false;
     }
-    std::vector<int>& labelAtoms() { return labelAtoms_; }
-    std::unordered_map<int, std::string>& labelText() { return labelText_; }
+    std::map<std::string, ObjectLabels>& labelsByObject() { return labelsByObject_; }
+    const std::map<std::string, ObjectLabels>& labelsByObject() const { return labelsByObject_; }
+    // Total labeled atoms across every object — for status messages.
+    size_t labelCount() const {
+        size_t n = 0;
+        for (const auto& [name, ls] : labelsByObject_) n += ls.atoms.size();
+        return n;
+    }
+    void clearAtomLabels() { labelsByObject_.clear(); }
+    // Add `idx` to object `objName`'s label set (deduped). When `text` is
+    // non-null it sets the per-atom override; when null it drops any prior
+    // override so the atom falls back to labelFormat_/default.
+    void addAtomLabel(const std::string& objName, int idx, const std::string* text);
+    // Remove `idxs` from object `objName`'s labels. Returns the count removed.
+    size_t removeAtomLabels(const std::string& objName, const std::set<int>& idxs);
     const std::string& labelFormat() const { return labelFormat_; }
     void setLabelFormat(std::string fmt) { labelFormat_ = std::move(fmt); }
-    // Resolve the displayed text for the label at `atomIdx` against the
-    // currently-loaded object: per-atom override → labelFormat_ → default.
-    std::string resolveLabel(int atomIdx) const;
+    // Resolve the displayed text for atom `idx` of `obj`: per-atom override
+    // (from `labels`) → labelFormat_ → default ("{resname}{resseq}").
+    std::string resolveLabel(const MolObject& obj, const ObjectLabels& labels,
+                             int idx) const;
     std::vector<Measurement>& measurements() { return measurements_; }
     // Free-label storage — type defined above near `freeLabels_` so the
     // member declaration order satisfies "use after declaration" inside
@@ -738,8 +766,7 @@ public:
     // into both call sites by editing one method instead of two.
     void clearOverlayAnnotations() {
         measurements_.clear();
-        labelAtoms_.clear();
-        labelText_.clear();
+        labelsByObject_.clear();
         freeLabels_.clear();
         arrows_.clear();
     }

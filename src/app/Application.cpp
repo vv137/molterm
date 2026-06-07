@@ -839,38 +839,82 @@ static std::vector<std::string> splitTopLevelParenGroups(const std::string& s) {
     return depth == 0 ? groups : std::vector<std::string>{};
 }
 
-// Resolve exactly one atom from a selection expression. Returns -1 and sets
-// `err` when the object is missing, the selection is empty, or it matches
-// more than one atom (a measurement/bond endpoint must be unambiguous).
-static int resolveSelectionToAtom(Application& app, const std::string& expr,
-                                  std::string& err) {
-    auto obj = app.tabs().currentTab().currentObject();
-    if (!obj) { err = "No object selected"; return -1; }
+// Find a loaded object by name in the active tab (nullptr if none).
+static std::shared_ptr<MolObject> findObjectByName(Application& app,
+                                                   const std::string& name) {
+    for (const auto& o : app.tabs().currentTab().objects())
+        if (o && o->name() == name) return o;
+    return nullptr;
+}
+
+// Resolve `expr` honoring the `<obj>/(...)` qualifier and scoped `$name`:
+// try `obj` first, then fan out across the tab so a qualifier can target a
+// non-current object (mirrors :select; issue #88/#101). On return `obj` is
+// the object the (non-empty) selection belongs to — unchanged when the
+// starting object matched or nothing matched. Shared by :label, :unlabel,
+// and the measurement/bond endpoint resolver.
+static Selection resolveScoped(Application& app, const std::string& expr,
+                               std::shared_ptr<MolObject>& obj) {
     Selection sel = app.parseSelection(expr, *obj);
-    if (sel.empty()) { err = "Empty selection: " + expr; return -1; }
+    if (sel.empty()) {
+        forEachInScope(app, ScopeMode::All, expr, [&](ScopedTarget& t) {
+            if (t.obj == obj) return true;             // already tried it
+            obj = t.obj;
+            sel = std::move(t.sel);
+            return false;                              // stop on first match
+        });
+    }
+    return sel;
+}
+
+// Resolve a selection expression to a single atom, scope-aware (see
+// resolveScoped). On success returns the owning object + atom index; on
+// failure sets `err`. Empty / multi-atom selections are rejected — an
+// endpoint must be unique.
+static std::shared_ptr<MolObject> resolveSelectionToAtomScoped(
+        Application& app, const std::string& expr, int& outIdx, std::string& err) {
+    auto obj = app.tabs().currentTab().currentObject();
+    if (!obj) { err = "No object selected"; return nullptr; }
+    Selection sel = resolveScoped(app, expr, obj);
+    if (sel.empty()) { err = "Empty selection: " + expr; return nullptr; }
     if (sel.size() != 1) {
         err = "Selection must resolve to exactly one atom (got " +
               std::to_string(sel.size()) + "): " + expr;
-        return -1;
+        return nullptr;
     }
-    return sel.indices()[0];
+    outIdx = sel.indices()[0];
+    return obj;
 }
 
 // Resolve a pair of distance/bond endpoints from positional args. Accepts
 //   (selA) (selB)  — two parenthesized selections, each one atom (issue #99)
 //   tok1 tok2      — two serial/pick/$ endpoints (legacy)
-// Returns false and sets `err` on any failure.
+// Both endpoints must live in the same object (a measurement/bond stores
+// indices into one atom array). The `(selA) (selB)` form honors the
+// `<obj>/(...)` qualifier and scoped `$name`, so it can target a non-current
+// object — but a cross-object pair is rejected with a clear error rather
+// than silently measuring unrelated atoms (issue #101). On success `obj` is
+// the owning object. Returns false and sets `err` on any failure.
 static bool resolveEndpointPair(Application& app,
                                 const std::vector<std::string>& pos,
+                                std::shared_ptr<MolObject>& obj,
                                 int& i1, int& i2, std::string& err) {
     std::string joined;
     for (size_t k = 0; k < pos.size(); ++k) { if (k) joined += ' '; joined += pos[k]; }
     auto groups = splitTopLevelParenGroups(joined);
     if (groups.size() == 2) {
-        i1 = resolveSelectionToAtom(app, groups[0], err);
-        if (i1 < 0) return false;
-        i2 = resolveSelectionToAtom(app, groups[1], err);
-        return i2 >= 0;
+        auto o1 = resolveSelectionToAtomScoped(app, groups[0], i1, err);
+        if (!o1) return false;
+        auto o2 = resolveSelectionToAtomScoped(app, groups[1], i2, err);
+        if (!o2) return false;
+        if (o1 != o2) {
+            err = "Both endpoints must be in the same object (got " +
+                  o1->name() + " and " + o2->name() + "); cross-object "
+                  "endpoints aren't supported — qualify both with one object";
+            return false;
+        }
+        obj = o1;
+        return true;
     }
     if (!groups.empty()) {
         err = "Expected two parenthesized selections, e.g. (resi 2 and name SG) "
@@ -878,6 +922,8 @@ static bool resolveEndpointPair(Application& app,
         return false;
     }
     if (pos.size() >= 2) {
+        obj = app.tabs().currentTab().currentObject();
+        if (!obj) { err = "No object selected"; return false; }
         i1 = resolveEndpointToken(app, pos[0]);
         if (i1 < 0) { err = "Atom not found: " + pos[0]; return false; }
         i2 = resolveEndpointToken(app, pos[1]);
@@ -901,14 +947,17 @@ static bool bondExists(const std::vector<BondData>& bonds, int a, int b) {
 // pk1/pk2 picks, otherwise the shared serial/pick/(selection) grammar. `verb`
 // names the command in the no-pick hint. Returns false and sets `err`.
 static bool resolveBondEndpoints(Application& app, const std::vector<std::string>& pos,
-                                 const char* verb, int& i1, int& i2, std::string& err) {
+                                 const char* verb, std::shared_ptr<MolObject>& obj,
+                                 int& i1, int& i2, std::string& err) {
     if (pos.empty()) {
+        obj = app.tabs().currentTab().currentObject();
+        if (!obj) { err = "No object selected"; return false; }
         i1 = app.pickReg(0); i2 = app.pickReg(1);
         if (i1 >= 0 && i2 >= 0) return true;
         err = std::string("Click two atoms first (pk1, pk2), then :") + verb;
         return false;
     }
-    return resolveEndpointPair(app, pos, i1, i2, err);
+    return resolveEndpointPair(app, pos, obj, i1, i2, err);
 }
 
 // Accept either the long form (topleft) or the two-letter short (tl)
@@ -1335,20 +1384,43 @@ std::string Application::expandScriptVars(const std::string& line) const {
     return out;
 }
 
-std::string Application::resolveLabel(int atomIdx) const {
-    auto obj = tabMgr_.currentTab().currentObject();
-    if (!obj) return {};
-    const auto& atoms = obj->atoms();
-    // labelAtoms_ may outlive an object swap; a stale idx is possible.
-    if (atomIdx < 0 || atomIdx >= static_cast<int>(atoms.size())) return {};
-    const auto& a = atoms[atomIdx];
-    // Common case: no overrides and no template — skip the hash lookup.
-    if (labelText_.empty() && labelFormat_.empty())
-        return a.resName + std::to_string(a.resSeq);
-    auto it = labelText_.find(atomIdx);
-    if (it != labelText_.end()) return it->second;
+std::string Application::resolveLabel(const MolObject& obj,
+                                      const ObjectLabels& labels, int idx) const {
+    const auto& atoms = obj.atoms();
+    // A label set may outlive the atom it points at (object reload); guard.
+    if (idx < 0 || idx >= static_cast<int>(atoms.size())) return {};
+    const auto& a = atoms[idx];
+    if (!labels.text.empty()) {
+        auto it = labels.text.find(idx);
+        if (it != labels.text.end()) return it->second;
+    }
     if (!labelFormat_.empty()) return expandLabelTemplate(labelFormat_, a);
     return a.resName + std::to_string(a.resSeq);
+}
+
+void Application::addAtomLabel(const std::string& objName, int idx,
+                               const std::string* text) {
+    auto& ls = labelsByObject_[objName];
+    if (std::find(ls.atoms.begin(), ls.atoms.end(), idx) == ls.atoms.end())
+        ls.atoms.push_back(idx);
+    // A per-atom override replaces any prior one; the no-`=` path clears it
+    // so re-labelling returns the atom to the template/default text.
+    if (text) ls.text[idx] = *text;
+    else      ls.text.erase(idx);
+}
+
+size_t Application::removeAtomLabels(const std::string& objName,
+                                     const std::set<int>& idxs) {
+    auto it = labelsByObject_.find(objName);
+    if (it == labelsByObject_.end()) return 0;
+    auto& ls = it->second;
+    size_t before = ls.atoms.size();
+    ls.atoms.erase(std::remove_if(ls.atoms.begin(), ls.atoms.end(),
+                   [&](int i) { return idxs.count(i) > 0; }), ls.atoms.end());
+    for (int i : idxs) ls.text.erase(i);
+    size_t removed = before - ls.atoms.size();
+    if (ls.atoms.empty()) labelsByObject_.erase(it);
+    return removed;
 }
 
 void Application::initRepresentations() {
@@ -2872,26 +2944,32 @@ void Application::renderViewport() {
         return;
     }
 
-    // Draw labels on viewport
+    // Draw labels on viewport. Labels are keyed per object, so each visible
+    // object's labels project against its own atoms — a label set on one
+    // member of a multi-object overlay shows on that member regardless of
+    // which object is current (issue #101). buildProjCache() primes the
+    // camera projection for the frame; the atoms are projected directly.
     {
         buildProjCache();
         int scaleX = canvas_ ? canvas_->scaleX() : 1;
         int scaleY = canvas_ ? canvas_->scaleY() : 1;
-        auto obj = tabMgr_.currentTab().currentObject();
-        if (obj && !labelAtoms_.empty()) {
-            // Build fast lookup set from label list
-            std::set<int> labelSet(labelAtoms_.begin(), labelAtoms_.end());
-            for (const auto& pa : projCache_) {
-                if (!labelSet.count(pa.idx)) continue;
-
-                int tx = pa.sx / scaleX;
-                int ty = pa.sy / scaleY;
+        auto& cam = tabMgr_.currentTab().camera();
+        auto* pc = isPixel ? dynamic_cast<PixelCanvas*>(canvas_.get()) : nullptr;
+        for (const auto& [objName, labels] : labelsByObject_) {
+            auto o = findObjectByName(*this, objName);
+            if (!o || !o->visible()) continue;
+            const auto& atoms = o->atoms();
+            for (int idx : labels.atoms) {
+                if (idx < 0 || idx >= static_cast<int>(atoms.size())) continue;
+                float fsx, fsy, depth;
+                cam.projectCached(atoms[idx].x, atoms[idx].y, atoms[idx].z,
+                                  fsx, fsy, depth);
+                int isx = static_cast<int>(fsx), isy = static_cast<int>(fsy);
+                int tx = isx / scaleX, ty = isy / scaleY;
                 if (tx < 0 || tx >= w - 6 || ty < 0 || ty >= h) continue;
-
-                std::string lbl = resolveLabel(pa.idx);
-                if (isPixel) {
-                    auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
-                    if (pc) paintLabelText(*pc, pa.sx + scaleX, pa.sy, pa.depth, lbl);
+                std::string lbl = resolveLabel(*o, labels, idx);
+                if (pc) {
+                    paintLabelText(*pc, isx + scaleX, isy, depth, lbl);
                 } else {
                     int lx = std::min(tx + 1, w - static_cast<int>(lbl.size()));
                     win.printColored(ty, lx, lbl, kColorWhite);
@@ -2962,45 +3040,47 @@ void Application::renderViewport() {
         }
     };
 
-    // Draw measurement dashed lines + labels
-    {
-        auto obj = tabMgr_.currentTab().currentObject();
-        if (obj && obj->visible() && !measurements_.empty()) {
+    // Draw measurement dashed lines + labels. Each measurement carries its
+    // owning object name; project against that object's atoms so a distance
+    // pinned on a non-current overlay member still renders (issue #101). A
+    // measurement with no object (legacy) falls back to the current object.
+    if (!measurements_.empty()) {
+        auto& cam = tabMgr_.currentTab().camera();
+        auto cur = tabMgr_.currentTab().currentObject();
+        for (const auto& m : measurements_) {
+            if (m.atoms.size() < 2) continue;
+            auto obj = m.obj.empty() ? cur : findObjectByName(*this, m.obj);
+            if (!obj || !obj->visible()) continue;
             const auto& atoms = obj->atoms();
-            auto& cam = tabMgr_.currentTab().camera();
-            for (const auto& m : measurements_) {
-                if (m.atoms.size() < 2) continue;
-                for (size_t mi = 0; mi + 1 < m.atoms.size(); ++mi) {
-                    int a1 = m.atoms[mi], a2 = m.atoms[mi + 1];
-                    if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
-                    if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
-                    float sx1, sy1, d1, sx2, sy2, d2;
-                    cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
-                    cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
-                    drawDashedLine(sx1, sy1, d1, sx2, sy2, d2, kColorYellow);
+            const int na = static_cast<int>(atoms.size());
+            if (!std::all_of(m.atoms.begin(), m.atoms.end(),
+                             [na](int a) { return a >= 0 && a < na; })) continue;
+            for (size_t mi = 0; mi + 1 < m.atoms.size(); ++mi) {
+                int a1 = m.atoms[mi], a2 = m.atoms[mi + 1];
+                float sx1, sy1, d1, sx2, sy2, d2;
+                cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+                cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                drawDashedLine(sx1, sy1, d1, sx2, sy2, d2, kColorYellow);
+            }
+            // Label at midpoint of first segment
+            int a1 = m.atoms[0], a2 = m.atoms[1];
+            float sx1, sy1, d1, sx2, sy2, d2;
+            cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
+            cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+            std::string text = m.displayLabel();
+            if (isPixel) {
+                auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
+                if (pc) {
+                    int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
+                    int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
+                    float depth = (d1 + d2) / 2.0f;
+                    paintAnnotationText(*pc, lx, ly, depth, text);
                 }
-                // Label at midpoint of first segment
-                {
-                    int a1 = m.atoms[0], a2 = m.atoms[1];
-                    float sx1, sy1, d1, sx2, sy2, d2;
-                    cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
-                    cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
-                    std::string text = m.displayLabel();
-                    if (isPixel) {
-                        auto* pc = dynamic_cast<PixelCanvas*>(canvas_.get());
-                        if (pc) {
-                            int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
-                            int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
-                            float depth = (d1 + d2) / 2.0f;
-                            paintAnnotationText(*pc, lx, ly, depth, text);
-                        }
-                    } else {
-                        int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
-                        int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
-                        if (mx >= 0 && mx < w - static_cast<int>(text.size()) && my >= 0 && my < h)
-                            win.printColored(my, mx, text, kColorYellow);
-                    }
-                }
+            } else {
+                int mx = (static_cast<int>(sx1) / scaleX + static_cast<int>(sx2) / scaleX) / 2;
+                int my = (static_cast<int>(sy1) / scaleY + static_cast<int>(sy2) / scaleY) / 2;
+                if (mx >= 0 && mx < w - static_cast<int>(text.size()) && my >= 0 && my < h)
+                    win.printColored(my, mx, text, kColorYellow);
             }
         }
     }
@@ -3338,26 +3418,28 @@ void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) 
     drawFreeLabelsPixel(pc, subW, subH, tab.camera());
     drawArrowsPixel(pc, subW, subH, tab.camera());
 
-    auto obj = tab.currentObject();
-    if (!obj || !obj->visible()) return;
+    // Labels and measurements are keyed by object and render across every
+    // visible object (not just the current one), so an overlay of superposed
+    // structures can carry per-structure annotations (issue #101). The
+    // $sele/pk highlight below stays scoped to the current object.
     auto& cam = tab.camera();
-    const auto& atoms = obj->atoms();
     int scaleX = pc.scaleX();
 
     // Residue labels — text rendered in white next to each labeled atom.
     // Text comes from resolveLabel(): per-atom override > label_format > default.
-    if (!labelAtoms_.empty()) {
-        std::set<int> labelSet(labelAtoms_.begin(), labelAtoms_.end());
-        for (int idx : labelSet) {
-            if (idx < 0 || idx >= static_cast<int>(atoms.size())) continue;
-            const auto& a = atoms[idx];
+    for (const auto& [objName, labels] : labelsByObject_) {
+        auto o = findObjectByName(*this, objName);
+        if (!o || !o->visible()) continue;
+        const auto& oatoms = o->atoms();
+        for (int idx : labels.atoms) {
+            if (idx < 0 || idx >= static_cast<int>(oatoms.size())) continue;
+            const auto& a = oatoms[idx];
             float fsx, fsy, depth;
             cam.projectCached(a.x, a.y, a.z, fsx, fsy, depth);
             int isx = static_cast<int>(fsx);
             int isy = static_cast<int>(fsy);
             if (isx < 0 || isx >= subW || isy < 0 || isy >= subH) continue;
-            std::string lbl = resolveLabel(idx);
-            paintLabelText(pc, isx + scaleX, isy, depth, lbl);
+            paintLabelText(pc, isx + scaleX, isy, depth, resolveLabel(*o, labels, idx));
         }
     }
 
@@ -3392,24 +3474,27 @@ void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) 
             }
         };
 
+        auto cur = tab.currentObject();
         for (const auto& m : measurements_) {
             if (m.atoms.size() < 2) continue;
+            auto o = m.obj.empty() ? cur : findObjectByName(*this, m.obj);
+            if (!o || !o->visible()) continue;
+            const auto& oatoms = o->atoms();
+            const int na = static_cast<int>(oatoms.size());
+            if (!std::all_of(m.atoms.begin(), m.atoms.end(),
+                             [na](int a) { return a >= 0 && a < na; })) continue;
             for (size_t mi = 0; mi + 1 < m.atoms.size(); ++mi) {
                 int a1 = m.atoms[mi], a2 = m.atoms[mi + 1];
-                if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
-                if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
                 float sx1, sy1, d1, sx2, sy2, d2;
-                cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
-                cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+                cam.projectCached(oatoms[a1].x, oatoms[a1].y, oatoms[a1].z, sx1, sy1, d1);
+                cam.projectCached(oatoms[a2].x, oatoms[a2].y, oatoms[a2].z, sx2, sy2, d2);
                 drawDash(sx1, sy1, d1, sx2, sy2, d2, kColorYellow,
                          effectiveAnnotationLineWidth());
             }
             int a1 = m.atoms[0], a2 = m.atoms[1];
-            if (a1 < 0 || a1 >= static_cast<int>(atoms.size())) continue;
-            if (a2 < 0 || a2 >= static_cast<int>(atoms.size())) continue;
             float sx1, sy1, d1, sx2, sy2, d2;
-            cam.projectCached(atoms[a1].x, atoms[a1].y, atoms[a1].z, sx1, sy1, d1);
-            cam.projectCached(atoms[a2].x, atoms[a2].y, atoms[a2].z, sx2, sy2, d2);
+            cam.projectCached(oatoms[a1].x, oatoms[a1].y, oatoms[a1].z, sx1, sy1, d1);
+            cam.projectCached(oatoms[a2].x, oatoms[a2].y, oatoms[a2].z, sx2, sy2, d2);
             int lx = (static_cast<int>(sx1) + static_cast<int>(sx2)) / 2;
             int ly = (static_cast<int>(sy1) + static_cast<int>(sy2)) / 2;
             float depth = (d1 + d2) / 2.0f;
@@ -3422,6 +3507,9 @@ void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) 
     // editor's transient selection cue doesn't bake into figures —
     // issue #96).
     if (includeSeleHighlights) {
+        auto obj = tab.currentObject();
+        if (!obj || !obj->visible()) return;
+        const auto& atoms = obj->atoms();
         const std::vector<int>* selIdx = nullptr;
         auto selIt = namedSelections_.find(kSele);
         if (selIt != namedSelections_.end() && !selIt->second.empty())
@@ -7380,8 +7468,7 @@ void Application::registerCommands() {
         if (cmd.args.empty())
             return {false, "Usage: :label <sel|corner CORNER|screen FX FY|world X Y Z> [= \"text\"] or :label clear"};
         if (cmd.args[0] == "clear") {
-            app.labelAtoms().clear();
-            app.labelText().clear();
+            app.clearAtomLabels();
             app.freeLabels().clear();
             return {true, "Labels cleared"};
         }
@@ -7456,19 +7543,14 @@ void Application::registerCommands() {
         bool hasCustom = (exprArgs.size() != cmd.args.size());
         if (hasCustom && customText.empty())
             return {false, "Empty label text after '='"};
-        auto sel = app.parseSelection(expr, *obj);
+        // Honor the `<obj>/(...)` qualifier and scoped `$name` (issue #101).
+        // Labels are stored against the resolved object so they render on
+        // its own atoms in a multi-object overlay.
+        auto sel = resolveScoped(app, expr, obj);
         if (sel.empty()) return {false, "No atoms match: " + expr};
-        auto& labels = app.labelAtoms();
-        auto& textMap = app.labelText();
-        for (int idx : sel.indices()) {
-            bool found = false;
-            for (int li : labels) { if (li == idx) { found = true; break; } }
-            if (!found) labels.push_back(idx);
-            // Drop any prior override on the no-`=` path so re-labelling
-            // returns the atom to the template/default text.
-            if (hasCustom) textMap[idx] = customText;
-            else           textMap.erase(idx);
-        }
+        const std::string* text = hasCustom ? &customText : nullptr;
+        for (int idx : sel.indices())
+            app.addAtomLabel(obj->name(), idx, text);
         if (hasCustom)
             return {true, "Labeled " + std::to_string(sel.size()) +
                           " atoms as \"" + customText + "\""};
@@ -7482,10 +7564,9 @@ void Application::registerCommands() {
             // "Remove all labels" must cover free labels too — corner /
             // screen / world anchors live in a separate store but read
             // as "labels" to the user.
-            int n = static_cast<int>(app.labelAtoms().size());
+            int n = static_cast<int>(app.labelCount());
             int fn = static_cast<int>(app.freeLabels().size());
-            app.labelAtoms().clear();
-            app.labelText().clear();
+            app.clearAtomLabels();
             app.freeLabels().clear();
             if (fn == 0) return {true, "Cleared " + std::to_string(n) + " label(s)"};
             return {true, "Cleared " + std::to_string(n) + " atom + " +
@@ -7512,18 +7593,13 @@ void Application::registerCommands() {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
         std::string expr = joinArgs(cmd.args, 0, cmd.args.size());
-        auto sel = app.parseSelection(expr, *obj);
+        // Same scope-aware resolution as :label so `:unlabel <obj>/(...)`
+        // and scoped `$name` drop labels from the right object (issue #101).
+        auto sel = resolveScoped(app, expr, obj);
         if (sel.empty()) return {false, "No atoms match: " + expr};
         std::set<int> drop(sel.indices().begin(), sel.indices().end());
-        auto& labels = app.labelAtoms();
-        auto& textMap = app.labelText();
-        size_t before = labels.size();
-        labels.erase(std::remove_if(labels.begin(), labels.end(),
-                     [&](int idx) { return drop.count(idx) > 0; }),
-                     labels.end());
-        for (int idx : drop) textMap.erase(idx);
-        return {true, "Removed " + std::to_string(before - labels.size()) +
-                      " label(s)"};
+        size_t removed = app.removeAtomLabels(obj->name(), drop);
+        return {true, "Removed " + std::to_string(removed) + " label(s)"};
     }, ":unlabel [selection|corner [<which>]|screen|world]",
        "Remove labels (no arg: all atom + free; selection: matching atoms; corner/screen/world: that anchor kind)",
        {":unlabel", ":unlabel chain E and resi 1",
@@ -7536,7 +7612,7 @@ void Application::registerCommands() {
         }
         if (cmd.args[0] == "clear") {
             int mc = static_cast<int>(app.measurements().size());
-            int lc = static_cast<int>(app.labelAtoms().size());
+            int lc = static_cast<int>(app.labelCount());
             app.clearOverlayAnnotations();
             return {true, "Cleared " + std::to_string(mc) + " measurements, " +
                    std::to_string(lc) + " labels"};
@@ -7699,7 +7775,7 @@ void Application::registerCommands() {
             std::vector<SessionExporter::Measurement> exportMs;
             exportMs.reserve(app.measurements().size());
             for (const auto& m : app.measurements())
-                exportMs.push_back({m.atoms, m.label, m.caption});
+                exportMs.push_back({m.atoms, m.label, m.caption, m.obj});
             std::string result = SessionExporter::exportPML(
                 path, tab, vpW, vpH, app.stereoMode(), app.stereoAngle(), exportMs);
             bool ok = result.find("Failed") == std::string::npos &&
@@ -7762,20 +7838,21 @@ void Application::registerCommands() {
 
     // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
     cmdRegistry_.registerCmd("measure", [atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
-        const auto& atoms = obj->atoms();
-        int n = static_cast<int>(atoms.size());
         auto [pos, caption] = splitAtEqToken(cmd.args);
 
+        std::shared_ptr<MolObject> obj;
         int i1, i2;
         if (pos.empty()) {
+            obj = app.tabs().currentTab().currentObject();
+            if (!obj) return {false, "No object selected"};
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
             if (i1 < 0 || i2 < 0) return {false, "Click two atoms first (pk1, pk2), then :measure"};
         } else {
             std::string err;
-            if (!resolveEndpointPair(app, pos, i1, i2, err)) return {false, err};
+            if (!resolveEndpointPair(app, pos, obj, i1, i2, err)) return {false, err};
         }
+        const auto& atoms = obj->atoms();
+        int n = static_cast<int>(atoms.size());
         if (i1 >= n || i2 >= n) return {false, "Invalid atom index"};
 
         float dx = atoms[i1].x - atoms[i2].x;
@@ -7788,7 +7865,7 @@ void Application::registerCommands() {
         std::string msg = "Distance " + atomLabel(atoms[i1]) + " — " +
             atomLabel(atoms[i2]) + " = " + shortLabel;
         if (!caption.empty()) msg += "  \"" + caption + "\"";
-        app.measurements().push_back({{i1, i2}, shortLabel, caption});
+        app.measurements().push_back({{i1, i2}, shortLabel, caption, obj->name()});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
     }, ":measure [s1 s2 | pk1 pk2 | (selA) (selB)] [= \"caption\"]",
@@ -7806,12 +7883,11 @@ void Application::registerCommands() {
     // both endpoints are shown in a bond-drawing repr (wireframe/ballstick).
     // Endpoints follow the same grammar as :measure.
     cmdRegistry_.registerCmd("bond", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
         auto [pos, caption] = splitAtEqToken(cmd.args);  // caption unused — bonds carry no label
+        std::shared_ptr<MolObject> obj;
         int i1, i2;
         std::string err;
-        if (!resolveBondEndpoints(app, pos, "bond", i1, i2, err)) return {false, err};
+        if (!resolveBondEndpoints(app, pos, "bond", obj, i1, i2, err)) return {false, err};
         if (i1 == i2) return {false, "Cannot bond an atom to itself"};
         auto& bonds = obj->bonds();
         if (bondExists(bonds, i1, i2)) return {true, "Bond already exists"};
@@ -7831,12 +7907,11 @@ void Application::registerCommands() {
     // inverse of :bond/:disulfide; useful to drop a spurious auto-detected
     // edge. Same endpoint grammar.
     cmdRegistry_.registerCmd("unbond", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        auto obj = app.tabs().currentTab().currentObject();
-        if (!obj) return {false, "No object selected"};
         auto [pos, caption] = splitAtEqToken(cmd.args);
+        std::shared_ptr<MolObject> obj;
         int i1, i2;
         std::string err;
-        if (!resolveBondEndpoints(app, pos, "unbond", i1, i2, err)) return {false, err};
+        if (!resolveBondEndpoints(app, pos, "unbond", obj, i1, i2, err)) return {false, err};
         auto& bonds = obj->bonds();
         auto before = bonds.size();
         bonds.erase(std::remove_if(bonds.begin(), bonds.end(), [&](const BondData& b) {
@@ -8024,7 +8099,7 @@ void Application::registerCommands() {
         std::string msg = "Angle " + atomLabel(atoms[i1]) + " — " +
             atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " = " + buf + " deg";
         if (!caption.empty()) msg += "  \"" + caption + "\"";
-        app.measurements().push_back({{i1, i2, i3}, shortLabel, caption});
+        app.measurements().push_back({{i1, i2, i3}, shortLabel, caption, obj->name()});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
     }, ":angle [serial1 serial2 serial3 | pk1 pk2 pk3] [= \"caption\"]",
@@ -8073,7 +8148,7 @@ void Application::registerCommands() {
             atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " — " +
             atomLabel(atoms[i4]) + " = " + buf + " deg";
         if (!caption.empty()) msg += "  \"" + caption + "\"";
-        app.measurements().push_back({{i1, i2, i3, i4}, shortLabel, caption});
+        app.measurements().push_back({{i1, i2, i3, i4}, shortLabel, caption, obj->name()});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
     }, ":dihedral [serial1..serial4 | pk1..pk4] [= \"caption\"]",

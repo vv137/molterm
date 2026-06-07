@@ -22,6 +22,16 @@ public:
     size_t size() const { return indices_.size(); }
     bool empty() const { return indices_.empty(); }
 
+    // Object scope — the `<obj>` in an `<obj>/(...)` qualifier. A scoped
+    // selection re-resolves only against the object of that name; empty
+    // means unscoped (resolves against whatever object it is parsed
+    // against). The parser tags the result of `<obj>/(...)` and the
+    // `/obj/.../` slash form, and honors it when re-expanding `$name` so a
+    // named selection built from `<obj>/(...)` does not leak into other
+    // loaded objects (issue #101).
+    const std::string& objectScope() const { return objScope_; }
+    Selection& setObjectScope(std::string obj) { objScope_ = std::move(obj); return *this; }
+
     // Mutation (for mouse picking)
     void addIndex(int idx);
     void addIndices(const std::vector<int>& idxs);
@@ -85,6 +95,7 @@ public:
 private:
     std::vector<int> indices_;
     std::string expr_;
+    std::string objScope_;  // owning object name, or empty when unscoped
 };
 
 } // namespace molterm

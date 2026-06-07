@@ -231,7 +231,9 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
         50.0f, 500.0f, -1.0f);  // -1 = ortho ON
     out << buf;
 
-    // Atom indices are into the first object (PyMOL `id N` uses PDB serials).
+    // PyMOL `id N` uses PDB serials. Each measurement names its owning object
+    // (issue #101); resolve per measurement, falling back to the first object
+    // for legacy entries that predate the field.
     if (!measurements.empty() && !tab.objects().empty()) {
         // Escape user caption for PyMOL's "..."-quoted label argument.
         auto escapeLabel = [](const std::string& s) {
@@ -245,12 +247,18 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
             }
             return out;
         };
-        const auto& obj = tab.objects().front();
-        const auto& atoms = obj->atoms();
-        const std::string& objName = obj->name();
+        auto objByName = [&](const std::string& name) -> std::shared_ptr<MolObject> {
+            if (!name.empty())
+                for (const auto& o : tab.objects())
+                    if (o && o->name() == name) return o;
+            return tab.objects().front();
+        };
         out << "\n# Persistent annotations from :measure / :angle / :dihedral\n";
         int idx = 1;
         for (const auto& m : measurements) {
+            const auto& obj = objByName(m.obj);
+            const auto& atoms = obj->atoms();
+            const std::string& objName = obj->name();
             std::vector<int> serials;
             bool ok = true;
             for (int aidx : m.atoms) {
