@@ -814,26 +814,36 @@ static int resolveEndpointToken(Application& app, const std::string& s) {
     return -1;
 }
 
-// Extract the contents of each top-level parenthesized group from `s`,
-// e.g. "(a (b) c) (d)" -> {"a (b) c", "d"}. Returns {} on unbalanced
-// parens. Lets :measure/:bond take two selection expressions (which may
-// themselves contain spaces and nested parens) as positional args.
-static std::vector<std::string> splitTopLevelParenGroups(const std::string& s) {
+// Split `s` into top-level selection endpoints — one per balanced
+// parenthesized group, INCLUDING the parens and any object-qualifier prefix
+// glued to the opening paren:
+//   "(a (b) c) (d)"                     -> {"(a (b) c)", "(d)"}
+//   "1crn/(resi 1) 1crn/(resi 2)"       -> {"1crn/(resi 1)", "1crn/(resi 2)"}
+// Returns {} on unbalanced parens. Lets :measure/:bond take two selection
+// expressions as positional args; keeping the `<obj>/` prefix is what makes
+// the object qualifier survive on each endpoint (issue #101) — stripping it
+// silently resolved both endpoints against the current object.
+static std::vector<std::string> splitEndpointSelections(const std::string& s) {
     std::vector<std::string> groups;
     int depth = 0;
     size_t startPos = 0;
     for (size_t i = 0; i < s.size(); ++i) {
         if (s[i] == '(') {
-            if (depth == 0) startPos = i + 1;
+            if (depth == 0) {
+                // Back up over a glued `<obj>/` prefix so the qualifier is
+                // kept; stop at whitespace or an adjacent paren so we never
+                // swallow the previous endpoint.
+                startPos = i;
+                while (startPos > 0 &&
+                       !std::isspace(static_cast<unsigned char>(s[startPos - 1])) &&
+                       s[startPos - 1] != ')' && s[startPos - 1] != '(')
+                    --startPos;
+            }
             ++depth;
         } else if (s[i] == ')') {
             if (depth == 0) return {};       // unbalanced ')'
-            if (--depth == 0) {
-                std::string g = s.substr(startPos, i - startPos);
-                auto a = g.find_first_not_of(" \t");
-                auto b = g.find_last_not_of(" \t");
-                groups.push_back(a == std::string::npos ? "" : g.substr(a, b - a + 1));
-            }
+            if (--depth == 0)
+                groups.push_back(s.substr(startPos, i - startPos + 1));
         }
     }
     return depth == 0 ? groups : std::vector<std::string>{};
@@ -901,7 +911,7 @@ static bool resolveEndpointPair(Application& app,
                                 int& i1, int& i2, std::string& err) {
     std::string joined;
     for (size_t k = 0; k < pos.size(); ++k) { if (k) joined += ' '; joined += pos[k]; }
-    auto groups = splitTopLevelParenGroups(joined);
+    auto groups = splitEndpointSelections(joined);
     if (groups.size() == 2) {
         auto o1 = resolveSelectionToAtomScoped(app, groups[0], i1, err);
         if (!o1) return false;
