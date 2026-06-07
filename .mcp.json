@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "molterm": {
+      "command": "node",
+      "args": ["/Users/hanjin/work/molterm/mcp/dist/index.js"],
+      "env": {
+        "MOLTERM_BIN": "/Users/hanjin/work/molterm/build/molterm"
+      }
+    }
+  }
+}
