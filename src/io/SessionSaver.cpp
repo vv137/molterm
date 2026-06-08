@@ -3,10 +3,13 @@
 #include "molterm/cmd/Register.h"
 #include "molterm/core/Logger.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
+#include <vector>
 
 namespace molterm {
 
@@ -14,6 +17,82 @@ std::string SessionSaver::sessionPath() {
     const char* home = std::getenv("HOME");
     if (!home) return "";
     return std::string(home) + "/.molterm/autosave.toml";
+}
+
+// Stable token for a repr, used as the `repr_mask_<token>` autosave key and to
+// match against the comma-joined `reprs` list.
+static const char* reprKeyName(ReprType r) {
+    switch (r) {
+        case ReprType::Wireframe: return "wireframe";
+        case ReprType::BallStick: return "ballstick";
+        case ReprType::Spacefill: return "spacefill";
+        case ReprType::Cartoon:   return "cartoon";
+        case ReprType::Ribbon:    return "ribbon";
+        case ReprType::Backbone:  return "backbone";
+        case ReprType::Surface:   return "surface";
+    }
+    return "";
+}
+
+// Every repr, in a fixed order — so save/restore iterate identically.
+static constexpr ReprType kAllReprs[] = {
+    ReprType::Wireframe, ReprType::BallStick, ReprType::Spacefill,
+    ReprType::Cartoon, ReprType::Ribbon, ReprType::Backbone, ReprType::Surface};
+
+// Autosave key prefixes for per-atom state — shared by save + restore so the
+// length stripped on parse stays in sync with the emitted key.
+static constexpr char kReprMaskPrefix[] = "repr_mask_";
+static constexpr char kColorOvrPrefix[] = "color_override_";
+
+// Encode the true bits of a per-atom mask as comma-separated inclusive index
+// ranges ("12,40-211") — compact because ligand/polymer atoms are contiguous.
+static std::string encodeRanges(const std::vector<bool>& mask) {
+    std::string s;
+    const int n = static_cast<int>(mask.size());
+    for (int i = 0; i < n; ) {
+        if (!mask[i]) { ++i; continue; }
+        int j = i;
+        while (j + 1 < n && mask[j + 1]) ++j;
+        if (!s.empty()) s += ",";
+        s += (i == j) ? std::to_string(i)
+                      : std::to_string(i) + "-" + std::to_string(j);
+        i = j + 1;
+    }
+    return s;
+}
+
+// Same, over an ascending index list (per-color groups are naturally sorted
+// since atoms are scanned in order) — avoids a full N-bool mask per color.
+static std::string encodeRanges(const std::vector<int>& idx) {
+    std::string s;
+    for (size_t k = 0; k < idx.size(); ) {
+        int a = idx[k], b = a;
+        size_t m = k;
+        while (m + 1 < idx.size() && idx[m + 1] == idx[m] + 1) b = idx[++m];
+        if (!s.empty()) s += ",";
+        s += (a == b) ? std::to_string(a)
+                      : std::to_string(a) + "-" + std::to_string(b);
+        k = m + 1;
+    }
+    return s;
+}
+
+static std::vector<int> decodeRanges(const std::string& s) {
+    std::vector<int> out;
+    std::stringstream ss(s);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+        if (tok.empty()) continue;
+        auto dash = tok.find('-');
+        if (dash == std::string::npos) {
+            out.push_back(std::stoi(tok));
+        } else {
+            int a = std::stoi(tok.substr(0, dash));
+            int b = std::stoi(tok.substr(dash + 1));
+            for (int k = a; k <= b; ++k) out.push_back(k);
+        }
+    }
+    return out;
 }
 
 bool SessionSaver::saveSession(const Application& app) {
@@ -65,6 +144,7 @@ bool SessionSaver::saveSession(const Application& app) {
             out << "name = \"" << obj->name() << "\"\n";
             out << "path = \"" << obj->sourcePath() << "\"\n";
             out << "visible = " << (obj->visible() ? "true" : "false") << "\n";
+            out << "atom_count = " << obj->atoms().size() << "\n";
 
             // Color scheme
             switch (obj->colorScheme()) {
@@ -78,17 +158,38 @@ bool SessionSaver::saveSession(const Application& app) {
                 default:                              out << "color_scheme = \"element\"\n"; break;
             }
 
-            // Active representations
+            // Active representations (object-level flags)
             std::string reprs;
-            if (obj->reprVisible(ReprType::Wireframe)) reprs += "wireframe,";
-            if (obj->reprVisible(ReprType::BallStick)) reprs += "ballstick,";
-            if (obj->reprVisible(ReprType::Spacefill)) reprs += "spacefill,";
-            if (obj->reprVisible(ReprType::Cartoon))   reprs += "cartoon,";
-            if (obj->reprVisible(ReprType::Ribbon))    reprs += "ribbon,";
-            if (obj->reprVisible(ReprType::Backbone))  reprs += "backbone,";
-            if (obj->reprVisible(ReprType::Surface))   reprs += "surface,";
+            for (ReprType r : kAllReprs)
+                if (obj->reprVisible(r)) { reprs += reprKeyName(r); reprs += ","; }
             if (!reprs.empty()) reprs.pop_back();  // remove trailing comma
             out << "reprs = \"" << reprs << "\"\n";
+
+            // Per-atom repr masks (e.g. `show wire ligand`) — saved as index
+            // ranges so a ligand-only repr round-trips on :resume instead of
+            // expanding to the whole object. Only emitted for a real subset.
+            for (ReprType r : kAllReprs) {
+                if (!obj->reprVisible(r)) continue;
+                auto mask = obj->atomVisMask(r);
+                if (mask.empty()) continue;  // no per-atom state → whole object
+                if (std::all_of(mask.begin(), mask.end(), [](bool b) { return b; }))
+                    continue;                // effectively whole object
+                out << kReprMaskPrefix << reprKeyName(r) << " = \""
+                    << encodeRanges(mask) << "\"\n";
+            }
+
+            // Per-atom color overrides (e.g. `color element ligand`) — grouped
+            // by colorPair id, saved as index ranges like the repr masks. The id
+            // is the stable kColor* / packed-RGB value, so no name round-trip is
+            // needed; without this a ligand resumes in the scheme color, not CPK.
+            const auto& atomColors = obj->atomColors();
+            if (!atomColors.empty()) {
+                std::map<int, std::vector<int>> byColor;  // colorPair → ascending indices
+                for (int i = 0; i < static_cast<int>(atomColors.size()); ++i)
+                    if (atomColors[i] >= 0) byColor[atomColors[i]].push_back(i);
+                for (const auto& [cid, idx] : byColor)
+                    out << kColorOvrPrefix << cid << " = \"" << encodeRanges(idx) << "\"\n";
+            }
 
             // Multi-state
             if (obj->stateCount() > 1)
@@ -147,6 +248,9 @@ std::string SessionSaver::restoreSession(Application& app) {
         bool visible = true;
         std::string colorScheme = "element";
         std::string reprs = "wireframe";
+        std::map<std::string, std::string> reprMasks;  // repr token → index ranges
+        std::map<int, std::string> colorOverrides;     // colorPair id → index ranges
+        int atomCount = -1;                            // -1 = unknown (old autosave)
         int activeState = 0;
     };
     struct TabState {
@@ -259,6 +363,11 @@ std::string SessionSaver::restoreSession(Application& app) {
             else if (key == "visible") curObj->visible = (val == "true");
             else if (key == "color_scheme") curObj->colorScheme = val;
             else if (key == "reprs") curObj->reprs = val;
+            else if (key == "atom_count") curObj->atomCount = std::stoi(val);
+            else if (key.rfind(kReprMaskPrefix, 0) == 0)
+                curObj->reprMasks[key.substr(sizeof(kReprMaskPrefix) - 1)] = val;
+            else if (key.rfind(kColorOvrPrefix, 0) == 0)
+                curObj->colorOverrides[std::stoi(key.substr(sizeof(kColorOvrPrefix) - 1))] = val;
             else if (key == "active_state") curObj->activeState = std::stoi(val);
             continue;
         }
@@ -339,15 +448,40 @@ std::string SessionSaver::restoreSession(Application& app) {
             else if (os.colorScheme == "restype") obj->setColorScheme(ColorScheme::ResType);
             else                                  obj->setColorScheme(ColorScheme::Element);
 
-            // Restore representations
+            // Per-atom state is positional (atom index), so only trust it when
+            // the reloaded file still has the same atom count — otherwise a
+            // changed source would silently mis-show/mis-paint. On mismatch fall
+            // back to object-level reprs (the pre-per-atom behavior).
+            const bool perAtomOk =
+                os.atomCount < 0 ||
+                os.atomCount == static_cast<int>(obj->atoms().size());
+            if (!perAtomOk)
+                MLOG_INFO("resume: %s atom count changed (%d -> %zu); "
+                          "restoring object-level reprs only",
+                          obj->name().c_str(), os.atomCount, obj->atoms().size());
+
+            // Restore representations, honoring per-atom masks when valid: a
+            // saved `repr_mask_<token>` re-applies the subset (e.g. ligand-only
+            // wireframe) instead of showing the repr on every atom.
             obj->hideAllRepr();
-            if (os.reprs.find("wireframe") != std::string::npos) obj->showRepr(ReprType::Wireframe);
-            if (os.reprs.find("ballstick") != std::string::npos) obj->showRepr(ReprType::BallStick);
-            if (os.reprs.find("spacefill") != std::string::npos) obj->showRepr(ReprType::Spacefill);
-            if (os.reprs.find("cartoon") != std::string::npos)   obj->showRepr(ReprType::Cartoon);
-            if (os.reprs.find("ribbon") != std::string::npos)    obj->showRepr(ReprType::Ribbon);
-            if (os.reprs.find("backbone") != std::string::npos)  obj->showRepr(ReprType::Backbone);
-            if (os.reprs.find("surface") != std::string::npos)   obj->showRepr(ReprType::Surface);
+            for (ReprType r : kAllReprs) {
+                const char* token = reprKeyName(r);
+                if (os.reprs.find(token) == std::string::npos) continue;
+                auto it = os.reprMasks.find(token);
+                if (perAtomOk && it != os.reprMasks.end())
+                    obj->showReprForAtoms(r, decodeRanges(it->second));
+                else
+                    obj->showRepr(r);
+            }
+
+            // Restore per-atom color overrides (cleared first so loader smart-
+            // defaults don't bleed through). Only when valid and recorded —
+            // keeps older autosaves and `color clear` states intact.
+            if (perAtomOk && !os.colorOverrides.empty()) {
+                obj->clearAtomColors();
+                for (const auto& [cid, ranges] : os.colorOverrides)
+                    obj->setAtomColors(decodeRanges(ranges), cid);
+            }
 
             // Restore multi-state
             if (os.activeState > 0 && obj->stateCount() > 1)
