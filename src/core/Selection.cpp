@@ -298,30 +298,22 @@ private:
 // use a star ("O5*") instead, so prime-insensitive comparison covers both.
 // The bridging O5'/O3' count as phosphate (they belong to the phosphodiester
 // backbone), matching the issue's intended split and PyMOL/ChimeraX usage.
-static bool naNameMatches(const std::string& name, const char* const* set, size_t n) {
-    auto eqPrimeInsensitive = [](const std::string& a, const char* b) {
-        size_t i = 0;
-        for (; b[i] && i < a.size(); ++i) {
-            char ca = a[i], cb = b[i];
-            if (ca == '*') ca = '\'';
-            if (cb == '*') cb = '\'';
-            if (ca != cb) return false;
-        }
-        return b[i] == '\0' && i == a.size();
-    };
-    for (size_t i = 0; i < n; ++i)
-        if (eqPrimeInsensitive(name, set[i])) return true;
-    return false;
+// Normalize a legacy star prime ("O5*") to the apostrophe form ("O5'") so a
+// single set covers both spellings with one O(1) hash lookup.
+static std::string naNorm(const std::string& name) {
+    std::string s = name;
+    for (char& c : s) if (c == '*') c = '\'';
+    return s;
 }
 static bool isNaPhosphateAtom(const std::string& name) {
-    static const char* const kSet[] = {"P", "OP1", "OP2", "OP3",
-                                       "O1P", "O2P", "O3P", "O5'", "O3'"};
-    return naNameMatches(name, kSet, sizeof(kSet) / sizeof(kSet[0]));
+    static const std::unordered_set<std::string> kSet = {
+        "P", "OP1", "OP2", "OP3", "O1P", "O2P", "O3P", "O5'", "O3'"};
+    return kSet.count(naNorm(name)) > 0;
 }
 static bool isNaSugarAtom(const std::string& name) {
-    static const char* const kSet[] = {"C1'", "C2'", "C3'", "C4'", "C5'",
-                                       "O4'", "O2'"};
-    return naNameMatches(name, kSet, sizeof(kSet) / sizeof(kSet[0]));
+    static const std::unordered_set<std::string> kSet = {
+        "C1'", "C2'", "C3'", "C4'", "C5'", "O4'", "O2'"};
+    return kSet.count(naNorm(name)) > 0;
 }
 
 // ── Recursive descent parser ────────────────────────────────────────────────

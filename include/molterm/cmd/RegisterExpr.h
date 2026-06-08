@@ -38,7 +38,7 @@ class MolObject;
 //                                    strand segments); axis1 = axis.
 //   superpose_axis(selA vs selB)  -> Pca  — screw axis of the optimal A→B
 //                                    rigid superposition (equal counts);
-//                                    axis1 = axis, eig1 = rotation angle°,
+//                                    axis1 = axis, angle = rotation angle°,
 //                                    rmsd = post-fit residual.
 //   rmsd(selA vs selB)            -> Scalar — RMSD of the optimal A→B
 //                                    superposition (equal counts), without

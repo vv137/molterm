@@ -88,14 +88,14 @@ int main() {
         PcaResult s = molterm::geom::superposeAxisOf(ax, ay, az, bx, by, bz);
         double axisdot = s.valid ? std::abs(dotv(s.axis1, k)) : 0.0;
         check(s.valid && axisdot > 0.999, "superpose_axis: recovers rotation axis", axisdot, 1.0);
-        check(s.valid && std::abs(s.eigvals[0] - 35.0) < 0.5, "superpose_axis: recovers angle (35°)",
-              s.valid ? s.eigvals[0] : 0.0, 35.0);
+        check(s.valid && std::abs(s.angle - 35.0) < 0.5, "superpose_axis: recovers angle (35°)",
+              s.valid ? s.angle : 0.0, 35.0);
     }
     {
         // Identical sets → ~0° rotation.
         std::vector<float> x = {1,0,0,1}, y = {0,2,0,1}, z = {0,0,3,2};
         PcaResult s = molterm::geom::superposeAxisOf(x, y, z, x, y, z);
-        check(s.valid && s.eigvals[0] < 0.5, "superpose_axis: identity → 0°", s.valid ? s.eigvals[0] : -1, 0.0);
+        check(s.valid && s.angle < 0.5, "superpose_axis: identity → 0°", s.valid ? s.angle : -1, 0.0);
     }
 
     // ── rmsd: superposition-invariant residual (issue #115) ──

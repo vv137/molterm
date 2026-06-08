@@ -32,7 +32,7 @@
 #   :label corner topleft = "rotation = ${hinge_angle:.1f}° (rmsd ${hinge_rmsd:.2f} Å)"
 
 let _sp = superpose_axis(${SEL_A} vs ${SEL_B})
-let hinge_angle  = $_sp.eig1
+let hinge_angle  = $_sp.angle
 let hinge_axis   = $_sp.axis1
 let hinge_center = $_sp.center
 let hinge_rmsd   = $_sp.rmsd

@@ -1,5 +1,6 @@
 #include "molterm/core/BondTable.h"
 
+#include <cctype>
 #include <unordered_map>
 
 namespace molterm {
@@ -109,6 +110,26 @@ bool isStandardAA(const std::string& resName) {
 
 bool isStandardNA(const std::string& resName) {
     return kNABases.count(resName) > 0;
+}
+
+bool isSolvent(const std::string& resName) {
+    return resName == "HOH" || resName == "WAT" || resName == "DOD" ||
+           resName == "H2O" || resName == "SOL" || resName == "TIP3";
+}
+
+float atomicMass(const std::string& element) {
+    static const std::unordered_map<std::string, float> kMass = {
+        {"H", 1.008f},   {"C", 12.011f},  {"N", 14.007f},  {"O", 15.999f},
+        {"P", 30.974f},  {"S", 32.06f},   {"SE", 78.971f}, {"F", 18.998f},
+        {"CL", 35.45f},  {"BR", 79.904f}, {"I", 126.90f},  {"NA", 22.990f},
+        {"MG", 24.305f}, {"K", 39.098f},  {"CA", 40.078f}, {"MN", 54.938f},
+        {"FE", 55.845f}, {"CO", 58.933f}, {"NI", 58.693f}, {"CU", 63.546f},
+        {"ZN", 65.38f},
+    };
+    std::string up = element;
+    for (auto& c : up) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    auto it = kMass.find(up);
+    return (it != kMass.end()) ? it->second : 12.011f;
 }
 
 } // namespace molterm

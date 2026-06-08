@@ -279,11 +279,11 @@ PcaResult superposeAxisOf(const std::vector<float>& ax, const std::vector<float>
     if (vlen < 1e-9) {
         // Pure-identity rotation: axis undefined, angle ≈ 0.
         out.axis1 = {0, 0, 1};
-        out.eigvals = {0, 0, 0};
+        out.angle = 0.0;
     } else {
         out.axis1 = {q[1]/vlen, q[2]/vlen, q[3]/vlen};
         double w = std::abs(q[0]); if (w > 1.0) w = 1.0;
-        out.eigvals = {2.0 * std::acos(w) * (180.0 / 3.14159265358979323846), 0, 0};
+        out.angle = 2.0 * std::acos(w) * (180.0 / 3.14159265358979323846);
     }
     out.rmsd = rmsdFromFit(fit);
     completeFrame(out);

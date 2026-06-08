@@ -24,6 +24,7 @@
 #include "molterm/repr/ReprUtil.h"
 #include "molterm/io/SessionExporter.h"
 #include "molterm/config/ConfigParser.h"
+#include "molterm/core/BondTable.h"
 #include "molterm/core/Geometry.h"
 #include "molterm/core/Logger.h"
 #include "molterm/core/Selection.h"
@@ -40,7 +41,6 @@
 #include <set>
 #include <sstream>
 #include <unordered_map>
-#include <unordered_set>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -445,6 +445,83 @@ void stripScriptComment(std::string& s) {
     }
 }
 
+// Build a fully-wired expression-evaluation context (registers + atom and
+// selection resolvers) so every site that evaluates a `:let`/`:if` RHS —
+// pos(), pca(), helix_axis(), superpose_axis(), centroid(), com(), rmsd() —
+// behaves identically. Captures the Application by pointer *by value*, so the
+// returned context's lambdas stay valid after this function returns.
+// Shared selection→coordinate resolver for the expression context. When
+// `masses` is non-null it is also filled with per-atom atomic weights (for
+// com()); centroid()/pca() pass null. The comma→space pass undoes the :let
+// RHS rejoin so the selection grammar (space-separated) parses.
+static int collectSelXYZ(Application& app, const std::string& expr,
+                         std::vector<float>* xs, std::vector<float>* ys,
+                         std::vector<float>* zs, std::vector<float>* masses) {
+    auto obj = app.tabs().currentTab().currentObject();
+    if (!obj) return 0;
+    std::string normalized = expr;
+    for (char& c : normalized) if (c == ',') c = ' ';
+    auto sel = app.parseSelection(normalized, *obj);
+    const auto& atoms = obj->atoms();
+    for (int i : sel.indices()) {
+        if (i < 0 || i >= (int)atoms.size()) continue;
+        xs->push_back(atoms[i].x); ys->push_back(atoms[i].y); zs->push_back(atoms[i].z);
+        if (masses) masses->push_back(atomicMass(atoms[i].element));
+    }
+    return static_cast<int>(xs->size());
+}
+
+static RegisterExpr::Context makeExprContext(Application& app) {
+    Application* self = &app;
+    RegisterExpr::Context ctx;
+    ctx.regs = &app.registers();
+    ctx.resolveAtomPos = [self](const std::string& spec,
+                                double* x, double* y, double* z) -> bool {
+        // Atom-spec resolver — accepts `chain:resi:name` or `obj/chain:resi:name`
+        // (the first '/' splits an optional object qualifier; issue #66).
+        std::string objName, remainder = spec;
+        auto slash = spec.find('/');
+        if (slash != std::string::npos) {
+            objName = spec.substr(0, slash);
+            remainder = spec.substr(slash + 1);
+        }
+        std::shared_ptr<MolObject> obj = objName.empty()
+            ? self->tabs().currentTab().currentObject()
+            : self->store().get(objName);
+        if (!obj) return false;
+        std::string chain, resi, name;
+        int part = 0;
+        for (char c : remainder) {
+            if (c == ':') { ++part; continue; }
+            if (std::isspace(static_cast<unsigned char>(c))) continue;
+            if      (part == 0) chain += c;
+            else if (part == 1) resi += c;
+            else                name += c;
+        }
+        int rs = -1;
+        try { rs = std::stoi(resi); } catch (...) { return false; }
+        for (const auto& a : obj->atoms()) {
+            if (!chain.empty() && a.chainId != chain) continue;
+            if (a.resSeq != rs) continue;
+            if (!name.empty() && a.name != name) continue;
+            *x = a.x; *y = a.y; *z = a.z;
+            return true;
+        }
+        return false;
+    };
+    ctx.collectSelectionXYZ = [self](const std::string& expr,
+                                     std::vector<float>* xs, std::vector<float>* ys,
+                                     std::vector<float>* zs) -> int {
+        return collectSelXYZ(*self, expr, xs, ys, zs, nullptr);
+    };
+    ctx.collectSelectionXYZMass = [self](const std::string& expr,
+                                         std::vector<float>* xs, std::vector<float>* ys,
+                                         std::vector<float>* zs, std::vector<float>* masses) -> int {
+        return collectSelXYZ(*self, expr, xs, ys, zs, masses);
+    };
+    return ctx;
+}
+
 // True iff `line` (after leading whitespace + optional `:`) starts
 // with the keyword `kw` followed by whitespace or end-of-line. On hit,
 // fills `body` with the rest of the line (after the keyword).
@@ -595,8 +672,10 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             std::string rhs = expr.substr(p + std::strlen(op));
             trimWhitespace(lhs);
             trimWhitespace(rhs);
-            RegisterExpr::Context ctx;
-            ctx.regs = &registers();
+            // Same fully-wired context as :let, so selection-based builtins
+            // (centroid/com/rmsd/pca/helix_axis/superpose_axis) work inside
+            // conditionals too (previously only `regs` was wired here).
+            RegisterExpr::Context ctx = makeExprContext(*this);
             auto lr = RegisterExpr::eval(lhs, ctx);
             auto rr = RegisterExpr::eval(rhs, ctx);
             if (!lr.ok || !rr.ok) return std::nullopt;
@@ -969,21 +1048,6 @@ static bool bondExists(const std::vector<BondData>& bonds, int a, int b) {
 // (issue #112). Covers the elements common in biomolecules and frequent
 // ions/heteroatoms; anything unrecognized falls back to carbon's 12.011 so a
 // stray element never zeroes out the weighted sum.
-static float atomicMass(const std::string& element) {
-    static const std::unordered_map<std::string, float> kMass = {
-        {"H", 1.008f},   {"C", 12.011f},  {"N", 14.007f},  {"O", 15.999f},
-        {"P", 30.974f},  {"S", 32.06f},   {"SE", 78.971f}, {"F", 18.998f},
-        {"CL", 35.45f},  {"BR", 79.904f}, {"I", 126.90f},  {"NA", 22.990f},
-        {"MG", 24.305f}, {"K", 39.098f},  {"CA", 40.078f}, {"MN", 54.938f},
-        {"FE", 55.845f}, {"CO", 58.933f}, {"NI", 58.693f}, {"CU", 63.546f},
-        {"ZN", 65.38f},
-    };
-    std::string up = element;
-    for (auto& c : up) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    auto it = kMass.find(up);
-    return (it != kMass.end()) ? it->second : 12.011f;
-}
-
 // Resolve the two endpoints for :bond / :unbond: empty args fall back to the
 // pk1/pk2 picks, otherwise the shared serial/pick/(selection) grammar. `verb`
 // names the command in the no-pick hint. Returns false and sets `err`.
@@ -6512,96 +6576,7 @@ void Application::registerCommands() {
             rhs += t;
         }
 
-        RegisterExpr::Context ctx;
-        ctx.regs = &app.registers();
-        ctx.resolveAtomPos = [&app](const std::string& spec, double* x, double* y, double* z) -> bool {
-            // Atom-spec resolver — accepts the same `obj/chain:resi:name`
-            // qualifier the selection grammar uses since #55 (issue #66).
-            // Forms:
-            //   chain:resi:name              → current object
-            //   obj/chain:resi:name          → named object (cross-object)
-            // `obj/` is recognised by the first '/' in the spec; everything
-            // before it is the object name, everything after is the
-            // legacy three-part atom spec.
-            std::string objName;
-            std::string remainder = spec;
-            auto slash = spec.find('/');
-            if (slash != std::string::npos) {
-                objName = spec.substr(0, slash);
-                remainder = spec.substr(slash + 1);
-            }
-            std::shared_ptr<MolObject> obj;
-            if (objName.empty()) {
-                obj = app.tabs().currentTab().currentObject();
-            } else {
-                obj = app.store().get(objName);
-            }
-            if (!obj) return false;
-            std::string chain, resi, name;
-            int part = 0;
-            for (char c : remainder) {
-                if (c == ':') { ++part; continue; }
-                if (std::isspace(static_cast<unsigned char>(c))) continue;
-                if      (part == 0) chain += c;
-                else if (part == 1) resi += c;
-                else                name += c;
-            }
-            int rs = -1;
-            try { rs = std::stoi(resi); } catch (...) { return false; }
-            const auto& atoms = obj->atoms();
-            for (const auto& a : atoms) {
-                if (!chain.empty() && a.chainId != chain) continue;
-                if (a.resSeq != rs) continue;
-                if (!name.empty() && a.name != name) continue;
-                *x = a.x; *y = a.y; *z = a.z;
-                return true;
-            }
-            return false;
-        };
-        ctx.collectSelectionXYZ = [&app](const std::string& expr,
-                                         std::vector<float>* xs,
-                                         std::vector<float>* ys,
-                                         std::vector<float>* zs) -> int {
-            auto obj = app.tabs().currentTab().currentObject();
-            if (!obj) return 0;
-            // pca(<sel>) gets comma-injected by the :let RHS rejoin (since
-            // the command parser pre-split on commas + whitespace). The
-            // selection grammar uses spaces, never commas, so it's safe
-            // to swap them back out before parsing.
-            std::string normalized = expr;
-            for (char& c : normalized) if (c == ',') c = ' ';
-            auto sel = app.parseSelection(normalized, *obj);
-            const auto& atoms = obj->atoms();
-            for (int i : sel.indices()) {
-                if (i < 0 || i >= (int)atoms.size()) continue;
-                xs->push_back(atoms[i].x);
-                ys->push_back(atoms[i].y);
-                zs->push_back(atoms[i].z);
-            }
-            return static_cast<int>(xs->size());
-        };
-        ctx.collectSelectionXYZMass = [&app](const std::string& expr,
-                                             std::vector<float>* xs,
-                                             std::vector<float>* ys,
-                                             std::vector<float>* zs,
-                                             std::vector<float>* masses) -> int {
-            // Same resolution as collectSelectionXYZ, plus a per-atom atomic
-            // weight (by element) for com(). centroid() ignores the masses.
-            auto obj = app.tabs().currentTab().currentObject();
-            if (!obj) return 0;
-            std::string normalized = expr;
-            for (char& c : normalized) if (c == ',') c = ' ';
-            auto sel = app.parseSelection(normalized, *obj);
-            const auto& atoms = obj->atoms();
-            for (int i : sel.indices()) {
-                if (i < 0 || i >= (int)atoms.size()) continue;
-                xs->push_back(atoms[i].x);
-                ys->push_back(atoms[i].y);
-                zs->push_back(atoms[i].z);
-                masses->push_back(atomicMass(atoms[i].element));
-            }
-            return static_cast<int>(xs->size());
-        };
+        RegisterExpr::Context ctx = makeExprContext(app);
 
         auto r = RegisterExpr::eval(rhs, ctx);
         if (!r.ok) return {false, ":let " + name + ": " + r.error};
@@ -8265,20 +8240,32 @@ void Application::registerCommands() {
             return (static_cast<long long>(std::min(a, b)) << 32) |
                    static_cast<unsigned>(std::max(a, b));
         };
-        std::unordered_set<long long> drawn;
-        for (const auto& m : meas)
-            if (m.obj == obj->name() && m.atoms.size() == 2)
-                drawn.insert(pairKey(m.atoms[0], m.atoms[1]));
+        // Index this object's existing 2-atom measurements by atom pair, so a
+        // re-run *refreshes* a contact's distance in place (e.g. after :align
+        // moved the coordinates) instead of reporting "already drawn" and
+        // leaving the stale label — and never duplicates.
+        std::unordered_map<long long, size_t> existing;
+        for (size_t mi = 0; mi < meas.size(); ++mi)
+            if (meas[mi].obj == obj->name() && meas[mi].atoms.size() == 2)
+                existing[pairKey(meas[mi].atoms[0], meas[mi].atoms[1])] = mi;
 
-        int added = 0, dup = 0;
+        int added = 0, refreshed = 0;
         std::string detail;
         for (const auto& c : contacts) {
             if (c.type != want) continue;
-            if (!drawn.insert(pairKey(c.atom1, c.atom2)).second) { ++dup; continue; }
             char dbuf[16]; std::snprintf(dbuf, sizeof(dbuf), "%.2f", c.distance);
-            meas.push_back({{c.atom1, c.atom2}, std::string(dbuf) + "A", "", obj->name()});
-            ++added;
-            if (added <= 8) {
+            std::string lbl = std::string(dbuf) + "A";
+            long long key = pairKey(c.atom1, c.atom2);
+            auto it = existing.find(key);
+            if (it != existing.end()) {
+                meas[it->second].label = lbl;   // refresh distance, keep caption
+                ++refreshed;
+            } else {
+                meas.push_back({{c.atom1, c.atom2}, lbl, "", obj->name()});
+                existing[key] = meas.size() - 1;
+                ++added;
+            }
+            if (added + refreshed <= 8) {
                 const auto& a = atoms[c.atom1]; const auto& b = atoms[c.atom2];
                 detail += (detail.empty() ? "  " : ", ");
                 detail += a.chainId + std::to_string(a.resSeq) + "/" + a.name + "–" +
@@ -8286,15 +8273,13 @@ void Application::registerCommands() {
                           " (" + dbuf + ")";
             }
         }
-        if (added == 0) {
-            if (dup > 0)
-                return {true, std::string("All ") + singular + "s already drawn (" +
-                              std::to_string(dup) + ")"};
+        if (added == 0 && refreshed == 0)
             return {false, std::string("No ") + singular + "s found in scope"};
-        }
         std::string msg = "Drew " + std::to_string(added) + " " + singular +
-                          (added == 1 ? "" : "s") + detail;
-        if (added > 8) msg += ", …";
+                          (added == 1 ? "" : "s");
+        if (refreshed) msg += " (refreshed " + std::to_string(refreshed) + ")";
+        msg += detail;
+        if (added + refreshed > 8) msg += ", …";
         return {true, msg};
     };
 
@@ -8312,7 +8297,7 @@ void Application::registerCommands() {
         [drawInteractions](Application& app, const ParsedCommand& cmd) -> ExecResult {
             return drawInteractions(app, cmd, InteractionType::SaltBridge, kSaltBridgeDistCutoff, "salt bridge");
         }, ":saltbridge [selection]",
-        "Auto-detect salt bridges (Asp/Glu carboxylate ↔ Lys/Arg ≤ 4.0 Å) and "
+        "Auto-detect salt bridges (Asp/Glu carboxylate ↔ Lys/Arg/His ≤ 4.0 Å) and "
         "draw them as dashed contact lines with distance labels. Whole "
         "structure by default; pass a selection to limit scope.",
         {":saltbridge", ":saltbridge chain A+B"}, "Measurement");

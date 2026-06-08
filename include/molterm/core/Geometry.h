@@ -22,9 +22,11 @@ struct PcaResult {
     std::array<double, 3> axis3{};
     std::array<double, 3> eigvals{};
     std::array<double, 3> center{};
-    // Residual RMSD of the optimal superposition that produced this result.
-    // Only meaningful for superposeAxisOf() (issue #115); pcaOf/helixAxisOf
-    // leave it 0. Exposed to scripts as `$reg.rmsd`.
+    // Rotation angle (degrees) and residual RMSD of the optimal superposition
+    // that produced this result — only meaningful for superposeAxisOf()
+    // (issues #110/#115); pcaOf/helixAxisOf leave both 0 and keep eigvals as
+    // genuine eigenvalues. Exposed to scripts as `$reg.angle` / `$reg.rmsd`.
+    double angle = 0.0;
     double rmsd = 0.0;
     bool valid = false;  // false if input had < 2 points
 };
@@ -54,9 +56,9 @@ PcaResult helixAxisOf(const std::vector<float>& xs,
 // Screw axis of the optimal rigid superposition mapping ordered point
 // set A onto B (equal counts; i-th of A ↔ i-th of B), via Horn's (1987)
 // unit-quaternion method — reflection-free by construction. Returned as a
-// PcaResult overloaded as: axis1 = rotation axis (unit), center = midpoint
-// of the two centroids (an anchor for drawing), eigvals[0] = rotation
-// angle in degrees. valid=false when either set has < 3 points or the
+// PcaResult with: axis1 = rotation axis (unit), center = midpoint of the
+// two centroids (an anchor for drawing), angle = rotation in degrees, rmsd =
+// post-fit residual. valid=false when either set has < 3 points or the
 // counts differ.
 PcaResult superposeAxisOf(const std::vector<float>& ax,
                           const std::vector<float>& ay,

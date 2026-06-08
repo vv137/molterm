@@ -952,7 +952,7 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "                      axis2, axis3, eigvals, center }
                                 "     - Axis fits:     helix_axis(<sel>)     -> helical axis
                                 "                      superpose_axis(A vs B) -> screw axis,
-                                "                      eig1 = rotation angle (degrees),
+                                "                      angle = rotation (degrees),
                                 "                      rmsd = post-fit residual (Å)
                                 "     - RMSD query:    rmsd(A vs B)          -> Å, no superpose
                                 "   Type rules: vec±vec, scalar±scalar, scalar*vec,

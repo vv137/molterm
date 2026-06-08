@@ -26,8 +26,10 @@ std::optional<double> Register::getScalar(const std::string& field) const {
         if (field == "eig1") return pca.eigvals[0];
         if (field == "eig2") return pca.eigvals[1];
         if (field == "eig3") return pca.eigvals[2];
-        // Post-fit residual of superpose_axis() — 0 for pca()/helix_axis().
-        if (field == "rmsd") return pca.rmsd;
+        // Rotation angle + post-fit residual of superpose_axis() — both 0 for
+        // pca()/helix_axis().
+        if (field == "angle") return pca.angle;
+        if (field == "rmsd")  return pca.rmsd;
     }
     return std::nullopt;
 }

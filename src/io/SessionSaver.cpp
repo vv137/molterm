@@ -217,6 +217,11 @@ bool SessionSaver::saveSession(const Application& app) {
                 out << "axis2 = ["  << r.pca.axis2[0]  << ", " << r.pca.axis2[1]  << ", " << r.pca.axis2[2]  << "]\n";
                 out << "axis3 = ["  << r.pca.axis3[0]  << ", " << r.pca.axis3[1]  << ", " << r.pca.axis3[2]  << "]\n";
                 out << "eigvals = ["<< r.pca.eigvals[0]<< ", " << r.pca.eigvals[1]<< ", " << r.pca.eigvals[2]<< "]\n";
+                // superpose_axis() stows its rotation angle + post-fit residual
+                // here (not in eigvals); persist them so `$reg.angle`/`$reg.rmsd`
+                // survive a session round-trip. 0 for pca()/helix_axis().
+                out << "angle = " << r.pca.angle << "\n";
+                out << "rmsd = "  << r.pca.rmsd  << "\n";
                 break;
         }
     }
@@ -340,6 +345,8 @@ std::string SessionSaver::restoreSession(Application& app) {
             else if (key == "axis2")   parseTriple(val, curReg->pca.axis2);
             else if (key == "axis3")   parseTriple(val, curReg->pca.axis3);
             else if (key == "eigvals") parseTriple(val, curReg->pca.eigvals);
+            else if (key == "angle")   curReg->pca.angle = std::stod(val);
+            else if (key == "rmsd")    curReg->pca.rmsd = std::stod(val);
             continue;
         }
 

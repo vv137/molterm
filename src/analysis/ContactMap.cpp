@@ -1,4 +1,5 @@
 #include "molterm/analysis/ContactMap.h"
+#include "molterm/core/BondTable.h"
 #include "molterm/core/SpatialHash.h"
 
 #include <algorithm>
@@ -76,11 +77,39 @@ std::string formatInterfaceShowSpec(std::uint8_t mask) {
 namespace {
 
 // Side-chain atoms we treat as carrying a formal positive charge at
-// physiological pH — guanidinium of Arg and ε-ammonium of Lys.
+// physiological pH — guanidinium of Arg, ε-ammonium of Lys, and the
+// imidazolium ring nitrogens of His (partially protonated near pH 7).
 bool isPositive(const std::string& name, const std::string& resName) {
     if (resName == "LYS" && name == "NZ") return true;
     if (resName == "ARG" &&
         (name == "NE" || name == "NH1" || name == "NH2")) return true;
+    if (resName == "HIS" && (name == "ND1" || name == "NE2")) return true;
+    return false;
+}
+
+// Heavy-atom hydrogen-bond donor/acceptor heuristic (no hydrogens needed):
+//   donor    = any nitrogen (amide/amine/indole/nucleobase NH) or a hydroxyl
+//              oxygen (Ser/Thr/Tyr OH, RNA 2'-OH)
+//   acceptor = any oxygen, plus the lone-pair ring nitrogens of His and the
+//              nucleobases
+// An H-bond is a donor opposite an acceptor — this rejects the
+// acceptor–acceptor (O···O) and donor–donor (Nbb···Nbb) pairs a bare
+// N/O-proximity test wrongly reports.
+bool isHBondDonor(const std::string& name, const std::string& element) {
+    if (element == "N") return true;
+    if (element == "O")
+        return name == "OG" || name == "OG1" || name == "OH" ||
+               name == "O2'" || name == "O2*";
+    return false;
+}
+bool isHBondAcceptor(const std::string& name, const std::string& element,
+                     const std::string& resName) {
+    if (element == "O") return true;
+    if (element == "N") {
+        if (resName == "HIS" && (name == "ND1" || name == "NE2")) return true;
+        if (isStandardNA(resName) &&
+            (name == "N1" || name == "N3" || name == "N7")) return true;
+    }
     return false;
 }
 
@@ -109,9 +138,11 @@ InteractionType classifyContact(const AtomData& a, const AtomData& b,
             return InteractionType::SaltBridge;
     }
     if (dist <= kHBondDistCutoff) {
-        bool aHB = (a.element == "N" || a.element == "O");
-        bool bHB = (b.element == "N" || b.element == "O");
-        if (aHB && bHB) return InteractionType::HBond;
+        bool ab = isHBondDonor(a.name, a.element) &&
+                  isHBondAcceptor(b.name, b.element, b.resName);
+        bool ba = isHBondAcceptor(a.name, a.element, a.resName) &&
+                  isHBondDonor(b.name, b.element);
+        if (ab || ba) return InteractionType::HBond;
     }
     if (dist <= kHydrophobicDistCutoff &&
         a.element == "C" && b.element == "C" &&
@@ -317,10 +348,16 @@ std::vector<InterfaceContact> ContactMap::detectInteractions(
     auto resKey = [](const AtomData& a) {
         return a.chainId + "|" + std::to_string(a.resSeq) + a.insCode;
     };
+    // Solvent never participates in a drawn interaction. (CIF loading drops
+    // HOH/WAT/DOD already, but PDB-format and non-standard solvent names
+    // survive, so filter here too — via the shared BondTable predicate.)
+    auto skipAtom = [&](int i) {
+        return !inScope[i] || atoms[i].element == "H" || isSolvent(atoms[i].resName);
+    };
 
     SpatialHash grid(cutoff, nAtoms);
     for (int i = 0; i < nAtoms; ++i) {
-        if (!inScope[i] || atoms[i].element == "H") continue;
+        if (skipAtom(i)) continue;
         grid.insert(i, atoms[i].x, atoms[i].y, atoms[i].z);
     }
 
@@ -328,11 +365,11 @@ std::vector<InterfaceContact> ContactMap::detectInteractions(
     std::unordered_map<std::string, Best> bestByPair;
 
     for (int i = 0; i < nAtoms; ++i) {
-        if (!inScope[i] || atoms[i].element == "H") continue;
+        if (skipAtom(i)) continue;
         const auto& ai = atoms[i];
         grid.forEachNeighbor(ai.x, ai.y, ai.z, cutoff, [&](int j) {
             if (j <= i) return;
-            if (!inScope[j] || atoms[j].element == "H") return;
+            if (skipAtom(j)) return;
             const auto& aj = atoms[j];
             bool sameChain = (ai.chainId == aj.chainId);
             // Skip the same residue, the inter-chain-only exclusion, and
