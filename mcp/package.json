@@ -1,17 +1,46 @@
 {
   "name": "molterm-mcp",
-  "version": "0.1.0",
-  "description": "MCP server for MolTerm molecular viewer",
+  "version": "0.2.0",
+  "description": "MCP server for MolTerm — molecular structure analysis, rendering, and alignment tools for LLM clients",
   "main": "dist/index.js",
-  "bin": "dist/index.js",
+  "bin": {
+    "molterm-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "scripts/postinstall.mjs",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "postinstall": "node scripts/postinstall.mjs",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": ["mcp", "molterm", "molecular"],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "molterm",
+    "molecular",
+    "structural-biology",
+    "pdb",
+    "bioinformatics"
+  ],
+  "author": "Minsoo Kim <minsookim9@gmail.com>",
   "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vv137/molterm.git",
+    "directory": "mcp"
+  },
+  "homepage": "https://github.com/vv137/molterm/tree/main/mcp#readme",
+  "bugs": {
+    "url": "https://github.com/vv137/molterm/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"

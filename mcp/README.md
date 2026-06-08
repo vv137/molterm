@@ -20,52 +20,80 @@ MCP (Model Context Protocol) server for [MolTerm](https://github.com/vv137/molte
 | `version` | Report the molterm binary version and repo tag |
 | `update` | Install the latest released binary (opt-in; see below) |
 
-## Setup
+## Install
 
-### Prerequisites
+Only **Node.js >= 18** is required. On install, the package fetches the matching
+prebuilt molterm binary from the GitHub release — no C++ toolchain needed.
 
-- **molterm** binary — **v0.47.1 or newer** (earlier headless builds resolve
-  the `<obj>/(...)` object qualifier and scoped named selections incorrectly,
-  which affects the `select`/`measure`/`align` tools). Build from the project
-  root:
-  ```sh
-  cmake -B build -DCMAKE_BUILD_TYPE=Release
-  cmake --build build -j$(nproc)
-  ```
+> **Supported platforms:** macOS (Apple Silicon), Linux x86_64, Linux aarch64.
+> On other platforms (e.g. Intel macOS, Windows) the download is skipped — build
+> molterm from source and point `MOLTERM_BIN` at it (see [Other platforms](#other-platforms)).
 
-- **Node.js** >= 18
-
-### Install
+### Claude Code
 
 ```sh
-cd mcp
-npm install
-npm run build
+claude mcp add molterm -- npx -y molterm-mcp
 ```
 
-### Configure
+### Claude Desktop / other MCP hosts
 
-This repo ships a project-scoped `.mcp.json` at the root, so opening the repo in
-Claude Code registers the server automatically (it runs `node mcp/dist/index.js`
-from the project root). For Claude Desktop or another host, add an entry with
-absolute paths:
+Add an entry to the host's MCP config (Claude Desktop:
+`claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "molterm": {
-      "command": "node",
-      "args": ["/path/to/molterm/mcp/dist/index.js"],
-      "env": {
-        "MOLTERM_BIN": "/path/to/molterm/build/molterm"
-      }
+      "command": "npx",
+      "args": ["-y", "molterm-mcp"]
     }
   }
 }
 ```
 
-If `MOLTERM_BIN` is not set, it defaults to `../../build/molterm` relative to the
-`dist/` directory.
+### Global install (optional)
+
+```sh
+npm install -g molterm-mcp     # downloads the binary during install
+```
+
+then use `"command": "molterm-mcp"` (no `args`) in the config above.
+
+### Other platforms
+
+If no prebuilt binary exists for your platform, build molterm from source and
+set `MOLTERM_BIN`:
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+```json
+{
+  "mcpServers": {
+    "molterm": {
+      "command": "npx",
+      "args": ["-y", "molterm-mcp"],
+      "env": { "MOLTERM_BIN": "/path/to/molterm/build/molterm" }
+    }
+  }
+}
+```
+
+Binary resolution order: `$MOLTERM_BIN` → vendored download → in-repo
+`build/molterm` → `molterm` on `PATH`. A binary **v0.47.1 or newer** is required
+(earlier headless builds mis-resolve the `<obj>/(...)` qualifier and scoped named
+selections, affecting the `select`/`measure`/`align` tools).
+
+### Install knobs (env)
+
+| Variable | Effect |
+|----------|--------|
+| `MOLTERM_BIN` | Use this binary; skip the download |
+| `MOLTERM_BINARY_VERSION` | Pin a different release tag (default tracks the package) |
+| `MOLTERM_SKIP_DOWNLOAD=1` | Skip the download (offline/CI) |
+| `MOLTERM_FORCE_DOWNLOAD=1` | Download even when an in-repo dev build exists |
 
 #### Optional: enable the `update` tool
 
@@ -114,7 +142,16 @@ not water                   # negation
 
 ## Development
 
+From the project root, build the C++ core once (`cmake -B build && cmake --build
+build`), then:
+
 ```sh
-npm run build    # compile TypeScript
+cd mcp
+npm install      # postinstall detects build/molterm and skips the download
+npm run build    # compile TypeScript -> dist/
 npm run start    # run the server (stdio transport)
 ```
+
+The repo ships a project-scoped `.mcp.json` at the root, so opening it in Claude
+Code registers the local server automatically (runs `node mcp/dist/index.js`,
+which resolves the in-repo `build/molterm`).

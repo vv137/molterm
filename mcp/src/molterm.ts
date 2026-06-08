@@ -1,14 +1,29 @@
 import { execFile, exec } from "node:child_process";
 import { readFile, copyFile, mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
 
-/** Resolved molterm binary: $MOLTERM_BIN, else ../../build/molterm from dist/. */
-export const MOLTERM_BIN =
-  process.env.MOLTERM_BIN || join(__dirname, "..", "..", "build", "molterm");
+/**
+ * Resolve the molterm binary in priority order:
+ *   1. $MOLTERM_BIN          — explicit override
+ *   2. vendor/bin/molterm    — fetched by postinstall (published-package case)
+ *   3. ../../build/molterm   — in-repo dev build
+ *   4. "molterm" on PATH     — system install (execFile resolves bare names via PATH)
+ */
+function resolveMoltermBin(): string {
+  if (process.env.MOLTERM_BIN) return process.env.MOLTERM_BIN;
+  const vendored = join(__dirname, "..", "vendor", "bin", "molterm");
+  if (existsSync(vendored)) return vendored;
+  const devBuild = join(__dirname, "..", "..", "build", "molterm");
+  if (existsSync(devBuild)) return devBuild;
+  return "molterm";
+}
+
+export const MOLTERM_BIN = resolveMoltermBin();
 
 /** Root of the molterm git repo (two levels up from dist/). */
 export const REPO_ROOT = join(__dirname, "..", "..");
@@ -57,10 +72,13 @@ export function runMolterm(
       ["--script", "-", "--no-tui"],
       { cwd, timeout, maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {
+        // Surface spawn failures (e.g. ENOENT when no molterm binary is found)
+        // which arrive on `error` with empty stderr.
+        const errText = stderr.trimEnd() || (error ? error.message : "");
         resolve({
           ok: !error,
           stdout: stdout.trimEnd(),
-          stderr: stderr.trimEnd(),
+          stderr: errText,
         });
       }
     );

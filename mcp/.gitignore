@@ -31,6 +31,9 @@ node_modules/
 # Build output
 dist/
 
+# Binary fetched by postinstall (scripts/postinstall.mjs)
+vendor/
+
 # Optional npm cache directory
 .npm
 
