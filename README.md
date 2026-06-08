@@ -342,9 +342,10 @@ regardless of scope — switch the current object explicitly with
 ### Analysis recipes — `:run @lib/<name>` (issue #56)
 
 The `lib/` directory ships short, validated `.mt` scripts for named
-structural metrics — TCR-pMHC crossing/incident angle, eventually
-antibody elbow, DNA bend, etc. — composed from the v0.31+ register
-primitives (`:let` / `pos()` / `pca()` / `dot()` / `angle()`).
+structural metrics — TCR-pMHC crossing/incident angle, kinase αC/DFG
+state, antibody Fab elbow, DNA bend, α-/TM-helix kink — composed from
+the v0.31+ register primitives (`:let` / `pos()` / `pca()` / `dot()` /
+`angle()`).
 
 ```vim
 :setenv TCR_A D ; :setenv TCR_B E
