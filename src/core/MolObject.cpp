@@ -375,6 +375,13 @@ std::vector<bool> MolObject::atomVisMask(ReprType r) const {
     return mask;
 }
 
+std::map<int, std::vector<int>> MolObject::colorGroups() const {
+    std::map<int, std::vector<int>> groups;  // colorPair → ascending atom indices
+    for (int i = 0; i < static_cast<int>(atomColors_.size()); ++i)
+        if (atomColors_[i] >= 0) groups[atomColors_[i]].push_back(i);
+    return groups;
+}
+
 void MolObject::applySmartDefaults() {
     bool hasProtein = false;
     bool hasNA = false;

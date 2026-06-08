@@ -178,18 +178,12 @@ bool SessionSaver::saveSession(const Application& app) {
                     << encodeRanges(mask) << "\"\n";
             }
 
-            // Per-atom color overrides (e.g. `color element ligand`) — grouped
-            // by colorPair id, saved as index ranges like the repr masks. The id
-            // is the stable kColor* / packed-RGB value, so no name round-trip is
-            // needed; without this a ligand resumes in the scheme color, not CPK.
-            const auto& atomColors = obj->atomColors();
-            if (!atomColors.empty()) {
-                std::map<int, std::vector<int>> byColor;  // colorPair → ascending indices
-                for (int i = 0; i < static_cast<int>(atomColors.size()); ++i)
-                    if (atomColors[i] >= 0) byColor[atomColors[i]].push_back(i);
-                for (const auto& [cid, idx] : byColor)
-                    out << kColorOvrPrefix << cid << " = \"" << encodeRanges(idx) << "\"\n";
-            }
+            // Per-atom color overrides (e.g. `color element ligand`) — saved as
+            // index ranges per colorPair id (the stable kColor*/packed-RGB
+            // value, no name round-trip). Without this a ligand resumes in the
+            // scheme color, not CPK. Grouping shared with the PyMOL exporter.
+            for (const auto& [cid, idx] : obj->colorGroups())
+                out << kColorOvrPrefix << cid << " = \"" << encodeRanges(idx) << "\"\n";
 
             // Multi-state
             if (obj->stateCount() > 1)

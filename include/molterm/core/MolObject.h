@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -82,6 +83,12 @@ public:
     void setAtomColor(int idx, int colorPair);
     void setAtomColors(const std::vector<int>& indices, int colorPair);
     void clearAtomColors();
+
+    // Per-atom color overrides grouped by colorPair id → ascending 0-based atom
+    // indices (atoms with no override are omitted; empty map if none). Shared by
+    // the autosave and the PyMOL exporter so the grouping lives with the data
+    // both serialize.
+    std::map<int, std::vector<int>> colorGroups() const;
 
     // Per-atom transparency in [0, 1]. 1.0 = fully opaque (default), 0.0 =
     // fully invisible. Set via :set transparency <value> [selection]; read

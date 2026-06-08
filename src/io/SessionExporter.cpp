@@ -8,7 +8,6 @@
 #include <fstream>
 #include <ostream>
 #include <set>
-#include <unordered_map>
 #include <vector>
 
 namespace molterm {
@@ -215,20 +214,17 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
                 break;
         }
 
-        // Per-atom color overrides (e.g. `color element ligand` heteroatoms).
-        // Chunked id lists — the old 50-id cap appended a literal "or ..."
-        // that PyMOL rejects, silently dropping the rest of a ligand's color.
-        const auto& atomColors = obj->atomColors();
-        if (!atomColors.empty()) {
-            std::unordered_map<int, std::vector<int>> colorGroups;
-            for (int i = 0; i < static_cast<int>(atomColors.size()); ++i)
-                if (atomColors[i] >= 0)
-                    colorGroups[atomColors[i]].push_back(i + 1);  // 1-based serials
-            for (const auto& [colorPair, serials] : colorGroups) {
-                std::string pymolColor = pymolColorName(colorPair);
-                if (pymolColor.empty()) continue;
-                emitById(out, "color", pymolColor, name, "id", "", serials);
-            }
+        // Per-atom color overrides (e.g. `color element ligand` heteroatoms),
+        // grouped by colorPair via MolObject::colorGroups() (shared with the
+        // autosave). Chunked id lists — the old 50-id cap appended a literal
+        // "or ..." that PyMOL rejects, dropping the rest of a ligand's color.
+        for (const auto& [colorPair, idx] : obj->colorGroups()) {
+            std::string pymolColor = pymolColorName(colorPair);
+            if (pymolColor.empty()) continue;
+            std::vector<int> serials;
+            serials.reserve(idx.size());
+            for (int i : idx) serials.push_back(i + 1);  // PyMOL id = atomIndex+1
+            emitById(out, "color", pymolColor, name, "id", "", serials);
         }
     }
 
