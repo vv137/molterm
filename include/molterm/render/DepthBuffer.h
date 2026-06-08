@@ -5,6 +5,10 @@
 
 namespace molterm {
 
+// Painter's depth buffer. Convention: SMALLER depth = nearer the viewer
+// (testAndSet keeps the min). Camera projection feeds into-screen depth
+// (= -rz, see Camera::project); depth fog (PixelCanvas::applyDepthFog) and
+// sphere self-occlusion (PixelCanvas::drawCircle zOff) rely on this sign.
 class DepthBuffer {
 public:
     DepthBuffer() = default;

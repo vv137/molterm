@@ -16,9 +16,9 @@
 MolTerm renders 3D molecular structures directly in the terminal. It targets structural biologists and computational chemists who live in the terminal and want quick molecule inspection without launching a full GUI.
 
 <p align="center">
-  <img src="assets/cartoon_quality.png" alt="4HHB hemoglobin hetero-tetramer (α2β2) — cartoon with elliptical helix tubes, smoothstep SS transitions, and chain coloring" width="640">
+  <img src="assets/cartoon_quality.png" alt="4HHB hemoglobin hetero-tetramer (α2β2) — chain-colored cartoon with elliptical helix tubes and smoothstep SS transitions; HEM groups as element-colored wireframe" width="640">
   <br>
-  <em>4HHB hemoglobin hetero-tetramer (α2β2) — cartoon: elliptical helix tubes, smoothstep SS transitions, chain coloring. Rendered offscreen in pixel mode at 300 DPI.</em>
+  <em>4HHB hemoglobin hetero-tetramer (α2β2) — cartoon polymer (elliptical helix tubes, smoothstep SS transitions, chain coloring) with HEM ligands as element-colored wireframe. Rendered offscreen in pixel mode at 300 DPI.</em>
 </p>
 
 ### Press <code>m</code> — terminal-only Braille becomes pixel-perfect
@@ -52,7 +52,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
   </tr>
   <tr>
     <td align="center"><img src="assets/repr_cartoon.png" width="240"><br><sub><code>show cartoon</code> · <code>color secondary</code></sub></td>
-    <td align="center"><img src="assets/repr_ribbon.png" width="240"><br><sub><code>show ribbon</code> · <code>color secondary</code></sub></td>
+    <td align="center"><img src="assets/repr_surface.png" width="240"><br><sub><code>show surface</code> · <code>color rainbow</code></sub></td>
     <td align="center"><img src="assets/repr_backbone.png" width="240"><br><sub><code>show backbone</code> · <code>color rainbow</code></sub></td>
   </tr>
 </table>

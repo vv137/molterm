@@ -74,7 +74,11 @@ bool Camera::project(float wx, float wy, float wz,
 
     sx = static_cast<int>((rx + panX_) * scale) + screenW / 2;
     sy = static_cast<int>(-(ry + panY_) * scale / 2.0f) + screenH / 2;
-    depth = rz;
+    // World +Z points toward the viewer (+X-right/+Y-up mapping above); the
+    // depth buffer treats smaller as nearer, so negate to get into-screen depth.
+    // Without it the far face occludes the near — a z→−z mirror that flips
+    // chirality. Convention + downstream deps documented in DepthBuffer.h.
+    depth = -rz;
 
     return true;
 }
@@ -96,7 +100,7 @@ bool Camera::projectf(float wx, float wy, float wz,
     // Pan is in Angstrom units — multiply by scale to get screen offset
     sx = (rx + panX_) * scale + static_cast<float>(screenW) / 2.0f;
     sy = -(ry + panY_) * scale / aspectYX + static_cast<float>(screenH) / 2.0f;
-    depth = rz;
+    depth = -rz;  // into-screen depth; see project() for the sign rationale
 
     return true;
 }
@@ -115,9 +119,10 @@ void Camera::projectCached(float wx, float wy, float wz,
     float z = wz - centerZ_;
     float rx = rot_[0]*x + rot_[1]*y + rot_[2]*z;
     float ry = rot_[3]*x + rot_[4]*y + rot_[5]*z;
+    float rz = rot_[6]*x + rot_[7]*y + rot_[8]*z;
     sx = (rx + panX_) * projScale_ + projOffX_;
     sy = -(ry + panY_) * projScaleY_ + projOffY_;
-    depth = rot_[6]*x + rot_[7]*y + rot_[8]*z;
+    depth = -rz;  // into-screen; see project()
 }
 
 void Camera::multiplyRotX(float rad) {
