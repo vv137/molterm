@@ -1,0 +1,53 @@
+name: Publish MCP
+
+# Publishes the molterm-mcp npm package. Triggered by a dedicated `mcp-v*` tag
+# (kept separate from the `v*` binary-release tags, since the MCP package version
+# is decoupled from the molterm binary version). Can also be run manually.
+on:
+  push:
+    tags:
+      - "mcp-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      # Don't fetch a molterm binary in CI — not needed to build/publish the
+      # wrapper, and the tsc build is driven by prepublishOnly.
+      - name: Install dependencies
+        run: npm ci
+        env:
+          MOLTERM_SKIP_DOWNLOAD: "1"
+
+      # On a tag push, the tag (minus the mcp-v prefix) must match the package
+      # version, so a release can't accidentally publish a stale version.
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#mcp-v}"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::tag mcp-v$TAG does not match mcp/package.json version $PKG"
+            exit 1
+          fi
+          echo "publishing molterm-mcp@$PKG"
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
