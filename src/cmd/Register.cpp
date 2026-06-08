@@ -23,6 +23,9 @@ std::optional<double> Register::getScalar(const std::string& field) const {
         if (field == "length" || field == "len") return vlen(vec);
     }
     if (kind == Kind::Pca) {
+        // eig1..3 are genuine variances only for pca()/helix_axis(); a
+        // superpose_axis() result leaves them 0 and carries its rotation in
+        // `.angle` (the angle used to live in eig1 — read `.angle` now).
         if (field == "eig1") return pca.eigvals[0];
         if (field == "eig2") return pca.eigvals[1];
         if (field == "eig3") return pca.eigvals[2];

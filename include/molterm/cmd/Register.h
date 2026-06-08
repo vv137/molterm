@@ -19,7 +19,9 @@ namespace molterm {
 //   Scalar : single double — literal numbers, dot-products, lengths
 //   Vec3   : three doubles — atom positions, axes, sums/differences
 //   Pca    : geom::PcaResult — output of pca(<selection>); access
-//            sub-fields via `$g.axis1`, `$g.center`, `$g.eigvals`
+//            sub-fields via `$g.axis1`, `$g.center`, `$g.eig1..3`.
+//            superpose_axis() reuses this kind but reports its rotation
+//            via `$g.angle` and residual via `$g.rmsd` (eig1..3 stay 0).
 //
 // `expr` carries the original RHS string so `:get <name>` can echo
 // the formula that produced the value (handy when chaining registers).

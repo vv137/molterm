@@ -8275,9 +8275,17 @@ void Application::registerCommands() {
         }
         if (added == 0 && refreshed == 0)
             return {false, std::string("No ") + singular + "s found in scope"};
-        std::string msg = "Drew " + std::to_string(added) + " " + singular +
-                          (added == 1 ? "" : "s");
-        if (refreshed) msg += " (refreshed " + std::to_string(refreshed) + ")";
+        // An all-refresh re-run (e.g. after :align moved the coordinates) reads
+        // as "Refreshed N", not "Drew 0 … (refreshed N)".
+        std::string msg;
+        if (added == 0) {
+            msg = "Refreshed " + std::to_string(refreshed) + " " + singular +
+                  (refreshed == 1 ? "" : "s");
+        } else {
+            msg = "Drew " + std::to_string(added) + " " + singular +
+                  (added == 1 ? "" : "s");
+            if (refreshed) msg += " (refreshed " + std::to_string(refreshed) + ")";
+        }
         msg += detail;
         if (added + refreshed > 8) msg += ", …";
         return {true, msg};
