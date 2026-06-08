@@ -36,6 +36,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <unordered_map>
@@ -130,16 +131,26 @@ static std::string resolveAtLibPath(const std::string& spec) {
     return std::string();
 }
 
-static int applyHeteroatomColors(MolObject& obj) {
+// Color the non-carbon atoms in `indices` by element (CPK). Carbons keep the
+// active scheme color so e.g. `color element ligand` only repaints the ligand's
+// heteroatoms instead of every N/O/S in the structure.
+static int applyHeteroatomColors(MolObject& obj, const std::vector<int>& indices) {
     const auto& atoms = obj.atoms();
     int count = 0;
-    for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
-        if (atoms[i].element != "C") {
+    for (int i : indices) {
+        if (i >= 0 && i < static_cast<int>(atoms.size()) && atoms[i].element != "C") {
             obj.setAtomColor(i, ColorMapper::colorForElement(atoms[i].element));
             ++count;
         }
     }
     return count;
+}
+
+// Whole-object overload (e.g. the `color by element` keybinding).
+static int applyHeteroatomColors(MolObject& obj) {
+    std::vector<int> all(obj.atoms().size());
+    std::iota(all.begin(), all.end(), 0);
+    return applyHeteroatomColors(obj, all);
 }
 
 static const char* inspectLevelName(InspectLevel lvl) {
@@ -4514,6 +4525,14 @@ void Application::registerCommands() {
 
         const auto& first = cmd.args[0];
 
+        // Selection expression = tokens after the scheme/color name (may be
+        // empty → whole object). Shared by the element and named-color branches.
+        std::string expr;
+        for (size_t i = 1; i < cmd.args.size(); ++i) {
+            if (i > 1) expr += " ";
+            expr += cmd.args[i];
+        }
+
         // Helper: apply a per-object scheme across the current scope.
         auto applyScheme = [&](ColorScheme scheme, const std::string& label) -> ExecResult {
             int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
@@ -4530,12 +4549,17 @@ void Application::registerCommands() {
         // Scheme branches — :color chain (no further args) etc.
         if (first == "element" || first == "cpk" ||
             first == "heteroatom" || first == "hetero" || first == "het_color") {
+            // Honor the optional selection (e.g. `color element ligand`) so the
+            // CPK repaint is scoped, not applied to every heteroatom.
             int totalCount = 0;
-            int objs = forEachInScope(app, "", [&](ScopedTarget& t) {
-                totalCount += applyHeteroatomColors(*t.obj);
+            int objs = forEachInScope(app, expr, [&](ScopedTarget& t) {
+                std::vector<int> idxs(t.sel.indices().begin(), t.sel.indices().end());
+                totalCount += applyHeteroatomColors(*t.obj, idxs);
                 return true;
             });
-            if (objs == 0) return {false, "No object selected"};
+            if (objs == 0)
+                return {false, expr.empty() ? std::string("No object selected")
+                                            : ("No atoms match: " + expr)};
             std::string msg = "Colored " + std::to_string(totalCount) +
                               " heteroatoms by element";
             if (objs > 1) msg += " (" + std::to_string(objs) + " objects)";
@@ -4584,12 +4608,6 @@ void Application::registerCommands() {
             } else {
                 return {false, "Unknown color/scheme: " + first + " | Available: " + ColorMapper::availableColors()};
             }
-        }
-
-        std::string expr;
-        for (size_t i = 1; i < cmd.args.size(); ++i) {
-            if (i > 1) expr += " ";
-            expr += cmd.args[i];
         }
 
         int totalAtoms = 0;

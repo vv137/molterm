@@ -1,15 +1,26 @@
 #include "molterm/io/SessionExporter.h"
 #include "molterm/render/ColorMapper.h"
 
+#include <algorithm>
+#include <cassert>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
+#include <ostream>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 namespace molterm {
 
-// Write current in-memory coordinates as a PDB file.
+// Write current in-memory coordinates as a PDB file for the .pml bundle.
 // This captures any transforms (alignment, etc.) applied since loading.
+//
+// Deliberately separate from the canonical molterm::writePdb (io/PdbWriter.cpp):
+// the .pml's show/color/measurement `id` selections require serial ==
+// atomIndex+1, but writePdb bumps the serial on every TER record, breaking that
+// 1:1 mapping for multi-chain structures. Don't swap this for writePdb without
+// threading an atomIndex→serial map through the emitById/measurement sites.
 static bool writePDB(const MolObject& obj, const std::string& path) {
     std::ofstream out(path);
     if (!out) return false;
@@ -26,9 +37,13 @@ static bool writePDB(const MolObject& obj, const std::string& path) {
         }
         prevChain = a.chainId;
 
+        // HETATM for ligands/heteroatoms so PyMOL recognizes them as
+        // non-polymer (distance-bonds them, honors `resn`/het selections).
+        const char* record = a.isHet ? "HETATM" : "ATOM";
         char line[82];
         snprintf(line, sizeof(line),
-            "ATOM  %5d %-4s %3s %c%4d%c   %8.3f%8.3f%8.3f%6.2f%6.2f          %2s",
+            "%-6s%5d %-4s %3s %c%4d%c   %8.3f%8.3f%8.3f%6.2f%6.2f          %2s",
+            record,
             (i + 1) % 100000,
             a.name.c_str(),
             a.resName.c_str(),
@@ -52,6 +67,28 @@ static std::string dirOfPath(const std::string& filepath) {
     auto slash = filepath.rfind('/');
     if (slash == std::string::npos) return ".";
     return filepath.substr(0, slash);
+}
+
+static constexpr size_t kIdChunk = 200;
+
+// Emit a PyMOL command (`show`/`color`) scoped to specific atoms via 1-based
+// `id` lists, chunked so no single selection line grows unwieldy. Serials are
+// atomIndex+1 to match writePDB()'s 1..N numbering. `sel` is "id" (additive,
+// chunkable) or "not id" (the caller must pass a single chunk — a negation
+// doesn't compose across additive `show` lines). `tail` appends an extra
+// selector (e.g. " and name CA+C+N+O" for backbone).
+static void emitById(std::ostream& out, const char* cmd, const std::string& head,
+                     const std::string& obj, const char* sel, const char* tail,
+                     const std::vector<int>& serials) {
+    // A negated selection can't be chunked — each additive `show … not id <c>`
+    // line would re-show everything outside its chunk. Callers pass one chunk.
+    assert(serials.size() <= kIdChunk || std::strcmp(sel, "not id") != 0);
+    for (size_t s = 0; s < serials.size(); s += kIdChunk) {
+        size_t e = std::min(s + kIdChunk, serials.size());
+        out << cmd << " " << head << ", " << obj << " and " << sel << " ";
+        for (size_t i = s; i < e; ++i) out << (i > s ? "+" : "") << serials[i];
+        out << tail << "\n";
+    }
 }
 
 std::string SessionExporter::exportPML(const std::string& filepath, const Tab& tab,
@@ -100,31 +137,48 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
             continue;
         }
 
-        // Show active representations
-        if (obj->reprVisible(ReprType::Wireframe))
-            out << "show lines, " << name << "\n";
-        if (obj->reprVisible(ReprType::BallStick))
-            out << "show sticks, " << name << "\n";
-        if (obj->reprVisible(ReprType::Spacefill))
-            out << "show spheres, " << name << "\n";
-        if (obj->reprVisible(ReprType::Cartoon) || obj->reprVisible(ReprType::Ribbon))
-            out << "show cartoon, " << name << "\n";
-        if (obj->reprVisible(ReprType::Backbone)) {
-            out << "# backbone trace approximated as cartoon\n";
-            out << "show cartoon, " << name << " and name CA+C+N+O\n";
+        // Show active representations — honor per-atom masks (e.g.
+        // `show wire ligand`) so ligand-only / selection-scoped reprs survive
+        // the export instead of collapsing to the whole object or vanishing.
+        // Backbone maps to a CA+C+N+O-restricted cartoon.
+        struct PyRepr { ReprType r; const char* name; const char* tail; };
+        static const PyRepr kReprs[] = {
+            {ReprType::Wireframe, "lines",   ""},
+            {ReprType::BallStick, "sticks",  ""},
+            {ReprType::Spacefill, "spheres", ""},
+            {ReprType::Cartoon,   "cartoon", ""},
+            {ReprType::Ribbon,    "cartoon", ""},
+            {ReprType::Surface,   "surface", ""},
+            {ReprType::Backbone,  "cartoon", " and name CA+C+N+O"},
+        };
+        const int nAtoms = static_cast<int>(obj->atoms().size());
+        for (const auto& pr : kReprs) {
+            if (!obj->reprVisible(pr.r)) continue;
+            std::vector<int> shown, hidden;  // 1-based serials
+            for (int i = 0; i < nAtoms; ++i)
+                (obj->reprVisibleForAtom(pr.r, i) ? shown : hidden).push_back(i + 1);
+            if (shown.empty()) continue;
+            if (hidden.empty())
+                out << "show " << pr.name << ", " << name << pr.tail << "\n";
+            else if (hidden.size() <= kIdChunk)  // shorter as a one-line complement
+                emitById(out, "show", pr.name, name, "not id", pr.tail, hidden);
+            else
+                emitById(out, "show", pr.name, name, "id", pr.tail, shown);
         }
 
         // Color scheme (match MolTerm's CPK palette exactly)
         switch (obj->colorScheme()) {
             case ColorScheme::Element:
-                out << "color green, " << name << " and elem C\n";
-                out << "color blue, " << name << " and elem N\n";
-                out << "color red, " << name << " and elem O\n";
-                out << "color yellow, " << name << " and elem S\n";
-                out << "color magenta, " << name << " and elem P\n";
-                out << "color white, " << name << " and elem H\n";
-                out << "color cyan, " << name << " and elem Fe\n";
-                out << "color white, " << name << " and not (elem C+N+O+S+P+H+Fe)\n";
+                // Names sourced from pymolColorName so the CPK palette has a
+                // single home (shared with per-atom `color element` overrides).
+                out << "color " << pymolColorName(kColorCarbon)     << ", " << name << " and elem C\n";
+                out << "color " << pymolColorName(kColorNitrogen)   << ", " << name << " and elem N\n";
+                out << "color " << pymolColorName(kColorOxygen)     << ", " << name << " and elem O\n";
+                out << "color " << pymolColorName(kColorSulfur)     << ", " << name << " and elem S\n";
+                out << "color " << pymolColorName(kColorPhosphorus) << ", " << name << " and elem P\n";
+                out << "color " << pymolColorName(kColorHydrogen)   << ", " << name << " and elem H\n";
+                out << "color " << pymolColorName(kColorIron)       << ", " << name << " and elem Fe\n";
+                out << "color " << pymolColorName(kColorOther)      << ", " << name << " and not (elem C+N+O+S+P+H+Fe)\n";
                 break;
             case ColorScheme::Chain: {
                 // Match MolTerm's chain color cycle: A=green, B=cyan, C=magenta, D=yellow, E=red, F=blue
@@ -161,25 +215,19 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
                 break;
         }
 
-        // Per-atom color overrides
+        // Per-atom color overrides (e.g. `color element ligand` heteroatoms).
+        // Chunked id lists — the old 50-id cap appended a literal "or ..."
+        // that PyMOL rejects, silently dropping the rest of a ligand's color.
         const auto& atomColors = obj->atomColors();
         if (!atomColors.empty()) {
             std::unordered_map<int, std::vector<int>> colorGroups;
-            for (int i = 0; i < static_cast<int>(atomColors.size()); ++i) {
-                if (atomColors[i] >= 0) {
-                    colorGroups[atomColors[i]].push_back(i);
-                }
-            }
-            for (const auto& [colorPair, indices] : colorGroups) {
+            for (int i = 0; i < static_cast<int>(atomColors.size()); ++i)
+                if (atomColors[i] >= 0)
+                    colorGroups[atomColors[i]].push_back(i + 1);  // 1-based serials
+            for (const auto& [colorPair, serials] : colorGroups) {
                 std::string pymolColor = pymolColorName(colorPair);
                 if (pymolColor.empty()) continue;
-                out << "color " << pymolColor << ", " << name << " and (";
-                for (size_t i = 0; i < indices.size() && i < 50; ++i) {
-                    if (i > 0) out << " or ";
-                    out << "id " << (indices[i] + 1);  // PDB serials are 1-based
-                }
-                if (indices.size() > 50) out << " or ...";
-                out << ")\n";
+                emitById(out, "color", pymolColor, name, "id", "", serials);
             }
         }
     }
@@ -203,16 +251,14 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
     const auto& r = cam.rotation();
     float cx = cam.centerX(), cy = cam.centerY(), cz = cam.centerZ();
 
-    // PyMOL ortho zoom is controlled by internal Scale (not set_view distance).
-    // set_view does NOT touch Scale. So:
-    //   1. "zoom" sets Scale to fit all objects → correct zoom level
-    //   2. "set_view" then overrides rotation/origin/clipping, leaving Scale intact
+    // set_view installs MolTerm's rotation + center; `zoom` AFTER it fits the
+    // scale to the actual molecule. The previous order (zoom before set_view)
+    // was a no-op — set_view's distance overwrote the fitted scale, so every
+    // export came out at one fixed zoom that cropped larger structures. `zoom`
+    // keeps the rotation and only refits distance/clipping; the buffer leaves
+    // margin so the molecule isn't edge-tight.
     out << "set orthoscopic, 1\n";
-    out << "zoom\n";
-
-    // Now apply rotation and origin via set_view.
-    // Distance/clipping are generous — Scale (from zoom above) controls actual zoom.
-    float dist = 200.0f;
+    float dist = 200.0f;  // placeholder; `zoom` below recomputes the real distance
 
     char buf[1024];
     snprintf(buf, sizeof(buf),
@@ -230,6 +276,7 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
         cx,   cy,    cz,
         50.0f, 500.0f, -1.0f);  // -1 = ortho ON
     out << buf;
+    out << "zoom buffer=5\n";  // fit to molecule size with margin (see above)
 
     // PyMOL `id N` uses PDB serials. Each measurement names its owning object
     // (issue #101); resolve per measurement, falling back to the first object
@@ -263,7 +310,7 @@ std::string SessionExporter::exportPML(const std::string& filepath, const Tab& t
             bool ok = true;
             for (int aidx : m.atoms) {
                 if (aidx < 0 || aidx >= static_cast<int>(atoms.size())) { ok = false; break; }
-                serials.push_back(atoms[aidx].serial);
+                serials.push_back(aidx + 1);  // match writePDB()'s 1..N numbering
             }
             if (!ok) continue;
             const char* kind = nullptr;
@@ -338,6 +385,16 @@ std::string SessionExporter::pymolColorName(int colorPairId) {
         case kColorSalmon:  return "salmon";
         case kColorSlate:   return "slate";
         case kColorGray:    return "gray";
+        // Element (CPK) palette — mirrors the per-elem scheme above so
+        // `color element` per-atom overrides (e.g. ligand heteroatoms) export.
+        case kColorCarbon:     return "green";
+        case kColorNitrogen:   return "blue";
+        case kColorOxygen:     return "red";
+        case kColorSulfur:     return "yellow";
+        case kColorPhosphorus: return "magenta";
+        case kColorHydrogen:   return "white";
+        case kColorIron:       return "cyan";
+        case kColorOther:      return "white";
         default:            return "";
     }
 }
