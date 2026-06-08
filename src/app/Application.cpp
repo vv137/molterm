@@ -3279,8 +3279,12 @@ void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
     if (arrows_.empty()) return;
     int thickness = effectiveArrowThickness();
     int headSize  = effectiveArrowHeadSize();
-    uint8_t r = 255, g = 255, b = 50;          // default yellow
-    if (arrowColor_) { r = (*arrowColor_)[0]; g = (*arrowColor_)[1]; b = (*arrowColor_)[2]; }
+    // Base color: global :set arrow_color override, else default yellow. Each
+    // arrow may override it per-overlay (issue #104); r/g/b are reset at the
+    // top of every loop iteration and captured by `plot` by reference.
+    uint8_t baseR = 255, baseG = 255, baseB = 50;
+    if (arrowColor_) { baseR = (*arrowColor_)[0]; baseG = (*arrowColor_)[1]; baseB = (*arrowColor_)[2]; }
+    uint8_t r = baseR, g = baseG, b = baseB;
 
     // Plot a thickness × thickness pixel block at (x, y, depth). Re-uses
     // PixelCanvas::drawDotRGB to skip the colorIds_ tag (overlays don't
@@ -3297,6 +3301,8 @@ void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
     };
 
     for (const auto& arr : arrows_) {
+        r = baseR; g = baseG; b = baseB;
+        if (arr.color) { r = (*arr.color)[0]; g = (*arr.color)[1]; b = (*arr.color)[2]; }
         float fxa, fya, fda, fxb, fyb, fdb;
         cam.projectCached(arr.a[0], arr.a[1], arr.a[2], fxa, fya, fda);
         cam.projectCached(arr.b[0], arr.b[1], arr.b[2], fxb, fyb, fdb);
@@ -4726,23 +4732,44 @@ void Application::registerCommands() {
     cmdRegistry_.registerCmd("orient", [collectAtomCoords, computeUnion](Application& app, const ParsedCommand& cmd) -> ExecResult {
         double vx = 0.0, vy = 0.0, vz = 1.0;
         int selStart = 0;
-        if (!cmd.args.empty() && cmd.args[0] == "view") {
-            // Parser splits on whitespace AND commas, so "view 1,1,0" and "view 1 1 0"
-            // both arrive as four separate args.
-            if (cmd.args.size() < 4) {
-                return {false, "Usage: :orient view <vx> <vy> <vz> [selection]"};
-            }
-            try {
-                vx = std::stod(cmd.args[1]);
-                vy = std::stod(cmd.args[2]);
-                vz = std::stod(cmd.args[3]);
-            } catch (...) {
-                return {false, "Invalid view vector: " + cmd.args[1] + " " + cmd.args[2] + " " + cmd.args[3]};
+        // `view` interprets (vx,vy,vz) as coefficients in the PCA eigenbasis
+        // of the selection (0 0 1 = down the shortest axis = default). `dir`
+        // interprets them as a world-space view direction, so a script that
+        // already holds a world axis (a pca().axis3, a bond vector) can aim
+        // the camera straight down it (issue #105).
+        bool worldDir = false;
+        if (!cmd.args.empty() && (cmd.args[0] == "view" || cmd.args[0] == "dir")) {
+            worldDir = (cmd.args[0] == "dir");
+            if (cmd.args.size() >= 2 && !cmd.args[1].empty() && cmd.args[1][0] == '$') {
+                // `:orient dir $reg [selection]` — a vec3 register supplies the
+                // direction in one token (issue #105), so a script can aim the
+                // camera down an axis it already computed (e.g. a groove normal
+                // from `:run @lib/tcr_angles`).
+                auto it = app.registers().find(cmd.args[1].substr(1));
+                if (it == app.registers().end())
+                    return {false, "no such register: " + cmd.args[1]};
+                if (it->second.kind != Register::Kind::Vec3)
+                    return {false, "register is not a vec3: " + cmd.args[1]};
+                vx = it->second.vec[0]; vy = it->second.vec[1]; vz = it->second.vec[2];
+                selStart = 2;
+            } else {
+                // Parser splits on whitespace AND commas, so "view 1,1,0" and
+                // "view 1 1 0" both arrive as separate args.
+                if (cmd.args.size() < 4) {
+                    return {false, "Usage: :orient " + cmd.args[0] + " <vx> <vy> <vz> | $reg [selection]"};
+                }
+                try {
+                    vx = std::stod(cmd.args[1]);
+                    vy = std::stod(cmd.args[2]);
+                    vz = std::stod(cmd.args[3]);
+                } catch (...) {
+                    return {false, "Invalid view vector: " + cmd.args[1] + " " + cmd.args[2] + " " + cmd.args[3]};
+                }
+                selStart = 4;
             }
             double vlen = std::sqrt(vx*vx + vy*vy + vz*vz);
             if (vlen < 1e-10) return {false, "View vector cannot be zero"};
             vx /= vlen; vy /= vlen; vz /= vlen;
-            selStart = 4;
         }
 
         auto g = collectAtomCoords(app, cmd, selStart);
@@ -4774,21 +4801,34 @@ void Application::registerCommands() {
         const auto& e2 = pca.axis2;
         const auto& e3 = pca.axis3;
 
-        // View direction in world space
-        double sz[3] = {
-            vx*e1[0] + vy*e2[0] + vz*e3[0],
-            vx*e1[1] + vy*e2[1] + vz*e3[1],
-            vx*e1[2] + vy*e2[2] + vz*e3[2],
-        };
+        // View direction in world space. `dir` is already a world vector;
+        // `view`/default combine the eigenbasis coefficients into world space.
+        double sz[3];
+        if (worldDir) {
+            sz[0] = vx; sz[1] = vy; sz[2] = vz;
+        } else {
+            sz[0] = vx*e1[0] + vy*e2[0] + vz*e3[0];
+            sz[1] = vx*e1[1] + vy*e2[1] + vz*e3[1];
+            sz[2] = vx*e1[2] + vy*e2[2] + vz*e3[2];
+        }
 
-        // Up reference in PCA frame: prefer e2; if view is too close to e2, fall back to e1
-        double up_pca[3] = {0, 1, 0};
-        if (std::abs(vy) > 0.9) { up_pca[0] = 1; up_pca[1] = 0; up_pca[2] = 0; }
-        double up[3] = {
-            up_pca[0]*e1[0] + up_pca[1]*e2[0] + up_pca[2]*e3[0],
-            up_pca[0]*e1[1] + up_pca[1]*e2[1] + up_pca[2]*e3[1],
-            up_pca[0]*e1[2] + up_pca[1]*e2[2] + up_pca[2]*e3[2],
-        };
+        double up[3];
+        if (worldDir) {
+            // No eigenbasis frame to lean on — use the structure's major axis
+            // (e1) as the up reference so its longest dimension tends toward
+            // screen-vertical; fall back to e2 if e1 ≈ parallel to the view.
+            const auto* ref = &e1;
+            double d1 = std::abs(e1[0]*sz[0] + e1[1]*sz[1] + e1[2]*sz[2]);
+            if (d1 > 0.9) ref = &e2;
+            up[0] = (*ref)[0]; up[1] = (*ref)[1]; up[2] = (*ref)[2];
+        } else {
+            // Up reference in PCA frame: prefer e2; if view is too close to e2, fall back to e1
+            double up_pca[3] = {0, 1, 0};
+            if (std::abs(vy) > 0.9) { up_pca[0] = 1; up_pca[1] = 0; up_pca[2] = 0; }
+            up[0] = up_pca[0]*e1[0] + up_pca[1]*e2[0] + up_pca[2]*e3[0];
+            up[1] = up_pca[0]*e1[1] + up_pca[1]*e2[1] + up_pca[2]*e3[1];
+            up[2] = up_pca[0]*e1[2] + up_pca[1]*e2[2] + up_pca[2]*e3[2];
+        }
 
         // Project up onto plane perpendicular to view → screen Y
         double dot_uv = up[0]*sz[0] + up[1]*sz[1] + up[2]*sz[2];
@@ -4814,9 +4854,15 @@ void Application::registerCommands() {
         if (g.objs > 1) msg += " (" + std::to_string(g.objs) + " objects)";
         app.logViewState(cmd, static_cast<int>(g.xs.size()));
         return {true, msg};
-    }, ":orient [view <vx> <vy> <vz>] [selection]",
-       "Center, zoom, and align principal axes (default: view down shortest axis)",
-       {":orient", ":orient chain A", ":orient view 1 0 0"}, "View");
+    }, ":orient [view <vx vy vz> | dir <vx vy vz> | dir $reg] [selection]",
+       "Center, zoom, and align principal axes. Default = view down the "
+       "shortest PCA axis. `view <vx vy vz>` aims along a combination of the "
+       "selection's PCA eigen-axes (0 0 1 = shortest/e3, 0 1 0 = middle/e2, "
+       "1 0 0 = longest/e1). `dir <vx vy vz>` (or `dir $reg` for a vec3 "
+       "register) aims down a world-space direction instead. Pair with a "
+       "follow-up :zoom to frame a different selection than the rotation basis.",
+       {":orient", ":orient view 0 1 0 chain A and resi 50-85",
+        ":orient dir 1 0 0", ":orient dir $groove_normal"}, "View");
 
     // :turn x|y|z <deg>  — incremental camera rotation around screen axes,
     // no PCA, no recompute. Mirrors PyMOL's `turn` and is the cheap path
@@ -6220,6 +6266,87 @@ void Application::registerCommands() {
                std::to_string(obj->bonds().size()) + " bonds"};
     }, ":info", "Show atom/bond counts and metadata for the current object",
        {":info"}, "Session");
+
+    // :chains — per-chain summary table for the current object (issue #103).
+    // Surfaces the facts you need to drive a multi-chain recipe (which chain
+    // is the peptide / MHC / TCR, its residue range, the conserved-Cys
+    // positions) without dropping out to an external mmCIF parser. Prints in
+    // --no-tui like :info, so figure scripts can read it back.
+    cmdRegistry_.registerCmd("chains", [](Application& app, const ParsedCommand&) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+        const auto& atoms = obj->atoms();
+        if (atoms.empty()) return {false, obj->name() + ": no atoms"};
+
+        static const std::set<std::string> kStdAA = {
+            "ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE",
+            "LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL",
+            "MSE","SEC","PYL"};
+        static const std::set<std::string> kNucleic = {
+            "A","C","G","U","T","DA","DC","DG","DT","DU","I"};
+
+        struct ChainInfo {
+            std::string id;
+            int natoms = 0, loRes = 0, hiRes = 0;
+            bool haveRes = false;
+            std::set<std::pair<int,char>> residues;            // (resSeq, insCode)
+            std::vector<int> cys;                              // CYS resSeq, in order
+            std::set<int> cysSeen;
+            int nProtein = 0, nNucleic = 0, nWater = 0, nOther = 0;
+        };
+        std::vector<ChainInfo> chains;
+        std::unordered_map<std::string,int> idx;
+        for (const auto& a : atoms) {
+            auto it = idx.find(a.chainId);
+            ChainInfo* c;
+            if (it == idx.end()) {
+                idx[a.chainId] = static_cast<int>(chains.size());
+                chains.push_back({}); c = &chains.back(); c->id = a.chainId;
+            } else c = &chains[it->second];
+            c->natoms++;
+            c->residues.insert({a.resSeq, a.insCode});
+            if (!c->haveRes) { c->loRes = c->hiRes = a.resSeq; c->haveRes = true; }
+            else { c->loRes = std::min(c->loRes, a.resSeq); c->hiRes = std::max(c->hiRes, a.resSeq); }
+            if (a.resName == "HOH" || a.resName == "WAT") c->nWater++;
+            else if (kStdAA.count(a.resName))             c->nProtein++;
+            else if (kNucleic.count(a.resName))           c->nNucleic++;
+            else                                          c->nOther++;
+            if (a.resName == "CYS" && !c->cysSeen.count(a.resSeq)) {
+                c->cysSeen.insert(a.resSeq); c->cys.push_back(a.resSeq);
+            }
+        }
+
+        std::ostringstream os;
+        os << obj->name() << " — " << chains.size()
+           << (chains.size() == 1 ? " chain\n" : " chains\n");
+        os << "chain  kind     nres  resi-range   natoms  CYS\n";
+        for (const auto& c : chains) {
+            int mx = std::max(std::max(c.nProtein, c.nNucleic),
+                              std::max(c.nWater, c.nOther));
+            const char* kind = (c.nProtein == mx) ? "protein"
+                             : (c.nNucleic == mx) ? "nucleic"
+                             : (c.nWater   == mx) ? "water"   : "hetero";
+            std::string range = std::to_string(c.loRes) + "-" + std::to_string(c.hiRes);
+            std::string cysStr;
+            for (size_t k = 0; k < c.cys.size(); ++k) {
+                if (k) cysStr += ",";
+                cysStr += std::to_string(c.cys[k]);
+            }
+            if (cysStr.empty()) cysStr = "-";
+            char row[256];
+            std::snprintf(row, sizeof(row), "%-5s  %-7s  %4d  %-11s  %6d  %s\n",
+                          c.id.c_str(), kind, static_cast<int>(c.residues.size()),
+                          range.c_str(), c.natoms, cysStr.c_str());
+            os << row;
+        }
+        std::string out = os.str();
+        if (!out.empty() && out.back() == '\n') out.pop_back();
+        return {true, out};
+    }, ":chains",
+       "Per-chain summary of the current object: kind, residue count, "
+       "residue-number range, atom count, and conserved-Cys positions "
+       "(handy for picking chain ids / Cys residues to drive a recipe).",
+       {":chains"}, "Session");
 
     // :camera — print | save <file> | load <file> | reset
     //
@@ -8023,10 +8150,28 @@ void Application::registerCommands() {
     // here". Two endpoint forms:
     //   :arrow <serial1> <serial2> [= "label"]   # atom-to-atom, resolved once
     //   :arrow $regA $regB         [= "label"]   # vec3 / point register endpoints
-    cmdRegistry_.registerCmd("arrow", [resolveAtomIdx](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    // Pull an optional `color <named|#RRGGBB|rgb(...)>` pair out of the
+    // positional args of :arrow / :axis (issue #104). On an unknown spec it
+    // returns the error string; otherwise `outColor` is set when present and
+    // the two consumed tokens are erased from `pos`.
+    auto extractColorOpt = [](std::vector<std::string>& pos,
+                              std::optional<std::array<uint8_t, 3>>& outColor) -> std::string {
+        for (size_t k = 0; k + 1 < pos.size(); ++k) {
+            if (pos[k] == "color") {
+                auto rgb = parseColorSpec(pos[k + 1]);
+                if (!rgb) return "Unknown color: " + pos[k + 1];
+                outColor = rgb;
+                pos.erase(pos.begin() + k, pos.begin() + k + 2);
+                return "";
+            }
+        }
+        return "";
+    };
+    cmdRegistry_.registerCmd("arrow", [resolveAtomIdx, extractColorOpt](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto [pos, caption] = splitAtEqToken(cmd.args);
-        if (pos.size() < 2) return {false, "Usage: :arrow <s1> <s2> [= \"label\"] | :arrow $regA $regB"};
         ArrowOverlay arr;
+        if (auto err = extractColorOpt(pos, arr.color); !err.empty()) return {false, err};
+        if (pos.size() < 2) return {false, "Usage: :arrow <s1> <s2> [color <c>] [= \"label\"] | :arrow $regA $regB"};
         arr.caption = caption;
         // Resolve a single endpoint to world coords. `$reg` looks up a
         // Vec3 / Point register; bare token is treated as an atom serial
@@ -8054,19 +8199,21 @@ void Application::registerCommands() {
         if (auto err = resolveEndpoint(pos[1], arr.b); !err.empty()) return {false, err};
         app.arrows().push_back(std::move(arr));
         return {true, "Arrow added"};
-    }, ":arrow <s1> <s2> [= \"label\"]",
-       "Persistent solid arrow + caption between two atoms / vec3 registers (use $reg for non-atom endpoints)",
+    }, ":arrow <s1> <s2> [color <c>] [= \"label\"]",
+       "Persistent solid arrow + caption between two atoms / vec3 registers (use $reg for non-atom endpoints; color = named/#RRGGBB)",
        {":arrow pk1 pk2 = \"V-V axis\"",
-        ":arrow $p1 $p2 = \"helix axis\""}, "Measurement");
+        ":arrow $p1 $p2 color teal = \"helix axis\""}, "Measurement");
 
     // :axis $reg [= "label"] — render the principal axis of a PCA register
     // as an arrow centered on its `center`, length proportional to the
     // square root of the eigenvalue (≈ 1σ along that axis). Provides the
     // natural composition over `:let G = pca(...); :axis $G`.
-    cmdRegistry_.registerCmd("axis", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    cmdRegistry_.registerCmd("axis", [extractColorOpt](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto [pos, caption] = splitAtEqToken(cmd.args);
+        std::optional<std::array<uint8_t, 3>> axisColor;
+        if (auto err = extractColorOpt(pos, axisColor); !err.empty()) return {false, err};
         if (pos.empty() || pos[0].empty() || pos[0][0] != '$')
-            return {false, "Usage: :axis $pcaRegister [= \"label\"]"};
+            return {false, "Usage: :axis $pcaRegister [color <c>] [= \"label\"]"};
         auto it = app.registers().find(pos[0].substr(1));
         if (it == app.registers().end()) return {false, "no such register: " + pos[0]};
         if (it->second.kind != Register::Kind::Pca)
@@ -8078,6 +8225,7 @@ void Application::registerCommands() {
         float halfLen = std::max(1.0f, static_cast<float>(std::sqrt(std::max(0.0, p.eigvals[0]))));
         ArrowOverlay arr;
         arr.caption = caption;
+        arr.color = axisColor;
         for (int i = 0; i < 3; ++i) {
             float c = static_cast<float>(p.center[i]);
             float d = static_cast<float>(p.axis1[i]);
@@ -8086,9 +8234,9 @@ void Application::registerCommands() {
         }
         app.arrows().push_back(std::move(arr));
         return {true, "Axis added"};
-    }, ":axis $pcaReg [= \"label\"]",
-       "Draw the major axis (axis1) of a pca-result register as an arrow of length ±1σ centered on its centroid",
-       {":axis $G = \"groove axis\""}, "Measurement");
+    }, ":axis $pcaReg [color <c>] [= \"label\"]",
+       "Draw the major axis (axis1) of a pca-result register as an arrow of length ±1σ centered on its centroid (color = named/#RRGGBB)",
+       {":axis $G color slate = \"groove axis\""}, "Measurement");
     cmdRegistry_.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};

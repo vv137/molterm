@@ -708,6 +708,9 @@ public:
         std::array<float, 3> a{};
         std::array<float, 3> b{};
         std::string caption;
+        // Per-arrow color override (issue #104). Falls back to the global
+        // arrowColor_ (`:set arrow_color`), then the default yellow, when unset.
+        std::optional<std::array<uint8_t, 3>> color;
     };
 private:
     std::vector<ArrowOverlay> arrows_;

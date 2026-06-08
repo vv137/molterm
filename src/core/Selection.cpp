@@ -1096,9 +1096,66 @@ private:
 
 } // anonymous namespace
 
-Selection Selection::parse(const std::string& expr, const MolObject& mol,
+namespace {
+
+// Translate the `chain:resi[:name]` atom-spec (optionally `obj/chain:resi:name`)
+// that pos()/pca() already accept into the slash atom-path the grammar parses,
+// so :show / :color / :select / :measure(...) take the same shorthand
+// uniformly (issue #106):
+//   D:22:CA       -> //D/22/CA
+//   D:22          -> //D/22
+//   1abc/D:22:CA  -> /1abc/D/22/CA
+// A ':' appears in no other selection construct, so an expression without one
+// returns unchanged, and one *with* a colon currently always fails to parse —
+// the rewrite can only turn a hard error into a match, never regress a working
+// expression. Tokens are split on whitespace / parens; a token keeps its
+// surrounding parens (e.g. `(D:22:CA)` -> `(//D/22/CA)`).
+std::string normalizeColonSpecs(const std::string& expr) {
+    if (expr.find(':') == std::string::npos) return expr;
+    auto isTokChar = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) ||
+               c == '_' || c == '*' || c == '/' || c == '.' ||
+               c == '+' || c == '-' || c == ':';
+    };
+    std::string out;
+    out.reserve(expr.size() + 8);
+    size_t i = 0, n = expr.size();
+    while (i < n) {
+        char prev = (i == 0) ? ' ' : expr[i - 1];
+        bool atBoundary = std::isspace(static_cast<unsigned char>(prev)) ||
+                          prev == '(' || prev == ')';
+        char c = expr[i];
+        if (atBoundary &&
+            (std::isalnum(static_cast<unsigned char>(c)) || c == '*' || c == '/')) {
+            size_t j = i;
+            while (j < n && isTokChar(expr[j])) ++j;
+            std::string tok = expr.substr(i, j - i);
+            if (tok.find(':') != std::string::npos) {
+                bool hasObj = tok.find('/') != std::string::npos;
+                for (char& tc : tok) if (tc == ':') tc = '/';
+                // Slash atom-path wants a leading '/obj' (or '//' for the
+                // empty-obj case); don't double a slash a token already has.
+                if (tok[0] == '/')      out += tok;
+                else if (hasObj)        out += "/" + tok;
+                else                    out += "//" + tok;
+            } else {
+                out += tok;
+            }
+            i = j;
+        } else {
+            out += c;
+            ++i;
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+Selection Selection::parse(const std::string& exprIn, const MolObject& mol,
                            NameResolver resolver) {
-    if (expr.empty()) return Selection();
+    if (exprIn.empty()) return Selection();
+    std::string expr = normalizeColonSpecs(exprIn);
     SelectionParser parser(expr, mol, std::move(resolver));
     return parser.parse();
 }

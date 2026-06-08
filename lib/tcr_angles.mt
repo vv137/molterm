@@ -1,4 +1,4 @@
-#!molterm scope=local export=crossing,incident
+#!molterm scope=local export=crossing,incident,v_axis,p_axis,groove_normal
 # tcr_angles.mt — TCR-pMHC crossing & incident angles (Singh 2020 / Pierce TCR3d)
 #
 # Geometric definition (per Rudolph 2006 / Singh 2020):
@@ -23,6 +23,12 @@
 # Output registers:
 #   $crossing       crossing angle in degrees (0..180)
 #   $incident       incident-angle offset from 90° (signed; callers take abs)
+#   $v_axis         vec3 V-V axis  (TCRα Cys23 Cα → TCRβ Cys23 Cα)
+#   $p_axis         vec3 peptide axis (P1 Cα → PΩ Cα)
+#   $groove_normal  vec3 groove-plane normal n̂ (MHC α1+α2 PCA axis3)
+# The three vec3 outputs let a figure script draw the geometry directly,
+# e.g. `:arrow $v_axis ...` / `:axis`-style overlays, without recomputing
+# the recipe's pos()/pca() math (issue #107).
 #
 # Example call (1AO7 — A6 TCR / Tax / HLA-A2):
 #   :setenv TCR_A D
@@ -42,11 +48,11 @@
 select _hlx1 = chain ${MHC} and resi ${MHC_HELIX1}
 select _hlx2 = chain ${MHC} and resi ${MHC_HELIX2}
 let _groove = pca($_hlx1 or $_hlx2)
-let _n      = $_groove.axis3
-let _v_axis = pos(${TCR_A}:${TCRA_CYS23}:CA) - pos(${TCR_B}:${TCRB_CYS23}:CA)
-let _p_axis = pos(${PEP}:${PEP_FIRST}:CA) - pos(${PEP}:${PEP_LAST}:CA)
-let _v_proj = $_v_axis - dot($_v_axis, $_n) * $_n
-let _p_proj = $_p_axis - dot($_p_axis, $_n) * $_n
+let groove_normal = $_groove.axis3
+let v_axis = pos(${TCR_A}:${TCRA_CYS23}:CA) - pos(${TCR_B}:${TCRB_CYS23}:CA)
+let p_axis = pos(${PEP}:${PEP_FIRST}:CA) - pos(${PEP}:${PEP_LAST}:CA)
+let _v_proj = $v_axis - dot($v_axis, $groove_normal) * $groove_normal
+let _p_proj = $p_axis - dot($p_axis, $groove_normal) * $groove_normal
 let crossing = angle($_v_proj, $_p_proj)
-let _v_to_n  = angle($_v_axis, $_n)
+let _v_to_n  = angle($v_axis, $groove_normal)
 let incident = $_v_to_n - 90.0
