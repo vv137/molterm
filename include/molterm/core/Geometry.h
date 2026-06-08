@@ -33,6 +33,33 @@ PcaResult pcaOf(const std::vector<float>& xs,
                 const std::vector<float>& ys,
                 const std::vector<float>& zs);
 
+// Helix axis from an *ordered* point trace (Cα backbone, or a nucleic
+// phosphate backbone) via the consecutive-chord cross-product method:
+// for a regular helix the cross products of successive chord vectors,
+// Σ (v_i × v_{i+1}), all point along the helix axis. Unlike PCA, this
+// stays reliable for short, curved, or single-strand segments (PCA only
+// recovers the axis once the cloud is clearly elongated along it). Needs
+// ≥ 3 points; near-linear traces fall back to the first→last chord.
+// Returned as a PcaResult so it drops into the same `:let`/`.axis1`/`:axis`
+// flow as pca(): axis1 = helix axis (oriented first→last), center =
+// centroid, eigvals[0] = variance of points projected onto the axis.
+PcaResult helixAxisOf(const std::vector<float>& xs,
+                      const std::vector<float>& ys,
+                      const std::vector<float>& zs);
+
+// Screw axis of the optimal rigid superposition mapping ordered point
+// set A onto B (equal counts; i-th of A ↔ i-th of B), via Horn's (1987)
+// unit-quaternion method — reflection-free by construction. Returned as a
+// PcaResult overloaded as: axis1 = rotation axis (unit), center = midpoint
+// of the two centroids (an anchor for drawing), eigvals[0] = rotation
+// angle in degrees. valid=false when either set has < 3 points or the
+// counts differ.
+PcaResult superposeAxisOf(const std::vector<float>& ax,
+                          const std::vector<float>& ay,
+                          const std::vector<float>& az,
+                          const std::vector<float>& bx,
+                          const std::vector<float>& by,
+                          const std::vector<float>& bz);
 
 
 // Signed dihedral angle in degrees, [-180, +180], for four 3D points.

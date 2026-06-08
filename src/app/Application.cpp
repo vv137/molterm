@@ -6568,7 +6568,8 @@ void Application::registerCommands() {
     }, ":let <name> = <expr>",
        "Bind a typed register (scalar, vec3, or pca-result) for reuse later. "
        "Expression supports +,-,*,/, vec3 literals [x,y,z], $reg.field access, "
-       "and builtins pos()/pca()/dot()/cross()/length()/normalize()/midpoint()/angle().",
+       "and builtins pos()/pca()/helix_axis()/superpose_axis()/dot()/cross()/"
+       "length()/normalize()/midpoint()/angle()/dihedral().",
        {":let v_axis = pos(A:43:CA) - pos(B:23:CA)",
         ":let G = pca(chain A and helix)",
         ":let theta = angle($v_axis, $G.axis1)"}, "Registers");

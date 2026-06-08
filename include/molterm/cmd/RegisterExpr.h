@@ -29,12 +29,19 @@ class MolObject;
 //
 //   pos(<atom-spec>)              -> Vec3 — Cα-or-name-resolved position.
 //   pca(<selection-expr>)         -> Pca  — principal axes of the selection.
+//   helix_axis(<selection-expr>)  -> Pca  — helix axis of an ordered Cα/P
+//                                    trace (robust on short/curved/single-
+//                                    strand segments); axis1 = axis.
+//   superpose_axis(selA vs selB)  -> Pca  — screw axis of the optimal A→B
+//                                    rigid superposition (equal counts);
+//                                    axis1 = axis, eig1 = rotation angle°.
 //   dot(v1, v2)                   -> Scalar
 //   cross(v1, v2)                 -> Vec3
 //   length(v)                     -> Scalar
 //   normalize(v)                  -> Vec3
 //   midpoint(p1, p2)              -> Vec3
 //   angle(v1, v2)                 -> Scalar (degrees)
+//   dihedral(p1, p2, p3, p4)      -> Scalar (signed degrees, [-180,180])
 //
 // Atom-spec for pos(): "<chain>:<resi>:<atomname>" (e.g. "A:1:CA").
 //

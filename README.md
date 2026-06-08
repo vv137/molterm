@@ -343,9 +343,10 @@ regardless of scope — switch the current object explicitly with
 
 The `lib/` directory ships short, validated `.mt` scripts for named
 structural metrics — TCR-pMHC crossing/incident angle, kinase αC/DFG
-state, antibody Fab elbow, DNA bend, α-/TM-helix kink — composed from
-the v0.31+ register primitives (`:let` / `pos()` / `pca()` / `dot()` /
-`angle()`).
+state, antibody Fab elbow, DNA bend, α-/TM-helix kink, domain hinge,
+backbone φ/ψ — composed from the register primitives (`:let` / `pos()` /
+`pca()` / `helix_axis()` / `superpose_axis()` / `dot()` / `angle()` /
+`dihedral()`).
 
 ```vim
 :setenv TCR_A D ; :setenv TCR_B E
@@ -924,13 +925,16 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "                      (bare names also work: G.axis1)
                                 "     - Vector algebra: + - * /, dot(), cross(),
                                 "                      length(), normalize(), midpoint(),
-                                "                      angle()       (degrees)
+                                "                      angle(), dihedral()   (degrees)
                                 "     - Scalar math:   abs, sqrt, exp, log, log10, log2,
                                 "                      sin, cos, tan, asin, acos, atan,
                                 "                      floor, ceil, round
                                 "                      (2-arg) min, max, pow, atan2
                                 "     - PCA primitive: pca(<selection>)     -> { axis1,
                                 "                      axis2, axis3, eigvals, center }
+                                "     - Axis fits:     helix_axis(<sel>)     -> helical axis
+                                "                      superpose_axis(A vs B) -> screw axis,
+                                "                      eig1 = rotation angle (degrees)
                                 "   Type rules: vec±vec, scalar±scalar, scalar*vec,
                                 "   vec/scalar, dot/cross/length/angle on vec3.
                                 "   Examples:

@@ -239,6 +239,31 @@ private:
     }
 
     // ── Builtins ──
+    // Shared capture path for the single-selection PCA-style builtins
+    // (pca / helix_axis): grab the balanced-paren selection text verbatim,
+    // resolve it to ordered XYZ, run `fn`, and wrap the result as a Pca
+    // register. pos() and superpose_axis() differ enough to stay separate.
+    using SelXYZFn = geom::PcaResult (*)(const std::vector<float>&,
+                                         const std::vector<float>&,
+                                         const std::vector<float>&);
+    Register captureSelectionPca(const char* name, int minAtoms, SelXYZFn fn) {
+        lex_.rewind(cur_.pos);
+        std::string raw = lex_.takeBalancedParen();
+        advance();
+        if (!ctx_.collectSelectionXYZ) { fail(std::string(name) + "(): no selection resolver"); return {}; }
+        std::vector<float> xs, ys, zs;
+        int n = ctx_.collectSelectionXYZ(raw, &xs, &ys, &zs);
+        if (n < minAtoms) {
+            fail(std::string(name) + "(): need at least " + std::to_string(minAtoms) +
+                 " atoms (got " + std::to_string(n) + ")");
+            return {};
+        }
+        auto p = fn(xs, ys, zs);
+        if (!p.valid) { fail(std::string(name) + "(): degenerate input"); return {}; }
+        Register r; r.kind = Register::Kind::Pca; r.pca = p;
+        return r;
+    }
+
     Register callBuiltin(const std::string& name) {
         // pos() and pca() take a free-form text argument: rewind the
         // lexer to the start of the current token (which sits just after
@@ -257,16 +282,36 @@ private:
             Register r; r.kind = Register::Kind::Vec3; r.vec = {x, y, z};
             return r;
         }
-        if (name == "pca") {
+        // pca() fits principal axes; helix_axis() fits the *helical* axis of
+        // an ordered Cα/phosphate trace (robust on short/curved segments).
+        if (name == "pca")        return captureSelectionPca("pca", 2, geom::pcaOf);
+        if (name == "helix_axis") return captureSelectionPca("helix_axis", 3, geom::helixAxisOf);
+        if (name == "superpose_axis") {
+            // Two selections separated by the `vs` keyword (the comma is
+            // already claimed by the :let RHS rejoin). Each must resolve to
+            // the same number of atoms, in correspondence (i-th ↔ i-th).
             lex_.rewind(cur_.pos);
             std::string raw = lex_.takeBalancedParen();
             advance();
-            if (!ctx_.collectSelectionXYZ) { fail("pca(): no selection resolver"); return {}; }
-            std::vector<float> xs, ys, zs;
-            int n = ctx_.collectSelectionXYZ(raw, &xs, &ys, &zs);
-            if (n < 2) { fail("pca(): need at least 2 atoms (got " + std::to_string(n) + ")"); return {}; }
-            auto p = geom::pcaOf(xs, ys, zs);
-            if (!p.valid) { fail("pca(): degenerate input"); return {}; }
+            if (!ctx_.collectSelectionXYZ) { fail("superpose_axis(): no selection resolver"); return {}; }
+            std::string norm = raw;
+            for (char& c : norm) if (c == ',') c = ' ';
+            // Split on the first whitespace-delimited `vs` token.
+            std::string selA, selB;
+            bool split = false;
+            for (size_t p = norm.find("vs"); p != std::string::npos; p = norm.find("vs", p + 2)) {
+                bool lb = (p == 0) || std::isspace(static_cast<unsigned char>(norm[p-1]));
+                bool rb = (p+2 >= norm.size()) || std::isspace(static_cast<unsigned char>(norm[p+2]));
+                if (lb && rb) { selA = norm.substr(0, p); selB = norm.substr(p+2); split = true; break; }
+            }
+            if (!split) { fail("superpose_axis(selA vs selB): need two selections separated by 'vs'"); return {}; }
+            std::vector<float> axs, ays, azs, bxs, bys, bzs;
+            int na = ctx_.collectSelectionXYZ(selA, &axs, &ays, &azs);
+            int nb = ctx_.collectSelectionXYZ(selB, &bxs, &bys, &bzs);
+            if (na < 3 || nb < 3) { fail("superpose_axis(): each selection needs ≥ 3 atoms (got " + std::to_string(na) + ", " + std::to_string(nb) + ")"); return {}; }
+            if (na != nb) { fail("superpose_axis(): selections must have equal atom counts (" + std::to_string(na) + " vs " + std::to_string(nb) + ")"); return {}; }
+            auto p = geom::superposeAxisOf(axs, ays, azs, bxs, bys, bzs);
+            if (!p.valid) { fail("superpose_axis(): degenerate input"); return {}; }
             Register r; r.kind = Register::Kind::Pca; r.pca = p;
             return r;
         }
@@ -286,6 +331,7 @@ private:
         if (name == "normalize" || name == "norm") return fnNormalize(args);
         if (name == "midpoint")  return fnMidpoint(args);
         if (name == "angle")     return fnAngle(args);
+        if (name == "dihedral")  return fnDihedral(args);
         // Scalar math builtins (#64). Single-arg primitives take a
         // scalar and return a scalar; two-arg primitives same. Vec3
         // input is rejected — `length(v)` already exists for vector
@@ -399,6 +445,19 @@ private:
         if (c < -1.0) c = -1.0;
         Register r; r.kind = Register::Kind::Scalar;
         r.scalar = std::acos(c) * kRadToDeg;
+        return r;
+    }
+
+    Register fnDihedral(const std::vector<Register>& a) {
+        if (a.size() != 4) { fail("dihedral(p1,p2,p3,p4): need 4 points"); return {}; }
+        for (const auto& p : a)
+            if (p.kind != Register::Kind::Vec3) { fail("dihedral(): all args must be vec3"); return {}; }
+        Register r; r.kind = Register::Kind::Scalar;
+        r.scalar = geom::dihedralDeg(
+            a[0].vec[0], a[0].vec[1], a[0].vec[2],
+            a[1].vec[0], a[1].vec[1], a[1].vec[2],
+            a[2].vec[0], a[2].vec[1], a[2].vec[2],
+            a[3].vec[0], a[3].vec[1], a[3].vec[2]);
         return r;
     }
 

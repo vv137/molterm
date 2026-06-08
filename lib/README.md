@@ -2,10 +2,10 @@
 
 Reusable `.mt` scripts that compute named structural metrics, intended for
 `:run @lib/<name>` from figure scripts. Each recipe is a 10-30 line
-composition of the v0.31+ primitives (`:let` + `pos()` + `pca()` +
-`dot()`/`angle()`/`length()`/`midpoint()` + `min`/`max`/…), so the
-formula itself *is* the documentation — fork the script for variants,
-no rebuild required.
+composition of the register primitives (`:let` + `pos()` + `pca()` +
+`helix_axis()` + `superpose_axis()` + `dot()`/`angle()`/`dihedral()`/
+`length()`/`midpoint()` + `min`/`max`/…), so the formula itself *is* the
+documentation — fork the script for variants, no rebuild required.
 
 ## Lookup chain
 
@@ -137,14 +137,17 @@ expected for 1ATP.
 
 ### `helix_kink.mt` — α-/TM-helix kink or bend angle
 
-Splits one helix into two consecutive sub-segments, fits a principal
-axis (PCA) to each, and reports the angle between them — proline kinks,
-TM-helix hinges, GPCR helix bends. A straight helix reads small.
+Splits one helix into two consecutive sub-segments, fits a helix axis to
+each with `helix_axis()`, and reports the angle between them — proline
+kinks, TM-helix hinges, GPCR helix bends. A straight helix reads small.
 
-> **Segment length matters.** PCA only recovers the helix axis when each
-> half is clearly elongated along it — use ≥ ~1.5 turns (~8–10 residues)
-> per half. Sub-2-turn halves give a noisy axis (e.g. 7-residue halves of
-> a hemoglobin helix scatter to ~25°). Leave a 1–2 residue gap at the kink.
+> **Why `helix_axis()`, not `pca()`.** `helix_axis()` fits the *helical*
+> axis from consecutive-chord cross products, so it holds down to ~1 turn
+> (~5–6 residues) per half — where a PCA long axis is still dominated by
+> the short cloud's roundness. On a straight helix split into 7-residue
+> halves, PCA scatters to ~22° while `helix_axis()` holds ~11°. The axis
+> is oriented N→C, so no sign fix is needed. Leave a 1–2 residue gap at
+> the kink so the bend isn't averaged into either fit.
 
 | Var | Meaning | Example (2oar) |
 | --- | --- | --- |
@@ -160,36 +163,37 @@ TM-helix hinges, GPCR helix bends. A straight helix reads small.
 :load 2oar.cif
 :setenv HELIX_CHAIN A ; :setenv SEG1 16-28 ; :setenv SEG2 31-43
 :run @lib/helix_kink
-:registers     # → kink ≈ 12.2°  (straight TM helix)
+:registers     # → kink ≈ 13.2°  (mild bend of a straight TM helix)
 ```
 
-### `dna_bend.mt` — global bend angle of a duplex
+### `dna_bend.mt` — bend angle between two helical segments of a duplex
 
-Fits a helical axis to the 5′ and 3′ halves of one strand (PCA over the
-phosphate backbone) and reports the angle between them. Straight B-DNA
-≈ 0–15°; CAP/TBP/IHF kink their sites by 50–90°; the nucleosome wraps
-~147 bp through a continuous bend.
+Fits a helix axis to two segments of one strand's phosphate backbone with
+`helix_axis()` and reports the angle between them — the standard DNA-bend
+definition (angle between flanking helical axes). Straight B-DNA ≈ 0–15°;
+CAP/TBP/IHF kink their sites by 50–90°.
 
-> **Each half needs ≥ ~1.5 turns (~12–15 nt).** On a short oligo (a 12-mer
-> split 6/6) each half-cloud is rounder than it is long and the per-half
-> axis — hence the bend — is unreliable. For sub-turn precision use a
-> dedicated base-pair-step axis fit.
+> **`helix_axis()` tracks bends PCA misses.** On CAP–DNA strand C split
+> 16-24/25-33, a PCA long axis reads ~21° where `helix_axis()` reads ~57°
+> for the same protein-induced bend. Each segment needs ≥ ~1 turn
+> (~10–11 nt). A continuously wound duplex (nucleosomal DNA) is *not* a
+> two-segment bend — there is no single angle; measure local windows.
 
-| Var | Meaning | Example (1kx5) |
+| Var | Meaning | Example (1cgp) |
 | --- | --- | --- |
-| `DNA_CHAIN` | strand chain id        | `I`        |
-| `HALF1`     | 5′ half residue range  | `-73--1`   |
-| `HALF2`     | 3′ half residue range  | `1-73`     |
+| `DNA_CHAIN` | strand chain id            | `C`     |
+| `HALF1`     | first segment residue range  | `16-24` |
+| `HALF2`     | second segment residue range | `25-33` |
 
-**Output register:** `$bend` (global bend in degrees; 0 = straight).
+**Output register:** `$bend` (bend angle in degrees; 0 = straight).
 
-**Validated — 1kx5 (nucleosome core), two 73-bp arms of strand I:**
+**Validated — 1cgp (CAP–DNA), a strong protein-induced bend:**
 
 ```text
-:load 1kx5.cif
-:setenv DNA_CHAIN I ; :setenv HALF1 -73--1 ; :setenv HALF2 1-73
+:fetch 1cgp
+:setenv DNA_CHAIN C ; :setenv HALF1 16-24 ; :setenv HALF2 25-33
 :run @lib/dna_bend
-:registers     # → bend ≈ 28.9°  (continuous superhelical wrap)
+:registers     # → bend ≈ 56.5°  (CAP kink; full-site bend is ~80°)
 ```
 
 ### `ab_elbow.mt` — antibody Fab elbow angle
@@ -226,6 +230,58 @@ elbow angle spans ~120°–225° (180° = straight); κ Fabs cluster high,
 :setenv VL 1-107 ; :setenv CL 108-204 ; :setenv VH 1-113 ; :setenv CH1 114-217
 :run @lib/ab_elbow
 :registers     # → bend ≈ 37.9°,  elbow ≈ 142.1°  (within the Fab range)
+```
+
+### `domain_hinge.mt` — rigid-body rotation between two copies/states
+
+Finds the screw axis of the optimal superposition of one selection onto
+another with `superpose_axis()` and reports the rotation angle — the
+magnitude of a domain motion (open↔closed, across two loaded objects) or
+the rotation of a non-crystallographic / molecular symmetry operator. The
+two selections must have **equal atom counts in correspondence** (i-th ↔
+i-th): same residue range + atom name on identical/homologous chains.
+Cross-object form `obj1/<sel> vs obj2/<sel>` compares two structures.
+
+| Var | Meaning | Example (4hhb) |
+| --- | --- | --- |
+| `SEL_A` | first selection  | `chain A and name CA` |
+| `SEL_B` | second selection | `chain C and name CA` |
+
+**Output registers:** `$hinge_angle` (rotation in degrees), `$hinge_axis`
+(vec3 screw axis), `$hinge_center` (vec3 anchor).
+
+**Validated — 4hhb α1 (A) vs α2 (C), related by the molecular 2-fold:**
+
+```text
+:load 4hhb.cif
+:setenv SEL_A chain A and name CA
+:setenv SEL_B chain C and name CA
+:run @lib/domain_hinge
+:registers     # → hinge_angle ≈ 179.9°  (the C2 dyad)
+```
+
+### `phi_psi.mt` — backbone φ/ψ torsions of one residue
+
+Ramachandran φ/ψ of a residue via `dihedral()` (negated to IUPAC sign).
+Pass the flanking residues i-1 / i / i+1 explicitly — string env vars
+can't do arithmetic.
+
+| Var | Meaning | Example (1ubq) |
+| --- | --- | --- |
+| `CH`   | chain id                      | `A`  |
+| `PREV` | previous residue number (i-1) | `24` |
+| `RES`  | residue number (i)            | `25` |
+| `NEXT` | next residue number (i+1)     | `26` |
+
+**Output registers:** `$phi`, `$psi` (degrees, [-180, 180]).
+
+**Validated — 1ubq residue 25 (mid-helix):**
+
+```text
+:load 1ubq.cif
+:setenv CH A ; :setenv PREV 24 ; :setenv RES 25 ; :setenv NEXT 26
+:run @lib/phi_psi
+:registers     # → phi ≈ -65.5°,  psi ≈ -44.4°  (α-helical)
 ```
 
 ## Contributing
