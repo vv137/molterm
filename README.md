@@ -30,14 +30,6 @@ MolTerm renders 3D molecular structures directly in the terminal. It targets str
       Right: native pixel protocol (Sixel / Kitty / iTerm2) — toggled with one keypress (<code>m</code>).</em>
 </p>
 
-### Animation showcase
-
-<p align="center">
-  <img src="assets/orient_spin.gif" alt="1crn rotating via :orient view" width="520">
-  <br>
-  <em>Every frame is a separate <code>:orient view</code> call — no rotate command, just a sweep of the view vector through the PCA frame.</em>
-</p>
-
 ### Representation gallery
 
 Each protein-rendering mode on `1ubq` (76-residue ubiquitin), 800×800 @
@@ -155,10 +147,6 @@ default to the live viewport (small under no-TTY) and are clamped to
 <vx> <vy> <vz>` then chooses *which direction in that PCA frame the
 camera looks from*. Default is `0 0 1`: down the shortest axis, so the
 flattest face of the molecule fills the screen.
-
-<p align="center">
-  <img src="assets/orient_views.png" alt="Four :orient view directions on 1crn" width="640">
-</p>
 
 The vectors are interpreted in the PCA basis, so the same view spec
 gives a comparable framing across structures of different sizes and
