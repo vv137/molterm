@@ -37,6 +37,10 @@ ParsedCommand CommandParser::parse(const std::string& input) {
         rest.clear();
     }
 
+    // Preserve the raw tail before tokenizing it away, so expression commands
+    // can recover their original (comma/space-significant) argument string.
+    cmd.rawArgs = rest;
+
     if (!rest.empty()) {
         // Split by whitespace/comma, but respect quotes for paths with spaces
         // :load "my file.cif"  → ["my file.cif"]

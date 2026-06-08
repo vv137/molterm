@@ -7,6 +7,7 @@ set(MOLTERM_UNIT_TESTS
     test_geometry
     test_selection
     test_constraint
+    test_register_expr
 )
 foreach(t ${MOLTERM_UNIT_TESTS})
     add_executable(${t} ${t}.cpp)

@@ -452,8 +452,9 @@ void stripScriptComment(std::string& s) {
 // returned context's lambdas stay valid after this function returns.
 // Shared selection→coordinate resolver for the expression context. When
 // `masses` is non-null it is also filled with per-atom atomic weights (for
-// com()); centroid()/pca() pass null. The comma→space pass undoes the :let
-// RHS rejoin so the selection grammar (space-separated) parses.
+// com()); centroid()/pca() pass null. Commas are treated as list separators
+// (the selection grammar is space-separated and never uses commas), so
+// `pca(resi 1,2,3)` is accepted as a convenience alongside `pca(resi 1 2 3)`.
 static int collectSelXYZ(Application& app, const std::string& expr,
                          std::vector<float>* xs, std::vector<float>* ys,
                          std::vector<float>* zs, std::vector<float>* masses) {
@@ -847,6 +848,16 @@ bool isValidEnvName(const std::string& s) {
             return false;
     }
     return true;
+}
+
+// A bare binding name for `:let <name> =` / `:select <name> =`: starts with a
+// letter or underscore and holds no whitespace. Looser than isValidEnvName()
+// (the rest of the character set is unconstrained), matching the historical
+// `:let` rule that only ever checked the first character + token-ness.
+bool isBareName(const std::string& s) {
+    return !s.empty() &&
+           (std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_') &&
+           s.find_first_of(" \t") == std::string::npos;
 }
 
 // Join args[lo..hi) with single-space separators.
@@ -6536,45 +6547,22 @@ void Application::registerCommands() {
     // Field access on registers: `$g.axis1`, `$g.center`, `$v.length`,
     // etc. — see Register::getVec/getScalar.
     cmdRegistry_.registerCmd("let", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        // Find `=` separator. Name is the single token before; RHS is
-        // everything after, rejoined with spaces (the command parser
-        // already split on whitespace AND commas, so `[1, 0, 0]` arrives
-        // as `[1` `0` `0]` — we re-emit commas between adjacent tokens
-        // so the expression lexer sees a clean stream).
-        int eqIdx = -1;
-        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
-            if (cmd.args[i] == "=") { eqIdx = i; break; }
-        }
-        if (eqIdx != 1) {
+        // Split the raw argument tail on the first `=` (the expression grammar
+        // has no `=` operator, so the first one is always the name/RHS
+        // separator). Reading rawArgs preserves the original, comma/space-
+        // significant RHS — `[1, 2, 3]` and `pca(chain A and resi 5)` reach the
+        // evaluator verbatim, with no tokenize-then-rejoin guesswork and no
+        // need for the builtins to undo a comma injection.
+        auto eq = cmd.rawArgs.find('=');
+        if (eq == std::string::npos)
             return {false, "Usage: :let <name> = <expr>"};
-        }
-        const std::string& name = cmd.args[0];
-        if (name.empty() || !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_')) {
-            return {false, "Register name must start with letter or underscore"};
-        }
-        // Rejoin RHS. The command parser already split on whitespace AND
-        // commas, so we re-emit commas between adjacent bare tokens (so
-        // `[1 2 3]` becomes `[1,2,3]` and `angle(v d)` becomes `angle(v,d)`
-        // for the expression lexer). Free-text inside pca(...)/pos(...)
-        // would over-comma here, but the builtin handlers normalize
-        // commas back to spaces before resolving the selection / atom-spec.
-        std::string rhs;
-        for (int i = eqIdx + 1; i < static_cast<int>(cmd.args.size()); ++i) {
-            const std::string& t = cmd.args[i];
-            if (!rhs.empty()) {
-                char last = rhs.back();
-                char first = t.empty() ? ' ' : t[0];
-                bool lastIsOp   = (last  == '+' || last  == '-' || last  == '*' ||
-                                   last  == '/' || last  == '(' || last  == '[' ||
-                                   last  == ',' || last  == '.');
-                bool firstIsOp  = (first == '+' || first == '-' || first == '*' ||
-                                   first == '/' || first == ')' || first == ']' ||
-                                   first == ',' || first == '.');
-                if (!lastIsOp && !firstIsOp) rhs += ',';
-                else                          rhs += ' ';
-            }
-            rhs += t;
-        }
+        std::string name = cmd.rawArgs.substr(0, eq);
+        std::string rhs  = cmd.rawArgs.substr(eq + 1);
+        trimWhitespace(name);
+        trimWhitespace(rhs);
+        if (!isBareName(name))
+            return {false, "Register name must start with a letter or underscore "
+                           "and contain no spaces"};
 
         RegisterExpr::Context ctx = makeExprContext(app);
 
@@ -6694,30 +6682,23 @@ void Application::registerCommands() {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
 
-        // Check for named selection: "name = expr"
-        // Find "=" in args
-        int eqIdx = -1;
-        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i) {
-            if (cmd.args[i] == "=") { eqIdx = i; break; }
-        }
-
+        // Named form "name = expr" only when the text before the first '=' is
+        // a single bare identifier; otherwise any '=' belongs to the
+        // expression. Read rawArgs so the selection keeps its exact spacing and
+        // commas (e.g. `resi 1,2,3`) instead of being space-rejoined from
+        // tokens.
         std::string name;
-        std::string expr;
-
-        if (eqIdx == 1) {
-            // "select name = expr..."
-            name = cmd.args[0];
-            for (int i = eqIdx + 1; i < static_cast<int>(cmd.args.size()); ++i) {
-                if (!expr.empty()) expr += " ";
-                expr += cmd.args[i];
-            }
-        } else {
-            // "select expr..."
-            for (size_t i = 0; i < cmd.args.size(); ++i) {
-                if (i > 0) expr += " ";
-                expr += cmd.args[i];
+        std::string expr = cmd.rawArgs;
+        auto eq = cmd.rawArgs.find('=');
+        if (eq != std::string::npos) {
+            std::string before = cmd.rawArgs.substr(0, eq);
+            trimWhitespace(before);
+            if (isBareName(before)) {
+                name = before;
+                expr = cmd.rawArgs.substr(eq + 1);
             }
         }
+        trimWhitespace(expr);
 
         if (expr.empty()) return {false, "Empty expression"};
 
