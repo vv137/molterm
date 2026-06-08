@@ -20,6 +20,10 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(gemmi)
+# NOTE: gemmi unconditionally registers a `cpptest` CTest case bound to an
+# EXCLUDE_FROM_ALL executable (never built). It can't be unregistered from this
+# (parent) scope in CMake 3.16, so molterm's own tests carry a `molterm` label
+# and CI/`ctest` select them with `-L molterm` (see tests/CMakeLists.txt).
 
 # toml++ — TOML config parser (header-only)
 FetchContent_Declare(
@@ -63,8 +67,10 @@ endif()
 
 # ── Sources ──────────────────────────────────────────────────────────────────
 
-set(MOLTERM_SOURCES
-    src/main.cpp
+# Everything except the entry point lives in the molterm_core library so the
+# test suite (tests/CMakeLists.txt) can link the same objects the app uses
+# instead of re-compiling individual translation units by hand.
+set(MOLTERM_CORE_SOURCES
     # Core
     src/core/Geometry.cpp
     src/core/MolObject.cpp
@@ -153,33 +159,6 @@ add_custom_command(
 )
 add_custom_target(generate_font DEPENDS "${FONT_HEADER}")
 
-# ── Target ───────────────────────────────────────────────────────────────────
-
-add_executable(molterm ${MOLTERM_SOURCES})
-add_dependencies(molterm generate_font)
-
-target_include_directories(molterm PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-    ${CMAKE_CURRENT_BINARY_DIR}/generated
-    $<$<NOT:$<BOOL:${NCURSESW_FOUND}>>:${CURSES_INCLUDE_DIR}>
-)
-
-find_package(ZLIB REQUIRED)
-find_package(Threads REQUIRED)
-
-target_link_libraries(molterm PRIVATE
-    gemmi::gemmi_cpp
-    tomlplusplus::tomlplusplus
-    ZLIB::ZLIB
-    Threads::Threads
-    $<IF:$<BOOL:${NCURSESW_FOUND}>,PkgConfig::NCURSESW,${CURSES_LIBRARIES}>
-)
-
-target_compile_options(molterm PRIVATE
-    -Wall -Wextra -Wpedantic
-)
-
 # Get version string: use git tag if on one, otherwise dev+hash
 execute_process(
     COMMAND git describe --tags --exact-match
@@ -204,15 +183,52 @@ else()
     set(MOLTERM_VERSION_STRING "dev")
 endif()
 
-target_compile_definitions(molterm PRIVATE
+find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
+
+# ── Core library ─────────────────────────────────────────────────────────────
+# All app/interpreter logic, minus the entry point. The executable and the
+# test suite both link this, so tests exercise the exact objects that ship.
+
+add_library(molterm_core STATIC ${MOLTERM_CORE_SOURCES})
+add_dependencies(molterm_core generate_font USalign)
+
+# PUBLIC so consumers (molterm, tests) inherit the include paths, link deps,
+# and compile definitions transitively.
+target_include_directories(molterm_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
+    $<$<NOT:$<BOOL:${NCURSESW_FOUND}>>:${CURSES_INCLUDE_DIR}>
+)
+target_link_libraries(molterm_core PUBLIC
+    gemmi::gemmi_cpp
+    tomlplusplus::tomlplusplus
+    ZLIB::ZLIB
+    Threads::Threads
+    $<IF:$<BOOL:${NCURSESW_FOUND}>,PkgConfig::NCURSESW,${CURSES_LIBRARIES}>
+)
+target_compile_definitions(molterm_core PUBLIC
     USALIGN_PATH="${CMAKE_BINARY_DIR}/USalign"
     NCURSES_WIDECHAR=1
     MOLTERM_VERSION="${MOLTERM_VERSION_STRING}"
     MOLTERM_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
+target_compile_options(molterm_core PRIVATE -Wall -Wextra -Wpedantic)
 
-# molterm depends on USalign binary being built
-add_dependencies(molterm USalign)
+# ── Executable ───────────────────────────────────────────────────────────────
+
+add_executable(molterm src/main.cpp)
+target_link_libraries(molterm PRIVATE molterm_core)
+target_compile_options(molterm PRIVATE -Wall -Wextra -Wpedantic)
+
+# ── Tests (CTest) ────────────────────────────────────────────────────────────
+
+option(MOLTERM_BUILD_TESTS "Build the unit test suite" ON)
+if(MOLTERM_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # ── Install ──────────────────────────────────────────────────────────────────
 

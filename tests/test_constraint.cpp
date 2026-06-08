@@ -1,6 +1,5 @@
 // tests/test_constraint.cpp — Constraint layout solver unit tests
-// Build: g++ -std=c++17 -I include tests/test_constraint.cpp -o test_constraint
-// Run:   ./test_constraint
+// Build & run via CTest:  ctest --test-dir build -L molterm -R test_constraint
 
 #include <cassert>
 #include <iostream>

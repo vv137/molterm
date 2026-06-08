@@ -1,6 +1,5 @@
 // tests/test_selection.cpp — Selection parser unit tests
-// Build:  g++ -std=c++17 -I include tests/test_selection.cpp src/core/Selection.cpp src/core/MolObject.cpp -o test_selection
-// Run:    ./test_selection
+// Build & run via CTest:  ctest --test-dir build -L molterm -R test_selection
 
 #include <cassert>
 #include <iostream>

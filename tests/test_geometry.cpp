@@ -2,10 +2,8 @@
 // added with the helix_axis() / superpose_axis() / dihedral() builtins
 // (issues #108/#109/#110).
 //
-// Build:  c++ -std=c++17 -O2 -I include \
-//             tests/test_geometry.cpp build/CMakeFiles/molterm.dir/src/core/Geometry.cpp.o \
-//             -o build/test_geometry
-// Run:    ./build/test_geometry
+// Build & run via CTest (links molterm_core):
+//   cmake --build build && ctest --test-dir build -L molterm -R test_geometry
 //
 // Unlike the real-structure validation in lib/README.md, this drives the
 // helpers with constructed inputs whose answers are known exactly: an ideal
