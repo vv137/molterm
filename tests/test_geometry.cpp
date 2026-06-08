@@ -98,6 +98,54 @@ int main() {
         check(s.valid && s.eigvals[0] < 0.5, "superpose_axis: identity → 0°", s.valid ? s.eigvals[0] : -1, 0.0);
     }
 
+    // ── rmsd: superposition-invariant residual (issue #115) ──
+    {
+        // Identical sets → 0.
+        std::vector<float> x = {1,0,0,1}, y = {0,2,0,1}, z = {0,0,3,2};
+        auto r = molterm::geom::rmsdOf(x, y, z, x, y, z);
+        check(r.valid && r.n == 4 && r.rmsd < 1e-5, "rmsd: identical sets → 0",
+              r.valid ? r.rmsd : -1, 0.0);
+    }
+    {
+        // A rigid rotation+translation of A must superpose back onto A with
+        // ~0 residual — RMSD ignores pose, exactly the point of the builtin.
+        std::array<double,3> k = {0.3, -0.6, 0.74};  // arbitrary unit-ish axis
+        double kl = std::sqrt(k[0]*k[0]+k[1]*k[1]+k[2]*k[2]);
+        k = {k[0]/kl, k[1]/kl, k[2]/kl};
+        double ang = 50.0 * pi / 180.0;
+        std::vector<float> ax, ay, az, bx, by, bz;
+        double pts[6][3] = {{1,0,0},{0,2,0},{0,0,3},{1,1,0},{-2,1,1},{0.5,-1,2}};
+        for (auto& p : pts) {
+            ax.push_back((float)p[0]); ay.push_back((float)p[1]); az.push_back((float)p[2]);
+            std::array<double,3> r = rotate({p[0],p[1],p[2]}, k, ang);
+            bx.push_back((float)(r[0]+5.0)); by.push_back((float)(r[1]-3.0)); bz.push_back((float)(r[2]+1.0));
+        }
+        auto r = molterm::geom::rmsdOf(ax, ay, az, bx, by, bz);
+        check(r.valid && r.rmsd < 1e-3, "rmsd: rigid-moved copy → ~0", r.valid ? r.rmsd : -1, 0.0);
+
+        // The superpose_axis().rmsd field must agree with rmsdOf().
+        PcaResult s = molterm::geom::superposeAxisOf(ax, ay, az, bx, by, bz);
+        check(s.valid && std::abs(s.rmsd - r.rmsd) < 1e-6, "rmsd: superpose_axis.rmsd matches",
+              s.valid ? s.rmsd : -1, r.rmsd);
+    }
+    {
+        // Shift one point of B by 2 Å along x: the best-fit residual is a
+        // known, bounded value (< the raw 2 Å, since fitting redistributes it).
+        std::vector<float> x = {0,1,0,0,2}, y = {0,0,1,0,0}, z = {0,0,0,1,0};
+        std::vector<float> bx = x, by = y, bz = z;
+        bx[0] += 2.0f;
+        auto r = molterm::geom::rmsdOf(x, y, z, bx, by, bz);
+        check(r.valid && r.rmsd > 0.1 && r.rmsd < 2.0, "rmsd: 2A displacement → bounded residual",
+              r.valid ? r.rmsd : -1, 0.0);
+    }
+    {
+        // Mismatched counts → invalid.
+        std::vector<float> x = {0,1}, y = {0,0}, z = {0,0};
+        std::vector<float> bx = {0}, by = {0}, bz = {0};
+        auto r = molterm::geom::rmsdOf(x, y, z, bx, by, bz);
+        check(!r.valid, "rmsd: mismatched counts → invalid", r.valid ? 1 : 0, 0.0);
+    }
+
     // ── dihedral: 0° (cis), 180° (trans), ±90° ──
     {
         using molterm::geom::dihedralDeg;

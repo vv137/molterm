@@ -22,6 +22,10 @@ struct PcaResult {
     std::array<double, 3> axis3{};
     std::array<double, 3> eigvals{};
     std::array<double, 3> center{};
+    // Residual RMSD of the optimal superposition that produced this result.
+    // Only meaningful for superposeAxisOf() (issue #115); pcaOf/helixAxisOf
+    // leave it 0. Exposed to scripts as `$reg.rmsd`.
+    double rmsd = 0.0;
     bool valid = false;  // false if input had < 2 points
 };
 
@@ -60,6 +64,27 @@ PcaResult superposeAxisOf(const std::vector<float>& ax,
                           const std::vector<float>& bx,
                           const std::vector<float>& by,
                           const std::vector<float>& bz);
+
+// Result of a non-destructive RMSD query between two ordered point sets.
+struct RmsdResult {
+    double rmsd = 0.0;
+    int n = 0;            // number of paired points used
+    bool valid = false;   // false when counts differ or are 0
+};
+
+// RMSD of the *optimal* rigid superposition mapping ordered point set A
+// onto B (equal counts; i-th of A ↔ i-th of B), computed via Horn's
+// quaternion method WITHOUT moving either set (issue #115). Shares the
+// closed-form residual λmax path with superposeAxisOf, so it is cheap and
+// reflection-free. valid=false when the counts differ or are 0; unlike the
+// screw-axis query this accepts as few as 1 point (the RMSD is still the
+// minimum achievable even when the rotation is under-determined).
+RmsdResult rmsdOf(const std::vector<float>& ax,
+                  const std::vector<float>& ay,
+                  const std::vector<float>& az,
+                  const std::vector<float>& bx,
+                  const std::vector<float>& by,
+                  const std::vector<float>& bz);
 
 
 // Signed dihedral angle in degrees, [-180, +180], for four 3D points.

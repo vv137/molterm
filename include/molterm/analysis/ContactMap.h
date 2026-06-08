@@ -29,6 +29,13 @@ constexpr std::uint8_t interactionBit(InteractionType t) {
     return static_cast<std::uint8_t>(1u << static_cast<int>(t));
 }
 
+// Distance cutoffs (Å) shared between classifyContact() and the
+// :hbonds / :saltbridge commands, so the command's search radius can't
+// drift apart from the classifier's threshold (issue #113).
+constexpr float kSaltBridgeDistCutoff  = 4.0f;
+constexpr float kHBondDistCutoff       = 3.5f;
+constexpr float kHydrophobicDistCutoff = 4.5f;
+
 // Parse one of {"all","specific","none"} or a comma-separated list of
 // type names ("hbond","salt"/"saltbridge","hydrophobic"/"hydro","other").
 // Returns the mask on success, -1 on any parse error so callers can
@@ -72,6 +79,18 @@ public:
     // Compute inter-chain contacts using closest heavy atom distance.
     // Uses spatial hash for O(N) performance. Does not destroy contact map state.
     void computeInterface(const MolObject& mol, float cutoff = 4.5f);
+
+    // Detect classified atomic interactions within `cutoff`, keeping the
+    // highest-priority closest atom pair per residue pair (issue #113 —
+    // backs the :hbonds / :saltbridge 3D annotations). When `interChainOnly`,
+    // same-chain pairs are skipped; otherwise intra-chain pairs are included
+    // but those within `minSameChainResGap` residues in sequence are dropped
+    // (trivial covalent neighbors). `scope` (atom indices, empty = all) limits
+    // which atoms participate. Hydrogens are ignored. Stateless: builds its
+    // own residue grouping and touches no cached member state.
+    static std::vector<InterfaceContact> detectInteractions(
+        const MolObject& mol, float cutoff, bool interChainOnly,
+        int minSameChainResGap, const std::vector<int>& scope);
 
     // Access
     const std::vector<ResidueInfo>& residues() const { return residues_; }

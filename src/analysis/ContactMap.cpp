@@ -100,7 +100,7 @@ bool isHydrophobicResidue(const std::string& resName) {
 
 InteractionType classifyContact(const AtomData& a, const AtomData& b,
                                 float dist) {
-    if (dist <= 4.0f) {
+    if (dist <= kSaltBridgeDistCutoff) {
         bool aPos = isPositive(a.name, a.resName);
         bool aNeg = isNegative(a.name, a.resName);
         bool bPos = isPositive(b.name, b.resName);
@@ -108,12 +108,12 @@ InteractionType classifyContact(const AtomData& a, const AtomData& b,
         if ((aPos && bNeg) || (aNeg && bPos))
             return InteractionType::SaltBridge;
     }
-    if (dist <= 3.5f) {
+    if (dist <= kHBondDistCutoff) {
         bool aHB = (a.element == "N" || a.element == "O");
         bool bHB = (b.element == "N" || b.element == "O");
         if (aHB && bHB) return InteractionType::HBond;
     }
-    if (dist <= 4.5f &&
+    if (dist <= kHydrophobicDistCutoff &&
         a.element == "C" && b.element == "C" &&
         isHydrophobicResidue(a.resName) &&
         isHydrophobicResidue(b.resName)) {
@@ -296,6 +296,73 @@ void ContactMap::computeInterface(const MolObject& mol, float cutoff) {
     for (const auto& [key, b] : bestByPair) {
         interfaceContacts_.push_back({b.atom1, b.atom2, b.dist, b.type});
     }
+}
+
+std::vector<InterfaceContact> ContactMap::detectInteractions(
+        const MolObject& mol, float cutoff, bool interChainOnly,
+        int minSameChainResGap, const std::vector<int>& scope) {
+    std::vector<InterfaceContact> out;
+    const auto& atoms = mol.atoms();
+    int nAtoms = static_cast<int>(atoms.size());
+    if (nAtoms == 0 || cutoff <= 0.0f) return out;
+
+    // Scope mask — which atoms may participate (empty scope = all atoms).
+    std::vector<char> inScope(nAtoms, scope.empty() ? 1 : 0);
+    if (!scope.empty())
+        for (int i : scope)
+            if (i >= 0 && i < nAtoms) inScope[i] = 1;
+
+    // Order-independent residue identity, used to keep one best contact per
+    // residue pair.
+    auto resKey = [](const AtomData& a) {
+        return a.chainId + "|" + std::to_string(a.resSeq) + a.insCode;
+    };
+
+    SpatialHash grid(cutoff, nAtoms);
+    for (int i = 0; i < nAtoms; ++i) {
+        if (!inScope[i] || atoms[i].element == "H") continue;
+        grid.insert(i, atoms[i].x, atoms[i].y, atoms[i].z);
+    }
+
+    struct Best { float dist; int a1, a2; InteractionType type; int prio; };
+    std::unordered_map<std::string, Best> bestByPair;
+
+    for (int i = 0; i < nAtoms; ++i) {
+        if (!inScope[i] || atoms[i].element == "H") continue;
+        const auto& ai = atoms[i];
+        grid.forEachNeighbor(ai.x, ai.y, ai.z, cutoff, [&](int j) {
+            if (j <= i) return;
+            if (!inScope[j] || atoms[j].element == "H") return;
+            const auto& aj = atoms[j];
+            bool sameChain = (ai.chainId == aj.chainId);
+            // Skip the same residue, the inter-chain-only exclusion, and
+            // trivial sequential neighbors within the same chain.
+            if (sameChain && ai.resSeq == aj.resSeq && ai.insCode == aj.insCode) return;
+            if (interChainOnly && sameChain) return;
+            if (sameChain && std::abs(ai.resSeq - aj.resSeq) < minSameChainResGap) return;
+
+            float dx = ai.x - aj.x, dy = ai.y - aj.y, dz = ai.z - aj.z;
+            float d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 > cutoff * cutoff) return;
+            float d = std::sqrt(d2);
+
+            InteractionType t = classifyContact(ai, aj, d);
+            int prio = interactionPriority(t);
+
+            std::string ka = resKey(ai), kb = resKey(aj);
+            std::string key = (ka < kb) ? ka + "~" + kb : kb + "~" + ka;
+            auto it = bestByPair.find(key);
+            if (it == bestByPair.end() || prio > it->second.prio ||
+                (prio == it->second.prio && d < it->second.dist)) {
+                bestByPair[key] = {d, i, j, t, prio};
+            }
+        });
+    }
+
+    out.reserve(bestByPair.size());
+    for (const auto& [key, b] : bestByPair)
+        out.push_back({b.a1, b.a2, b.dist, b.type});
+    return out;
 }
 
 float ContactMap::distance(int ri, int rj) const {

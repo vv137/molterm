@@ -2,10 +2,11 @@
 
 Reusable `.mt` scripts that compute named structural metrics, intended for
 `:run @lib/<name>` from figure scripts. Each recipe is a 10-30 line
-composition of the register primitives (`:let` + `pos()` + `pca()` +
-`helix_axis()` + `superpose_axis()` + `dot()`/`angle()`/`dihedral()`/
-`length()`/`midpoint()` + `min`/`max`/…), so the formula itself *is* the
-documentation — fork the script for variants, no rebuild required.
+composition of the register primitives (`:let` + `pos()` + `centroid()`/`com()`
++ `pca()` + `helix_axis()` + `superpose_axis()` + `rmsd()` +
+`dot()`/`angle()`/`dihedral()`/`length()`/`distance()`/`midpoint()` +
+`min`/`max`/…), so the formula itself *is* the documentation — fork the script
+for variants, no rebuild required.
 
 ## Lookup chain
 
@@ -248,7 +249,10 @@ Cross-object form `obj1/<sel> vs obj2/<sel>` compares two structures.
 | `SEL_B` | second selection | `chain C and name CA` |
 
 **Output registers:** `$hinge_angle` (rotation in degrees), `$hinge_axis`
-(vec3 screw axis), `$hinge_center` (vec3 anchor).
+(vec3 screw axis), `$hinge_center` (vec3 anchor), `$hinge_rmsd` (post-fit
+RMSD in Å — how rigid the two copies really are: ≈ 0 means a true rigid body
+rotating about the hinge, large means the "domain" also deformed and the
+single-axis model is only approximate).
 
 **Validated — 4hhb α1 (A) vs α2 (C), related by the molecular 2-fold:**
 

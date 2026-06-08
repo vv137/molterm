@@ -162,13 +162,28 @@ PcaResult helixAxisOf(const std::vector<float>& xs,
     return out;
 }
 
-PcaResult superposeAxisOf(const std::vector<float>& ax, const std::vector<float>& ay,
-                          const std::vector<float>& az, const std::vector<float>& bx,
-                          const std::vector<float>& by, const std::vector<float>& bz) {
-    PcaResult out;
+namespace {
+// Shared Horn (1987) quaternion superposition core, used by both
+// superposeAxisOf (screw axis) and rmsdOf (residual). Computes the optimal
+// rotation quaternion mapping A onto B plus the closed-form residual terms,
+// without moving either set.
+struct HornFit {
+    bool valid = false;
+    size_t n = 0;
+    double q[4] = {1, 0, 0, 0};       // optimal rotation quaternion (scalar-first)
+    double lambdaMax = 0.0;           // largest eigenvalue of the key matrix
+    double Ga = 0.0, Gb = 0.0;        // Σ|a−ā|², Σ|b−b̄|²
+    std::array<double, 3> ca{}, cb{}; // centroids of A, B
+};
+
+HornFit hornFit(const std::vector<float>& ax, const std::vector<float>& ay,
+                const std::vector<float>& az, const std::vector<float>& bx,
+                const std::vector<float>& by, const std::vector<float>& bz) {
+    HornFit fit;
     const size_t n = std::min({ax.size(), ay.size(), az.size(),
                                bx.size(), by.size(), bz.size()});
-    if (n < 3) return out;
+    if (n < 1) return fit;
+    fit.n = n;
 
     double acx=0, acy=0, acz=0, bcx=0, bcy=0, bcz=0;
     for (size_t i = 0; i < n; ++i) {
@@ -176,19 +191,27 @@ PcaResult superposeAxisOf(const std::vector<float>& ax, const std::vector<float>
         bcx += bx[i]; bcy += by[i]; bcz += bz[i];
     }
     acx/=n; acy/=n; acz/=n; bcx/=n; bcy/=n; bcz/=n;
+    fit.ca = {acx, acy, acz};
+    fit.cb = {bcx, bcy, bcz};
 
-    // Cross-covariance S = Σ (a−ā)(b−b̄)ᵀ.
+    // Cross-covariance S = Σ (a−ā)(b−b̄)ᵀ, plus the centered Gram sums Ga/Gb
+    // that the RMSD residual needs.
     double Sxx=0,Sxy=0,Sxz=0, Syx=0,Syy=0,Syz=0, Szx=0,Szy=0,Szz=0;
+    double Ga=0, Gb=0;
     for (size_t i = 0; i < n; ++i) {
         double axk=ax[i]-acx, ayk=ay[i]-acy, azk=az[i]-acz;
         double bxk=bx[i]-bcx, byk=by[i]-bcy, bzk=bz[i]-bcz;
         Sxx+=axk*bxk; Sxy+=axk*byk; Sxz+=axk*bzk;
         Syx+=ayk*bxk; Syy+=ayk*byk; Syz+=ayk*bzk;
         Szx+=azk*bxk; Szy+=azk*byk; Szz+=azk*bzk;
+        Ga += axk*axk + ayk*ayk + azk*azk;
+        Gb += bxk*bxk + byk*byk + bzk*bzk;
     }
+    fit.Ga = Ga; fit.Gb = Gb;
 
     // Horn's symmetric 4×4 key matrix N; its top eigenvector is the
-    // optimal rotation quaternion (scalar-first) mapping A onto B.
+    // optimal rotation quaternion (scalar-first) mapping A onto B and its
+    // top eigenvalue λmax gives the closed-form residual.
     double N[4][4];
     N[0][0]=Sxx+Syy+Szz; N[0][1]=Syz-Szy;     N[0][2]=Szx-Sxz;     N[0][3]=Sxy-Syx;
     N[1][1]=Sxx-Syy-Szz; N[1][2]=Sxy+Syx;     N[1][3]=Szx+Sxz;
@@ -220,8 +243,38 @@ PcaResult superposeAxisOf(const std::vector<float>& ax, const std::vector<float>
         for (int i = 0; i < 4; ++i) q[i] = y[i];
         if (maxd < 1e-12) break;
     }
+    for (int i = 0; i < 4; ++i) fit.q[i] = q[i];
 
-    out.center = {0.5*(acx+bcx), 0.5*(acy+bcy), 0.5*(acz+bcz)};
+    // λmax of the *unshifted* key matrix: with the unit eigenvector q,
+    // qᵀ(N+shift·I)q = qᵀNq + shift, so subtract the shift back out.
+    double Nq[4] = {0,0,0,0};
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) Nq[i] += N[i][j]*q[j];
+    fit.lambdaMax = (q[0]*Nq[0] + q[1]*Nq[1] + q[2]*Nq[2] + q[3]*Nq[3]) - shift;
+
+    fit.valid = true;
+    return fit;
+}
+
+// Residual RMSD from a HornFit: RMSD² = (Ga + Gb − 2·λmax) / n, clamped at 0
+// to swallow floating-point noise when the two sets superpose exactly.
+double rmsdFromFit(const HornFit& f) {
+    double e = (f.Ga + f.Gb - 2.0 * f.lambdaMax) / static_cast<double>(f.n);
+    return std::sqrt(std::max(0.0, e));
+}
+}  // namespace
+
+PcaResult superposeAxisOf(const std::vector<float>& ax, const std::vector<float>& ay,
+                          const std::vector<float>& az, const std::vector<float>& bx,
+                          const std::vector<float>& by, const std::vector<float>& bz) {
+    PcaResult out;
+    HornFit fit = hornFit(ax, ay, az, bx, by, bz);
+    if (!fit.valid || fit.n < 3) return out;
+
+    out.center = {0.5*(fit.ca[0]+fit.cb[0]),
+                  0.5*(fit.ca[1]+fit.cb[1]),
+                  0.5*(fit.ca[2]+fit.cb[2])};
+    const double* q = fit.q;
     double vlen = std::sqrt(q[1]*q[1]+q[2]*q[2]+q[3]*q[3]);
     if (vlen < 1e-9) {
         // Pure-identity rotation: axis undefined, angle ≈ 0.
@@ -232,7 +285,21 @@ PcaResult superposeAxisOf(const std::vector<float>& ax, const std::vector<float>
         double w = std::abs(q[0]); if (w > 1.0) w = 1.0;
         out.eigvals = {2.0 * std::acos(w) * (180.0 / 3.14159265358979323846), 0, 0};
     }
+    out.rmsd = rmsdFromFit(fit);
     completeFrame(out);
+    out.valid = true;
+    return out;
+}
+
+RmsdResult rmsdOf(const std::vector<float>& ax, const std::vector<float>& ay,
+                  const std::vector<float>& az, const std::vector<float>& bx,
+                  const std::vector<float>& by, const std::vector<float>& bz) {
+    RmsdResult out;
+    if (ax.size() != bx.size()) return out;   // counts must correspond 1:1
+    HornFit fit = hornFit(ax, ay, az, bx, by, bz);
+    if (!fit.valid) return out;
+    out.rmsd = rmsdFromFit(fit);
+    out.n = static_cast<int>(fit.n);
     out.valid = true;
     return out;
 }

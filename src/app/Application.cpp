@@ -40,6 +40,7 @@
 #include <set>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -962,6 +963,25 @@ static bool bondExists(const std::vector<BondData>& bonds, int a, int b) {
         if ((bd.atom1 == a && bd.atom2 == b) || (bd.atom1 == b && bd.atom2 == a))
             return true;
     return false;
+}
+
+// Standard atomic weight (g/mol) by element symbol, for com() mass-weighting
+// (issue #112). Covers the elements common in biomolecules and frequent
+// ions/heteroatoms; anything unrecognized falls back to carbon's 12.011 so a
+// stray element never zeroes out the weighted sum.
+static float atomicMass(const std::string& element) {
+    static const std::unordered_map<std::string, float> kMass = {
+        {"H", 1.008f},   {"C", 12.011f},  {"N", 14.007f},  {"O", 15.999f},
+        {"P", 30.974f},  {"S", 32.06f},   {"SE", 78.971f}, {"F", 18.998f},
+        {"CL", 35.45f},  {"BR", 79.904f}, {"I", 126.90f},  {"NA", 22.990f},
+        {"MG", 24.305f}, {"K", 39.098f},  {"CA", 40.078f}, {"MN", 54.938f},
+        {"FE", 55.845f}, {"CO", 58.933f}, {"NI", 58.693f}, {"CU", 63.546f},
+        {"ZN", 65.38f},
+    };
+    std::string up = element;
+    for (auto& c : up) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    auto it = kMass.find(up);
+    return (it != kMass.end()) ? it->second : 12.011f;
 }
 
 // Resolve the two endpoints for :bond / :unbond: empty args fall back to the
@@ -6560,6 +6580,28 @@ void Application::registerCommands() {
             }
             return static_cast<int>(xs->size());
         };
+        ctx.collectSelectionXYZMass = [&app](const std::string& expr,
+                                             std::vector<float>* xs,
+                                             std::vector<float>* ys,
+                                             std::vector<float>* zs,
+                                             std::vector<float>* masses) -> int {
+            // Same resolution as collectSelectionXYZ, plus a per-atom atomic
+            // weight (by element) for com(). centroid() ignores the masses.
+            auto obj = app.tabs().currentTab().currentObject();
+            if (!obj) return 0;
+            std::string normalized = expr;
+            for (char& c : normalized) if (c == ',') c = ' ';
+            auto sel = app.parseSelection(normalized, *obj);
+            const auto& atoms = obj->atoms();
+            for (int i : sel.indices()) {
+                if (i < 0 || i >= (int)atoms.size()) continue;
+                xs->push_back(atoms[i].x);
+                ys->push_back(atoms[i].y);
+                zs->push_back(atoms[i].z);
+                masses->push_back(atomicMass(atoms[i].element));
+            }
+            return static_cast<int>(xs->size());
+        };
 
         auto r = RegisterExpr::eval(rhs, ctx);
         if (!r.ok) return {false, ":let " + name + ": " + r.error};
@@ -6568,10 +6610,12 @@ void Application::registerCommands() {
     }, ":let <name> = <expr>",
        "Bind a typed register (scalar, vec3, or pca-result) for reuse later. "
        "Expression supports +,-,*,/, vec3 literals [x,y,z], $reg.field access, "
-       "and builtins pos()/pca()/helix_axis()/superpose_axis()/dot()/cross()/"
-       "length()/normalize()/midpoint()/angle()/dihedral().",
+       "and builtins pos()/centroid()/com()/pca()/helix_axis()/superpose_axis()/"
+       "rmsd()/dot()/cross()/distance()/length()/normalize()/midpoint()/angle()/"
+       "dihedral().",
        {":let v_axis = pos(A:43:CA) - pos(B:23:CA)",
         ":let G = pca(chain A and helix)",
+        ":let d = distance(centroid(chain A), centroid(chain B))",
         ":let theta = angle($v_axis, $G.axis1)"}, "Registers");
 
     // :unlet <name> | :unlet * — drop registers.
@@ -7998,7 +8042,48 @@ void Application::registerCommands() {
 
         std::shared_ptr<MolObject> obj;
         int i1, i2;
-        if (pos.empty()) {
+        bool minMode = false;   // closest-approach between multi-atom groups
+
+        // Detect the two-parenthesized-selections form up front so multi-atom
+        // groups switch to minimum-distance mode (issue #112): the closest
+        // atom pair between the two groups. Single-atom groups behave exactly
+        // as before. Serials/picks fall through to the legacy resolver.
+        std::string joined;
+        for (size_t k = 0; k < pos.size(); ++k) { if (k) joined += ' '; joined += pos[k]; }
+        auto groups = pos.empty() ? std::vector<std::string>{}
+                                  : splitEndpointSelections(joined);
+        if (groups.size() == 2) {
+            auto oA = app.tabs().currentTab().currentObject();
+            if (!oA) return {false, "No object selected"};
+            auto oB = oA;
+            Selection selA = resolveScoped(app, groups[0], oA);
+            Selection selB = resolveScoped(app, groups[1], oB);
+            if (selA.empty()) return {false, "Empty selection: " + groups[0]};
+            if (selB.empty()) return {false, "Empty selection: " + groups[1]};
+            if (oA != oB)
+                return {false, "Both endpoints must be in the same object (got " +
+                               oA->name() + " and " + oB->name() + ")"};
+            obj = oA;
+            if (selA.size() == 1 && selB.size() == 1) {
+                i1 = selA.indices()[0]; i2 = selB.indices()[0];
+            } else {
+                // Closest atom pair between the two groups (brute force —
+                // groups are usually a residue or two).
+                const auto& atoms = obj->atoms();
+                float best = 0; bool have = false;
+                for (int a : selA.indices()) {
+                    for (int b : selB.indices()) {
+                        if (a == b) continue;
+                        float dx = atoms[a].x-atoms[b].x, dy = atoms[a].y-atoms[b].y,
+                              dz = atoms[a].z-atoms[b].z;
+                        float d2 = dx*dx + dy*dy + dz*dz;
+                        if (!have || d2 < best) { best = d2; i1 = a; i2 = b; have = true; }
+                    }
+                }
+                if (!have) return {false, "No atom pair to measure between the groups"};
+                minMode = true;
+            }
+        } else if (pos.empty()) {
             obj = app.tabs().currentTab().currentObject();
             if (!obj) return {false, "No object selected"};
             i1 = app.pickRegs_[0]; i2 = app.pickRegs_[1];
@@ -8018,20 +8103,21 @@ void Application::registerCommands() {
 
         char dbuf[16]; std::snprintf(dbuf, sizeof(dbuf), "%.2f", dist);
         std::string shortLabel = std::string(dbuf) + "A";
-        std::string msg = "Distance " + atomLabel(atoms[i1]) + " — " +
-            atomLabel(atoms[i2]) + " = " + shortLabel;
+        std::string msg = std::string(minMode ? "Min distance " : "Distance ") +
+            atomLabel(atoms[i1]) + " — " + atomLabel(atoms[i2]) + " = " + shortLabel;
         if (!caption.empty()) msg += "  \"" + caption + "\"";
         app.measurements().push_back({{i1, i2}, shortLabel, caption, obj->name()});
         MLOG_INFO("%s", msg.c_str());
         return {true, msg};
     }, ":measure [s1 s2 | pk1 pk2 | (selA) (selB)] [= \"caption\"]",
        "Measure a distance and persist a dashed line + value. Endpoints are "
-       "PDB serials, the pk1/pk2 picks, or two parenthesized selections that "
-       "each resolve to exactly one atom — the only headless way to pin an "
-       "atom by selection.",
+       "PDB serials, the pk1/pk2 picks, or two parenthesized selections. When "
+       "a selection resolves to more than one atom, :measure reports the "
+       "closest approach (minimum heavy-atom distance) between the two groups.",
        {":measure", ":measure pk1 pk2",
         ":measure 12 47 = \"Glu-OE1 ↔ Lys-Nζ\"",
-        ":measure (resi 2 and name SG) (resi 30 and name SG) = \"C28-C56 SS\""},
+        ":measure (resi 2 and name SG) (resi 30 and name SG) = \"C28-C56 SS\"",
+        ":measure (resi 72 and resn LYS) (resi 91 and resn GLU) = \"salt bridge\""},
        "Measurement");
 
     // :bond — draw an explicit bond between two atoms (issue #99). Adds a
@@ -8144,6 +8230,92 @@ void Application::registerCommands() {
        "Auto-detect cysteine SG–SG pairs (1.6–2.5 Å) and draw them as bonds. "
        "Defaults to the whole structure; pass a selection to limit scope.",
        {":disulfide", ":disulfide chain A"}, "Measurement");
+
+    // :hbonds / :saltbridge — reuse ContactMap's interaction detection to
+    // draw hydrogen bonds / salt bridges as persistent dashed contact lines
+    // (issue #113), exactly like :measure: rendered live + into screenshots
+    // and exported through `:export *.pml` as PyMOL distance objects.
+    // Disulfides aside, this is the only way to annotate a non-covalent
+    // interaction in 3D for a figure. Shared body, parameterized by type.
+    auto drawInteractions = [](Application& app, const ParsedCommand& cmd,
+                               InteractionType want, float cutoff,
+                               const char* singular) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+        const auto& atoms = obj->atoms();
+
+        std::vector<int> scope;   // empty = whole structure
+        if (!cmd.args.empty()) {
+            std::string expr;
+            for (size_t i = 0; i < cmd.args.size(); ++i) { if (i) expr += ' '; expr += cmd.args[i]; }
+            Selection sel = app.parseSelection(expr, *obj);
+            if (sel.empty()) return {false, "Empty selection: " + expr};
+            scope = sel.indices();
+        }
+
+        // Intra-chain included (gap ≥ 2 skips peptide/phosphodiester
+        // neighbors); priority dedup keeps one best contact per residue pair.
+        auto contacts = ContactMap::detectInteractions(*obj, cutoff, false, 2, scope);
+
+        auto& meas = app.measurements();
+        // Pre-index this object's existing 2-atom measurements so the dedup
+        // check is O(1) per contact, not O(measurements). Key packs the
+        // ordered atom-index pair.
+        auto pairKey = [](int a, int b) {
+            return (static_cast<long long>(std::min(a, b)) << 32) |
+                   static_cast<unsigned>(std::max(a, b));
+        };
+        std::unordered_set<long long> drawn;
+        for (const auto& m : meas)
+            if (m.obj == obj->name() && m.atoms.size() == 2)
+                drawn.insert(pairKey(m.atoms[0], m.atoms[1]));
+
+        int added = 0, dup = 0;
+        std::string detail;
+        for (const auto& c : contacts) {
+            if (c.type != want) continue;
+            if (!drawn.insert(pairKey(c.atom1, c.atom2)).second) { ++dup; continue; }
+            char dbuf[16]; std::snprintf(dbuf, sizeof(dbuf), "%.2f", c.distance);
+            meas.push_back({{c.atom1, c.atom2}, std::string(dbuf) + "A", "", obj->name()});
+            ++added;
+            if (added <= 8) {
+                const auto& a = atoms[c.atom1]; const auto& b = atoms[c.atom2];
+                detail += (detail.empty() ? "  " : ", ");
+                detail += a.chainId + std::to_string(a.resSeq) + "/" + a.name + "–" +
+                          b.chainId + std::to_string(b.resSeq) + "/" + b.name +
+                          " (" + dbuf + ")";
+            }
+        }
+        if (added == 0) {
+            if (dup > 0)
+                return {true, std::string("All ") + singular + "s already drawn (" +
+                              std::to_string(dup) + ")"};
+            return {false, std::string("No ") + singular + "s found in scope"};
+        }
+        std::string msg = "Drew " + std::to_string(added) + " " + singular +
+                          (added == 1 ? "" : "s") + detail;
+        if (added > 8) msg += ", …";
+        return {true, msg};
+    };
+
+    cmdRegistry_.registerCmd("hbonds",
+        [drawInteractions](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return drawInteractions(app, cmd, InteractionType::HBond, kHBondDistCutoff, "hydrogen bond");
+        }, ":hbonds [selection]",
+        "Auto-detect hydrogen bonds (N/O↔N/O ≤ 3.5 Å) and draw them as dashed "
+        "contact lines with distance labels (rendered into screenshots, "
+        "exported as PyMOL distance objects). Whole structure by default; pass "
+        "a selection to limit scope.",
+        {":hbonds", ":hbonds chain A"}, "Measurement");
+
+    cmdRegistry_.registerCmd("saltbridge",
+        [drawInteractions](Application& app, const ParsedCommand& cmd) -> ExecResult {
+            return drawInteractions(app, cmd, InteractionType::SaltBridge, kSaltBridgeDistCutoff, "salt bridge");
+        }, ":saltbridge [selection]",
+        "Auto-detect salt bridges (Asp/Glu carboxylate ↔ Lys/Arg ≤ 4.0 Å) and "
+        "draw them as dashed contact lines with distance labels. Whole "
+        "structure by default; pass a selection to limit scope.",
+        {":saltbridge", ":saltbridge chain A+B"}, "Measurement");
 
     // :arrow — solid arrow with caption (issue #38). Distinct from :measure
     // (dashed + auto distance) because the visual semantics matter: a solid
@@ -8332,6 +8504,60 @@ void Application::registerCommands() {
        "Measure a dihedral angle; endpoints are atom serials (PDB serial, "
        "not selections) or the pk1..pk4 picks.",
        {":dihedral", ":dihedral pk1 pk2 pk3 pk4 = \"χ1\""}, "Measurement");
+
+    // :rmsd selA vs selB — report the RMSD of the optimal superposition of
+    // two equal-count, in-correspondence selections WITHOUT moving anything
+    // (issue #115). Complements :align/:super, which only report RMSD as a
+    // side effect of actually superposing. Mirrors the rmsd() builtin's
+    // current-object scope; the two selections must yield the same atom count
+    // (e.g. matching residue ranges + atom name).
+    cmdRegistry_.registerCmd("rmsd", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        auto obj = app.tabs().currentTab().currentObject();
+        if (!obj) return {false, "No object selected"};
+        // Split the args on the `vs` keyword.
+        int vsIdx = -1;
+        for (int i = 0; i < static_cast<int>(cmd.args.size()); ++i)
+            if (cmd.args[i] == "vs") { vsIdx = i; break; }
+        if (vsIdx < 1 || vsIdx >= static_cast<int>(cmd.args.size()) - 1)
+            return {false, "Usage: :rmsd <selA> vs <selB>"};
+        auto join = [&](int lo, int hi) {
+            std::string s;
+            for (int i = lo; i < hi; ++i) { if (!s.empty()) s += ' '; s += cmd.args[i]; }
+            return s;
+        };
+        std::string exprA = join(0, vsIdx);
+        std::string exprB = join(vsIdx + 1, static_cast<int>(cmd.args.size()));
+        auto collect = [&](const std::string& expr,
+                           std::vector<float>& xs, std::vector<float>& ys, std::vector<float>& zs) {
+            Selection sel = app.parseSelection(expr, *obj);
+            const auto& atoms = obj->atoms();
+            for (int i : sel.indices()) {
+                if (i < 0 || i >= static_cast<int>(atoms.size())) continue;
+                xs.push_back(atoms[i].x); ys.push_back(atoms[i].y); zs.push_back(atoms[i].z);
+            }
+        };
+        std::vector<float> axs, ays, azs, bxs, bys, bzs;
+        collect(exprA, axs, ays, azs);
+        collect(exprB, bxs, bys, bzs);
+        int na = static_cast<int>(axs.size()), nb = static_cast<int>(bxs.size());
+        if (na == 0 || nb == 0)
+            return {false, "Empty selection (A=" + std::to_string(na) + ", B=" + std::to_string(nb) + ")"};
+        if (na != nb)
+            return {false, "Selections must have equal atom counts (" +
+                           std::to_string(na) + " vs " + std::to_string(nb) +
+                           ") — match residue ranges and atom names"};
+        auto rr = geom::rmsdOf(axs, ays, azs, bxs, bys, bzs);
+        if (!rr.valid) return {false, "RMSD: degenerate input"};
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "RMSD = %.3f A over %d atoms", rr.rmsd, rr.n);
+        MLOG_INFO("%s", buf);
+        return {true, buf};
+    }, ":rmsd <selA> vs <selB>",
+       "Report the RMSD (and N) of the optimal superposition of two equal-count, "
+       "in-correspondence selections — without moving anything. Current object; "
+       "the two sides must yield the same atom count.",
+       {":rmsd chain A and name CA vs chain C and name CA",
+        ":rmsd resi 1-50 and name CA vs resi 100-149 and name CA"}, "Analysis");
 
     // :contactmap [cutoff] — toggle contact map panel
     cmdRegistry_.registerCmd("contactmap", [](Application& app, const ParsedCommand& cmd) -> ExecResult {

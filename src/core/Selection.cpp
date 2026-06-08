@@ -135,6 +135,7 @@ bool Selection::isPrimaryKeyword(std::string_view word) {
         "element", "elem",
         "helix", "sheet", "loop",
         "backbone", "bb", "sidechain", "sc", "hydro",
+        "phosphate", "sugar", "base",   // nucleic substructure (#111)
         "water", "hoh", "sol",
         "het", "hetatm", "ligand",
         "protein", "nucleic", "dna", "rna", "polymer",
@@ -290,6 +291,38 @@ private:
         return {Token::Word, input_.substr(start, pos_ - start)};
     }
 };
+
+// ── Nucleic-acid substructure helpers (issue #111) ────────────────────────────
+// Partition a standard nucleotide's atoms into phosphate / sugar / base.
+// PDB names the (deoxy)ribose atoms with a prime ("O5'"); some legacy files
+// use a star ("O5*") instead, so prime-insensitive comparison covers both.
+// The bridging O5'/O3' count as phosphate (they belong to the phosphodiester
+// backbone), matching the issue's intended split and PyMOL/ChimeraX usage.
+static bool naNameMatches(const std::string& name, const char* const* set, size_t n) {
+    auto eqPrimeInsensitive = [](const std::string& a, const char* b) {
+        size_t i = 0;
+        for (; b[i] && i < a.size(); ++i) {
+            char ca = a[i], cb = b[i];
+            if (ca == '*') ca = '\'';
+            if (cb == '*') cb = '\'';
+            if (ca != cb) return false;
+        }
+        return b[i] == '\0' && i == a.size();
+    };
+    for (size_t i = 0; i < n; ++i)
+        if (eqPrimeInsensitive(name, set[i])) return true;
+    return false;
+}
+static bool isNaPhosphateAtom(const std::string& name) {
+    static const char* const kSet[] = {"P", "OP1", "OP2", "OP3",
+                                       "O1P", "O2P", "O3P", "O5'", "O3'"};
+    return naNameMatches(name, kSet, sizeof(kSet) / sizeof(kSet[0]));
+}
+static bool isNaSugarAtom(const std::string& name) {
+    static const char* const kSet[] = {"C1'", "C2'", "C3'", "C4'", "C5'",
+                                       "O4'", "O2'"};
+    return naNameMatches(name, kSet, sizeof(kSet) / sizeof(kSet[0]));
+}
 
 // ── Recursive descent parser ────────────────────────────────────────────────
 
@@ -719,18 +752,54 @@ private:
                 "loop");
         }
         if (kwLower == "backbone" || kwLower == "bb") {
+            // Nucleic-aware (issue #111): a nucleotide's backbone is its
+            // phosphate + sugar atoms; a protein's is N/CA/C/O.
             return Selection::fromPredicate(mol_,
                 [](int, const AtomData& a) {
+                    if (isStandardNA(a.resName))
+                        return isNaPhosphateAtom(a.name) || isNaSugarAtom(a.name);
                     return a.name == "N" || a.name == "CA" || a.name == "C" || a.name == "O";
                 },
                 "backbone");
         }
         if (kwLower == "sidechain" || kwLower == "sc") {
+            // Complement of backbone, per residue type: for a nucleotide that
+            // is the base (everything not phosphate/sugar); for a protein it
+            // is everything not N/CA/C/O.
             return Selection::fromPredicate(mol_,
                 [](int, const AtomData& a) {
+                    if (isStandardNA(a.resName))
+                        return !(isNaPhosphateAtom(a.name) || isNaSugarAtom(a.name));
                     return a.name != "N" && a.name != "CA" && a.name != "C" && a.name != "O";
                 },
                 "sidechain");
+        }
+        // Nucleic-acid substructure selectors (issue #111). Each is gated on
+        // the residue being a standard nucleotide so phosphate groups in
+        // ligands / protein atoms named "P" never leak in.
+        if (kwLower == "phosphate") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) {
+                    return isStandardNA(a.resName) && isNaPhosphateAtom(a.name);
+                },
+                "phosphate");
+        }
+        if (kwLower == "sugar") {
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) {
+                    return isStandardNA(a.resName) && isNaSugarAtom(a.name);
+                },
+                "sugar");
+        }
+        if (kwLower == "base") {
+            // The heavy ring atoms of a nucleotide — everything that is
+            // neither phosphate nor sugar (hydrogens excluded).
+            return Selection::fromPredicate(mol_,
+                [](int, const AtomData& a) {
+                    return isStandardNA(a.resName) && a.element != "H" &&
+                           !isNaPhosphateAtom(a.name) && !isNaSugarAtom(a.name);
+                },
+                "base");
         }
         if (kwLower == "hydro") {
             return Selection::fromPredicate(mol_,

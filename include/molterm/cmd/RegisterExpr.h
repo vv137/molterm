@@ -28,16 +28,25 @@ class MolObject;
 // Built-in functions:
 //
 //   pos(<atom-spec>)              -> Vec3 — Cα-or-name-resolved position.
+//   centroid(<selection-expr>)    -> Vec3 — geometric mean of the selection
+//                                    (≥ 1 atom; no PCA, unlike pca().center).
+//   com(<selection-expr>)         -> Vec3 — mass-weighted center of the
+//                                    selection (atomic weight by element).
 //   pca(<selection-expr>)         -> Pca  — principal axes of the selection.
 //   helix_axis(<selection-expr>)  -> Pca  — helix axis of an ordered Cα/P
 //                                    trace (robust on short/curved/single-
 //                                    strand segments); axis1 = axis.
 //   superpose_axis(selA vs selB)  -> Pca  — screw axis of the optimal A→B
 //                                    rigid superposition (equal counts);
-//                                    axis1 = axis, eig1 = rotation angle°.
+//                                    axis1 = axis, eig1 = rotation angle°,
+//                                    rmsd = post-fit residual.
+//   rmsd(selA vs selB)            -> Scalar — RMSD of the optimal A→B
+//                                    superposition (equal counts), without
+//                                    moving anything.
 //   dot(v1, v2)                   -> Scalar
 //   cross(v1, v2)                 -> Vec3
 //   length(v)                     -> Scalar
+//   distance(p1, p2) / dist(...)  -> Scalar — |p1 − p2|.
 //   normalize(v)                  -> Vec3
 //   midpoint(p1, p2)              -> Vec3
 //   angle(v1, v2)                 -> Scalar (degrees)
@@ -65,6 +74,13 @@ public:
         std::function<int(const std::string&,
                           std::vector<float>*, std::vector<float>*, std::vector<float>*)>
             collectSelectionXYZ;
+        // Like collectSelectionXYZ but also fills a parallel per-atom mass
+        // array (atomic weight by element) for com(). centroid() uses the
+        // same path and ignores the masses. Returns count of atoms gathered.
+        std::function<int(const std::string&,
+                          std::vector<float>*, std::vector<float>*, std::vector<float>*,
+                          std::vector<float>*)>
+            collectSelectionXYZMass;
     };
 
     struct Result {

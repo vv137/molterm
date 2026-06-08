@@ -264,6 +264,43 @@ private:
         return r;
     }
 
+    // Shared capture path for centroid()/com(): grab the balanced-paren
+    // selection text, resolve it to XYZ + per-atom mass, and reduce to a
+    // single Vec3. `massWeighted` selects mass-weighting (com) vs the plain
+    // geometric mean (centroid). Needs only 1 atom — unlike pca().center.
+    Register captureSelectionVec3(const char* name, bool massWeighted) {
+        lex_.rewind(cur_.pos);
+        std::string raw = lex_.takeBalancedParen();
+        advance();
+        if (!ctx_.collectSelectionXYZMass) { fail(std::string(name) + "(): no selection resolver"); return {}; }
+        std::vector<float> xs, ys, zs, ms;
+        int n = ctx_.collectSelectionXYZMass(raw, &xs, &ys, &zs, &ms);
+        if (n < 1) { fail(std::string(name) + "(): selection matched no atoms"); return {}; }
+        double sx = 0, sy = 0, sz = 0, sw = 0;
+        for (int i = 0; i < n; ++i) {
+            double w = massWeighted ? ms[i] : 1.0;
+            sx += w * xs[i]; sy += w * ys[i]; sz += w * zs[i]; sw += w;
+        }
+        if (sw <= 0) { fail(std::string(name) + "(): zero total weight"); return {}; }
+        Register r; r.kind = Register::Kind::Vec3;
+        r.vec = {sx / sw, sy / sw, sz / sw};
+        return r;
+    }
+
+    // Split a balanced-paren `selA vs selB` blob (commas already swapped to
+    // spaces by the :let RHS rejoin) on the first whitespace-delimited `vs`
+    // token. Returns false when no such separator is present.
+    static bool splitVs(const std::string& raw, std::string& selA, std::string& selB) {
+        std::string norm = raw;
+        for (char& c : norm) if (c == ',') c = ' ';
+        for (size_t p = norm.find("vs"); p != std::string::npos; p = norm.find("vs", p + 2)) {
+            bool lb = (p == 0) || std::isspace(static_cast<unsigned char>(norm[p-1]));
+            bool rb = (p+2 >= norm.size()) || std::isspace(static_cast<unsigned char>(norm[p+2]));
+            if (lb && rb) { selA = norm.substr(0, p); selB = norm.substr(p+2); return true; }
+        }
+        return false;
+    }
+
     Register callBuiltin(const std::string& name) {
         // pos() and pca() take a free-form text argument: rewind the
         // lexer to the start of the current token (which sits just after
@@ -282,34 +319,40 @@ private:
             Register r; r.kind = Register::Kind::Vec3; r.vec = {x, y, z};
             return r;
         }
+        // centroid()/com() reduce a selection to one point (≥ 1 atom).
+        if (name == "centroid") return captureSelectionVec3("centroid", false);
+        if (name == "com")      return captureSelectionVec3("com", true);
         // pca() fits principal axes; helix_axis() fits the *helical* axis of
         // an ordered Cα/phosphate trace (robust on short/curved segments).
         if (name == "pca")        return captureSelectionPca("pca", 2, geom::pcaOf);
         if (name == "helix_axis") return captureSelectionPca("helix_axis", 3, geom::helixAxisOf);
-        if (name == "superpose_axis") {
+        if (name == "superpose_axis" || name == "rmsd") {
             // Two selections separated by the `vs` keyword (the comma is
             // already claimed by the :let RHS rejoin). Each must resolve to
             // the same number of atoms, in correspondence (i-th ↔ i-th).
+            // superpose_axis returns the screw axis (≥ 3 atoms); rmsd returns
+            // just the non-destructive residual (≥ 1 atom).
+            const bool isRmsd = (name == "rmsd");
             lex_.rewind(cur_.pos);
             std::string raw = lex_.takeBalancedParen();
             advance();
-            if (!ctx_.collectSelectionXYZ) { fail("superpose_axis(): no selection resolver"); return {}; }
-            std::string norm = raw;
-            for (char& c : norm) if (c == ',') c = ' ';
-            // Split on the first whitespace-delimited `vs` token.
+            if (!ctx_.collectSelectionXYZ) { fail(name + "(): no selection resolver"); return {}; }
             std::string selA, selB;
-            bool split = false;
-            for (size_t p = norm.find("vs"); p != std::string::npos; p = norm.find("vs", p + 2)) {
-                bool lb = (p == 0) || std::isspace(static_cast<unsigned char>(norm[p-1]));
-                bool rb = (p+2 >= norm.size()) || std::isspace(static_cast<unsigned char>(norm[p+2]));
-                if (lb && rb) { selA = norm.substr(0, p); selB = norm.substr(p+2); split = true; break; }
+            if (!splitVs(raw, selA, selB)) {
+                fail(name + "(selA vs selB): need two selections separated by 'vs'"); return {};
             }
-            if (!split) { fail("superpose_axis(selA vs selB): need two selections separated by 'vs'"); return {}; }
             std::vector<float> axs, ays, azs, bxs, bys, bzs;
             int na = ctx_.collectSelectionXYZ(selA, &axs, &ays, &azs);
             int nb = ctx_.collectSelectionXYZ(selB, &bxs, &bys, &bzs);
-            if (na < 3 || nb < 3) { fail("superpose_axis(): each selection needs ≥ 3 atoms (got " + std::to_string(na) + ", " + std::to_string(nb) + ")"); return {}; }
-            if (na != nb) { fail("superpose_axis(): selections must have equal atom counts (" + std::to_string(na) + " vs " + std::to_string(nb) + ")"); return {}; }
+            const int minA = isRmsd ? 1 : 3;
+            if (na < minA || nb < minA) { fail(name + "(): each selection needs ≥ " + std::to_string(minA) + " atoms (got " + std::to_string(na) + ", " + std::to_string(nb) + ")"); return {}; }
+            if (na != nb) { fail(name + "(): selections must have equal atom counts (" + std::to_string(na) + " vs " + std::to_string(nb) + ")"); return {}; }
+            if (isRmsd) {
+                auto rr = geom::rmsdOf(axs, ays, azs, bxs, bys, bzs);
+                if (!rr.valid) { fail("rmsd(): degenerate input"); return {}; }
+                Register r; r.kind = Register::Kind::Scalar; r.scalar = rr.rmsd;
+                return r;
+            }
             auto p = geom::superposeAxisOf(axs, ays, azs, bxs, bys, bzs);
             if (!p.valid) { fail("superpose_axis(): degenerate input"); return {}; }
             Register r; r.kind = Register::Kind::Pca; r.pca = p;
@@ -327,6 +370,7 @@ private:
 
         if (name == "dot")       return fnDot(args);
         if (name == "cross")     return fnCross(args);
+        if (name == "distance" || name == "dist")  return fnDistance(args);
         if (name == "length" || name == "len")    return fnLength(args);
         if (name == "normalize" || name == "norm") return fnNormalize(args);
         if (name == "midpoint")  return fnMidpoint(args);
@@ -405,6 +449,17 @@ private:
         }
         Register r; r.kind = Register::Kind::Scalar;
         r.scalar = std::sqrt(a[0].vec[0]*a[0].vec[0] + a[0].vec[1]*a[0].vec[1] + a[0].vec[2]*a[0].vec[2]);
+        return r;
+    }
+    // distance(p1, p2) / dist(...) — |p1 − p2|. Restores the command+builtin
+    // pairing :measure already had for :angle/:dihedral (issue #114).
+    Register fnDistance(const std::vector<Register>& a) {
+        if (a.size() != 2 || a[0].kind != Register::Kind::Vec3 || a[1].kind != Register::Kind::Vec3) {
+            fail("distance(p1, p2): both args must be vec3"); return {};
+        }
+        double dx = a[0].vec[0]-a[1].vec[0], dy = a[0].vec[1]-a[1].vec[1], dz = a[0].vec[2]-a[1].vec[2];
+        Register r; r.kind = Register::Kind::Scalar;
+        r.scalar = std::sqrt(dx*dx + dy*dy + dz*dz);
         return r;
     }
     Register fnNormalize(const std::vector<Register>& a) {

@@ -40,19 +40,11 @@
 
 # αC-in/out: β3-Lys-Nζ to the nearer αC-Glu carboxylate oxygen (min Oε1/Oε2)
 let _nz   = pos(${KIN_CHAIN}:${B3_LYS}:NZ)
-let _oe1  = pos(${KIN_CHAIN}:${AC_GLU}:OE1)
-let _oe2  = pos(${KIN_CHAIN}:${AC_GLU}:OE2)
-let _ke1  = $_nz - $_oe1
-let _ke2  = $_nz - $_oe2
-let _l1   = length($_ke1)
-let _l2   = length($_ke2)
+let _l1   = distance($_nz, pos(${KIN_CHAIN}:${AC_GLU}:OE1))
+let _l2   = distance($_nz, pos(${KIN_CHAIN}:${AC_GLU}:OE2))
 let ke_dist = min($_l1, $_l2)
 
 # DFG-in/out: two reference distances to the DFG-Phe ring tip (Cζ)
 let _cz   = pos(${KIN_CHAIN}:${DFG_PHE}:CZ)
-let _ref1 = pos(${KIN_CHAIN}:${AC_GLU4}:CA)
-let _ref2 = pos(${KIN_CHAIN}:${B3_LYS}:CA)
-let _d1v  = $_ref1 - $_cz
-let _d2v  = $_ref2 - $_cz
-let dfg_d1 = length($_d1v)
-let dfg_d2 = length($_d2v)
+let dfg_d1 = distance(pos(${KIN_CHAIN}:${AC_GLU4}:CA), $_cz)
+let dfg_d2 = distance(pos(${KIN_CHAIN}:${B3_LYS}:CA),  $_cz)

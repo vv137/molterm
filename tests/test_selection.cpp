@@ -64,6 +64,31 @@ static MolObject makeMol() {
     // Index 22: ligand HETATM
     atoms.push_back({0,0,0, "C1", "C", "LIG", "C", 1, ' ', 0, 1, 23, 0, true, SSType::Loop});
 
+    // Index 23-45: chain D, resi 5, DG (a deoxyguanosine nucleotide) — for the
+    // nucleic substructure selectors (issue #111). Phosphate (5), sugar (6),
+    // base heavy (11), plus one base hydrogen to prove `base` drops H while
+    // nucleic `sidechain` keeps it.
+    // phosphate: P, OP1, OP2, O5', O3'   (indices 23-27)
+    atoms.push_back({0,0,0, "P",   "P", "DG", "D", 5, ' ', 0, 1, 24, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "OP1", "O", "DG", "D", 5, ' ', 0, 1, 25, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "OP2", "O", "DG", "D", 5, ' ', 0, 1, 26, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "O5'", "O", "DG", "D", 5, ' ', 0, 1, 27, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "O3'", "O", "DG", "D", 5, ' ', 0, 1, 28, 0, false, SSType::Loop});
+    // sugar: C5', C4', O4', C3', C2', C1'   (indices 28-33)
+    atoms.push_back({0,0,0, "C5'", "C", "DG", "D", 5, ' ', 0, 1, 29, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "C4'", "C", "DG", "D", 5, ' ', 0, 1, 30, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "O4'", "O", "DG", "D", 5, ' ', 0, 1, 31, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "C3'", "C", "DG", "D", 5, ' ', 0, 1, 32, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "C2'", "C", "DG", "D", 5, ' ', 0, 1, 33, 0, false, SSType::Loop});
+    atoms.push_back({0,0,0, "C1'", "C", "DG", "D", 5, ' ', 0, 1, 34, 0, false, SSType::Loop});
+    // base heavy: N9 C8 N7 C5 C6 O6 N1 C2 N2 N3 C4   (indices 34-44)
+    for (const char* nm : {"N9","C8","N7","C5","C6","O6","N1","C2","N2","N3","C4"}) {
+        std::string el(1, nm[0]);
+        atoms.push_back({0,0,0, nm, el, "DG", "D", 5, ' ', 0, 1, 0, 0, false, SSType::Loop});
+    }
+    // base hydrogen (index 45) — not a ring heavy atom.
+    atoms.push_back({0,0,0, "H1",  "H", "DG", "D", 5, ' ', 0, 1, 0, 0, false, SSType::Loop});
+
     return mol;
 }
 
@@ -277,7 +302,9 @@ static void testHydro(const MolObject& mol) {
     auto sel = Selection::parse("hydro", mol);
     auto s = toSet(sel);
     CHECK(s.count(20), "hydro includes H atom");
-    CHECK(sel.size() == 1, "hydro = 1 hydrogen atom");
+    // index 20 (ALA H) + index 45 (DG base H1)
+    CHECK(s.count(45), "hydro includes the nucleotide base H");
+    CHECK(sel.size() == 2, "hydro = 2 hydrogen atoms");
 }
 
 static void testNotWater(const MolObject& mol) {
@@ -525,7 +552,8 @@ static void testWaterOrHydro(const MolObject& mol) {
     CHECK(s.count(19), "water or hydro: WAT");
     CHECK(s.count(20), "water or hydro: H");
     CHECK(s.count(21), "water or hydro: DOD");
-    CHECK(sel.size() == 4, "water or hydro = 4");
+    CHECK(s.count(45), "water or hydro: nucleotide base H");
+    CHECK(sel.size() == 5, "water or hydro = 5 (3 waters + 2 H)");
 }
 
 static void testNotWaterAndNotHydro(const MolObject& mol) {
@@ -538,6 +566,51 @@ static void testNotWaterAndNotHydro(const MolObject& mol) {
 static void testEmpty(const MolObject& mol) {
     auto sel = Selection::parse("", mol);
     CHECK(sel.empty(), "empty string → empty selection");
+}
+
+// Nucleic-acid substructure selectors (issue #111). The DG nucleotide is at
+// indices 23-45: phosphate {23-27}, sugar {28-33}, base heavy {34-44}, H {45}.
+static void testNucleicSubstructure(const MolObject& mol) {
+    auto phos = toSet(Selection::parse("phosphate", mol));
+    CHECK(phos.size() == 5, "phosphate = 5 atoms");
+    CHECK(phos.count(23) && phos.count(26), "phosphate includes P and O5'");
+    CHECK(!phos.count(28) && !phos.count(34), "phosphate excludes sugar/base");
+    CHECK(!phos.count(0) && !phos.count(22), "phosphate ignores protein/ligand");
+
+    auto sugar = toSet(Selection::parse("sugar", mol));
+    CHECK(sugar.size() == 6, "sugar = 6 atoms");
+    CHECK(sugar.count(28) && sugar.count(30), "sugar includes C5' and O4'");
+    CHECK(!sugar.count(26) && !sugar.count(23), "sugar excludes O5'/P (phosphate)");
+
+    auto base = toSet(Selection::parse("base", mol));
+    CHECK(base.size() == 11, "base = 11 heavy ring atoms");
+    CHECK(base.count(34) && base.count(38), "base includes N9 and C6");
+    CHECK(!base.count(45), "base excludes the base hydrogen");
+    CHECK(!base.count(23) && !base.count(28), "base excludes phosphate/sugar");
+
+    // backbone is nucleic-aware: phosphate + sugar for a nucleotide.
+    auto bbD = toSet(Selection::parse("chain D and backbone", mol));
+    CHECK(bbD.size() == 11, "nucleic backbone = phosphate + sugar (11)");
+    CHECK(bbD.count(23) && bbD.count(28), "nucleic backbone has P and C5'");
+    CHECK(!bbD.count(34), "nucleic backbone excludes base");
+
+    // backbone still resolves protein N/CA/C/O for amino acids.
+    auto bbA = toSet(Selection::parse("chain A and backbone", mol));
+    CHECK(bbA.count(0) && bbA.count(1) && bbA.count(2) && bbA.count(3),
+          "protein backbone still N/CA/C/O");
+
+    // sidechain is the per-residue complement: the base (+ its H) for a
+    // nucleotide.
+    auto scD = toSet(Selection::parse("chain D and sidechain", mol));
+    CHECK(scD.size() == 12, "nucleic sidechain = base heavy + H (12)");
+    CHECK(scD.count(34) && scD.count(45), "nucleic sidechain includes base + its H");
+    CHECK(!scD.count(23) && !scD.count(28), "nucleic sidechain excludes backbone");
+
+    // Clean partition: phosphate ∪ sugar ∪ base == all heavy nucleotide atoms.
+    auto nuc = toSet(Selection::parse("chain D", mol));
+    CHECK(nuc.size() == 23, "DG nucleotide has 23 atoms (incl. 1 H)");
+    CHECK(phos.size() + sugar.size() + base.size() == nuc.size() - 1,
+          "phosphate+sugar+base partitions the nucleotide heavy atoms");
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -624,6 +697,9 @@ int main() {
     testComplexNesting(mol);
     testWaterOrHydro(mol);
     testNotWaterAndNotHydro(mol);
+
+    // Nucleic-acid substructure selectors (issue #111)
+    testNucleicSubstructure(mol);
 
     std::cout << "\n" << passed << " passed, " << failed << " failed\n";
     return failed > 0 ? 1 : 0;

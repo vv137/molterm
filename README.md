@@ -77,7 +77,7 @@ the `s<key>` / `x<key>` keymaps or `:show <repr>`.
 - **Silhouette outlines** — depth edge detection with configurable threshold/darkness (pixel mode)
 - **Screenshot from any renderer** — `:screenshot` renders offscreen via PixelCanvas even in braille/ASCII mode
 - **Multi-state animation** — NMR ensemble / trajectory state cycling with `[`/`]` keys
-- **Measurement tools** — `:measure`, `:angle`, `:dihedral` with pk1-pk4 pick registers, serial numbers, or `(selection)` endpoints; `:bond`/`:unbond` and `:disulfide` (auto-detect SG–SG pairs) for explicit connectivity in headless figures
+- **Measurement tools** — `:measure` (incl. closest-approach between multi-atom groups), `:angle`, `:dihedral` with pk1-pk4 pick registers, serial numbers, or `(selection)` endpoints; `:rmsd` (non-destructive RMSD of two selections); `:hbonds` / `:saltbridge` / `:disulfide` auto-detect and draw interactions as 3D dashed contacts; `:bond`/`:unbond` for explicit connectivity in headless figures
 - **Interface overlay** — `:interface` inter-chain contacts (closest heavy atom) with configurable dashed lines (works in all renderers including pixel mode); dashed lines respect z-buffer so atoms in front occlude them
 - **Focus mode** — `gf`+click or `F` zoom to subject's bounding sphere; subject-size aware (one residue → tight, full chain → fits screen) with `focus_fill`/`focus_extra` knobs; granularity selectable (residue/chain/sidechain)
 - **DSSP secondary structure** — full Kabsch-Sander pipeline: turns ▶ helices (3₁₀ / α / π) ▶ bridges (parallel / antiparallel) ▶ ladders with bulge propagation ▶ sheets, collapsed to molterm's 3-class SS. Auto-runs on load when no HELIX/SHEET headers exist. **Per-state cached** so trajectory frames (NMR/MD) get fresh SS when cycling with `[`/`]`. Re-run with `:dssp`. Validated against `mkdssp 4.5`: 13/15 PDB test structures match at 100% (4HHB, 1PGA, 1BTA, 1UBQ, 1ACJ, 1MBN, 1HHO, 1LMB, 2HHB, 2NLS, 2GB1, 1L2Y, 1CRN); 1AKE/7TIM at 99% (residual mismatches are H-bonds at exactly the −0.5 kcal/mol cutoff, where float precision flips the boundary)
@@ -616,10 +616,13 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
 :assembly [id|list]             " Generate biological assembly (default: 1)
 :measure [s1 s2] [= "caption"]  " Distance (no args = pk1↔pk2 from last clicks).
                                 "   Endpoints may also be two parenthesized
-                                "   selections that each resolve to one atom:
+                                "   selections:
                                 "   :measure (resi 2 and name SG) (resi 30 and
                                 "   name SG) = "C28-C56 SS"  — the headless way
                                 "   to pin an atom by selection (no picking).
+                                "   When a selection matches >1 atom, reports the
+                                "   closest approach (min heavy-atom distance)
+                                "   between the two groups.
 :angle [s1 s2 s3] [= "caption"] " Angle at s2 (no args = pk1-pk2-pk3).
 :dihedral [s1 s2 s3 s4] [= "..."] " Dihedral (no args = pk1-pk4).
                                 "   Args: serial number, pk1-pk4, or $selection.
@@ -627,6 +630,18 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   (rendered into screenshots and exported as
                                 "   PyMOL distance/angle/dihedral with `label`
                                 "   carrying the optional caption).
+:rmsd <selA> vs <selB>          " RMSD (+ N) of the optimal superposition of two
+                                "   equal-count, in-correspondence selections —
+                                "   WITHOUT moving anything (unlike :align/:super,
+                                "   which report RMSD only as a side effect of
+                                "   superposing). Current object.
+:hbonds [selection]             " Auto-detect hydrogen bonds (N/O↔N/O ≤ 3.5 Å)
+                                "   and draw them as dashed contact lines + labels
+                                "   (rendered into screenshots, exported as PyMOL
+                                "   distance objects). Whole structure by default.
+:saltbridge [selection]         " Auto-detect salt bridges (Asp/Glu carboxylate ↔
+                                "   Lys/Arg ≤ 4.0 Å) and draw them as dashed
+                                "   contacts. Whole structure by default.
 :bond [s1 s2 | (selA) (selB)]   " Draw a bond between two atoms (real topology
                                 "   edge → renders as a stick wherever both
                                 "   atoms are shown in wireframe/ballstick).
@@ -921,10 +936,13 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "     - Vec3 literals: [1, 0, 0]
                                 "     - Atom positions: pos(A:1:CA)         (chain:resi:atom)
                                 "                      pos(1ubq/A:1:CA)    (obj qualifier, issue #66)
+                                "     - Group centers: centroid(<sel>)      -> geometric mean
+                                "                      com(<sel>)           -> mass-weighted
                                 "     - Register refs: $G.axis1, $v.length
                                 "                      (bare names also work: G.axis1)
                                 "     - Vector algebra: + - * /, dot(), cross(),
-                                "                      length(), normalize(), midpoint(),
+                                "                      length(), distance()/dist(),
+                                "                      normalize(), midpoint(),
                                 "                      angle(), dihedral()   (degrees)
                                 "     - Scalar math:   abs, sqrt, exp, log, log10, log2,
                                 "                      sin, cos, tan, asin, acos, atan,
@@ -934,7 +952,9 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "                      axis2, axis3, eigvals, center }
                                 "     - Axis fits:     helix_axis(<sel>)     -> helical axis
                                 "                      superpose_axis(A vs B) -> screw axis,
-                                "                      eig1 = rotation angle (degrees)
+                                "                      eig1 = rotation angle (degrees),
+                                "                      rmsd = post-fit residual (Å)
+                                "     - RMSD query:    rmsd(A vs B)          -> Å, no superpose
                                 "   Type rules: vec±vec, scalar±scalar, scalar*vec,
                                 "   vec/scalar, dot/cross/length/angle on vec3.
                                 "   Examples:
@@ -1179,7 +1199,15 @@ cross chain breaks. Works with the rest of the algebra:
 //A                             " chain A, all residues
 ```
 
-**Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `hydro`, `water`, `het`/`ligand`, `protein`, `nucleic`, `dna`, `rna`, `polymer`, `obj`, `$name`
+**Keywords:** `all`, `chain`, `resn`, `resi` (range), `name`, `element`, `helix`, `sheet`, `loop`, `backbone`/`bb`, `sidechain`/`sc`, `phosphate`, `sugar`, `base`, `hydro`, `water`, `het`/`ligand`, `protein`, `nucleic`, `dna`, `rna`, `polymer`, `obj`, `$name`
+
+**Nucleic substructure** (issue #111) — `phosphate` (P, OP1/OP2, O5', O3'), `sugar` (C1'–C5', O4', O2'), and `base` (the heavy ring atoms) partition a nucleotide; each is gated on the residue being a standard nucleotide. `backbone`/`bb` and `sidechain`/`sc` are nucleic-aware: for a nucleotide, `backbone` = phosphate + sugar and `sidechain` = the base, so `chain I and backbone` traces a DNA/RNA strand the same way it does a protein.
+
+```vim
+:color orange phosphate            " highlight the phosphodiester backbone
+:show sticks base and chain A      " bases of one strand
+:select bb_trace = chain I and backbone
+```
 
 **Spatial / expansion:** `within N of <expr>`, `exwithin N of <expr>`, `same residue as <expr>`, `same chain as <expr>`, `same resname as <expr>` (alias `resn`); `byres <expr>` / `bychain <expr>` are sugar for `same residue|chain as <expr>` (issue #52)
 
