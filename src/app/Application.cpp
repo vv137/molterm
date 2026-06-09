@@ -5,6 +5,7 @@
 #include "molterm/cmd/CommandHelpers.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/RegisterExpr.h"
+#include "molterm/cmd/commands/Commands.h"
 #include "molterm/core/SASA.h"
 #include "molterm/io/Aligner.h"
 #include "molterm/io/CifLoader.h"
@@ -4146,22 +4147,10 @@ void Application::playMacro(char reg) {
 }
 
 void Application::registerCommands() {
-    // :q / :quit
-    cmdRegistry_.registerCmd("q", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        app.quit(cmd.forced);
-        return {true, ""};
-    }, ":q[!]", "Quit MolTerm (use :q! to skip auto-save)",
-       {":q", ":q!"}, "Help");
-    cmdRegistry_.registerCmd("quit", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
-        app.quit(cmd.forced);
-        return {true, ""};
-    }, ":quit[!]", "Quit MolTerm (alias for :q)",
-       {":quit"}, "Help");
-    cmdRegistry_.registerCmd("qa", [](Application& app, const ParsedCommand&) -> ExecResult {
-        app.quit(true);
-        return {true, ""};
-    }, ":qa", "Quit all tabs and exit",
-       {":qa"}, "Help");
+    // Per-area command families live in src/cmd/commands/*.cpp (see
+    // cmd/commands/Commands.h). registerCommands() is mid-decomposition: the
+    // groups below have moved out; the rest is still inline pending migration.
+    registerSessionCommands(*this, cmdRegistry_);
 
     // :load <file>
     auto loadPatterns = [](Application& app, const ParsedCommand& cmd,
