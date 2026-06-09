@@ -185,14 +185,8 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
         return resolveEndpointToken(app, s);
     };
 
-    // Helper: format atom label for measurement display
-    auto atomLabel = [](const AtomData& a) -> std::string {
-        return a.chainId + "/" + a.resName + std::to_string(a.resSeq) + "/" + a.name;
-    };
-
-
     // :measure [serial1 serial2] — distance (no args = pk1↔pk2)
-    reg.registerCmd("measure", [atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    reg.registerCmd("measure", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto [pos, caption] = splitAtEqToken(cmd.args);
 
         std::shared_ptr<MolObject> obj;
@@ -251,15 +245,13 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
         int n = static_cast<int>(atoms.size());
         if (i1 >= n || i2 >= n) return {false, "Invalid atom index"};
 
-        float dx = atoms[i1].x - atoms[i2].x;
-        float dy = atoms[i1].y - atoms[i2].y;
-        float dz = atoms[i1].z - atoms[i2].z;
-        float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+        float dist = geom::distance(atoms[i1].x, atoms[i1].y, atoms[i1].z,
+                                    atoms[i2].x, atoms[i2].y, atoms[i2].z);
 
         char dbuf[16]; std::snprintf(dbuf, sizeof(dbuf), "%.2f", dist);
         std::string shortLabel = std::string(dbuf) + "A";
         std::string msg = std::string(minMode ? "Min distance " : "Distance ") +
-            atomLabel(atoms[i1]) + " — " + atomLabel(atoms[i2]) + " = " + shortLabel;
+            atoms[i1].label() + " — " + atoms[i2].label() + " = " + shortLabel;
         if (!caption.empty()) msg += "  \"" + caption + "\"";
         app.measurements().push_back({{i1, i2}, shortLabel, caption, obj->name()});
         MLOG_INFO("%s", msg.c_str());
@@ -290,8 +282,8 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
         if (bondExists(bonds, i1, i2)) return {true, "Bond already exists"};
         bonds.push_back({std::min(i1, i2), std::max(i1, i2), 1});
         const auto& a = obj->atoms();
-        float dx = a[i1].x - a[i2].x, dy = a[i1].y - a[i2].y, dz = a[i1].z - a[i2].z;
-        char buf[16]; std::snprintf(buf, sizeof(buf), "%.2f", std::sqrt(dx*dx + dy*dy + dz*dz));
+        float d = geom::distance(a[i1].x, a[i1].y, a[i1].z, a[i2].x, a[i2].y, a[i2].z);
+        char buf[16]; std::snprintf(buf, sizeof(buf), "%.2f", d);
         return {true, std::string("Bond added (") + buf + " A)"};
     }, ":bond [s1 s2 | pk1 pk2 | (selA) (selB)]",
        "Draw a bond between two atoms (each endpoint must resolve to exactly "
@@ -359,10 +351,8 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
         for (size_t i = 0; i < sgs.size(); ++i) {
             for (size_t j = i + 1; j < sgs.size(); ++j) {
                 int a = sgs[i], b = sgs[j];
-                float dx = atoms[a].x - atoms[b].x;
-                float dy = atoms[a].y - atoms[b].y;
-                float dz = atoms[a].z - atoms[b].z;
-                float d = std::sqrt(dx*dx + dy*dy + dz*dz);
+                float d = geom::distance(atoms[a].x, atoms[a].y, atoms[a].z,
+                                         atoms[b].x, atoms[b].y, atoms[b].z);
                 if (d < kMin || d > kMax) continue;
                 if (bondExists(bonds, a, b)) { ++already; continue; }
                 bonds.push_back({std::min(a, b), std::max(a, b), 1});
@@ -583,7 +573,7 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
     }, ":axis $pcaReg [color <c>] [= \"label\"]",
        "Draw the major axis (axis1) of a pca-result register as an arrow of length ±1σ centered on its centroid (color = named/#RRGGBB)",
        {":axis $G color slate = \"groove axis\""}, "Measurement");
-    reg.registerCmd("angle", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    reg.registerCmd("angle", [resolveAtomIdx](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
@@ -606,20 +596,15 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
         }
         if (i1 >= n || i2 >= n || i3 >= n) return {false, "Invalid atom index"};
 
-        float v1x = atoms[i1].x - atoms[i2].x, v1y = atoms[i1].y - atoms[i2].y, v1z = atoms[i1].z - atoms[i2].z;
-        float v2x = atoms[i3].x - atoms[i2].x, v2y = atoms[i3].y - atoms[i2].y, v2z = atoms[i3].z - atoms[i2].z;
-        float dot = v1x*v2x + v1y*v2y + v1z*v2z;
-        float len1 = std::sqrt(v1x*v1x + v1y*v1y + v1z*v1z);
-        float len2 = std::sqrt(v2x*v2x + v2y*v2y + v2z*v2z);
-        float cosA = (len1 > 0 && len2 > 0) ? dot / (len1 * len2) : 0;
-        cosA = std::max(-1.0f, std::min(1.0f, cosA));
-        float deg = std::acos(cosA) * 180.0f / static_cast<float>(M_PI);
+        float deg = geom::angleDeg(atoms[i1].x, atoms[i1].y, atoms[i1].z,
+                                   atoms[i2].x, atoms[i2].y, atoms[i2].z,
+                                   atoms[i3].x, atoms[i3].y, atoms[i3].z);
 
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%.1f", deg);
         std::string shortLabel = std::string(buf) + "°";
-        std::string msg = "Angle " + atomLabel(atoms[i1]) + " — " +
-            atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " = " + buf + " deg";
+        std::string msg = "Angle " + atoms[i1].label() + " — " +
+            atoms[i2].label() + " — " + atoms[i3].label() + " = " + buf + " deg";
         if (!caption.empty()) msg += "  \"" + caption + "\"";
         app.measurements().push_back({{i1, i2, i3}, shortLabel, caption, obj->name()});
         MLOG_INFO("%s", msg.c_str());
@@ -630,7 +615,7 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
        {":angle", ":angle pk1 pk2 pk3 = \"φ1\""}, "Measurement");
 
     // :dihedral [s1 s2 s3 s4] — dihedral (no args = pk1-pk4)
-    reg.registerCmd("dihedral", [resolveAtomIdx, atomLabel](Application& app, const ParsedCommand& cmd) -> ExecResult {
+    reg.registerCmd("dihedral", [resolveAtomIdx](Application& app, const ParsedCommand& cmd) -> ExecResult {
         auto obj = app.tabs().currentTab().currentObject();
         if (!obj) return {false, "No object selected"};
         const auto& atoms = obj->atoms();
@@ -666,9 +651,9 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "%.1f", deg);
         std::string shortLabel = std::string(buf) + "°";
-        std::string msg = "Dihedral " + atomLabel(atoms[i1]) + " — " +
-            atomLabel(atoms[i2]) + " — " + atomLabel(atoms[i3]) + " — " +
-            atomLabel(atoms[i4]) + " = " + buf + " deg";
+        std::string msg = "Dihedral " + atoms[i1].label() + " — " +
+            atoms[i2].label() + " — " + atoms[i3].label() + " — " +
+            atoms[i4].label() + " = " + buf + " deg";
         if (!caption.empty()) msg += "  \"" + caption + "\"";
         app.measurements().push_back({{i1, i2, i3, i4}, shortLabel, caption, obj->name()});
         MLOG_INFO("%s", msg.c_str());

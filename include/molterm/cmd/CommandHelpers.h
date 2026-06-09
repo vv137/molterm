@@ -151,6 +151,20 @@ inline constexpr const char* kSetOptionsLong[] = {
     "focus_granularity",
 };
 
+// Short aliases for tab-completion only — not iterated by `:set` listing
+// (would print the same value twice). Pair-wise alignment with kSetOptionsLong
+// is not enforced; the alias->long mapping lives in the per-option
+// if/else cascade inside the `:set` handler.
+inline constexpr const char* kSetOptionsShort[] = {
+    "bt", "wt", "br", "ps", "ot", "od",
+    "lfs", "anf", "anlw", "scale", "sm",
+    "ch", "csh", "cl", "csd", "csa", "chr", "cth", "ctr", "nb",
+    "bsf", "sfs",
+    "ic", "it", "iclass", "isc", "is",
+    "sa", "v", "lf", "transp",
+    "fr", "fe", "fmr", "fd", "fg",
+};
+
 // Clear pixel-graphics artifacts and force a full ncurses repaint.
 void clearScreenAndRepaint();
 

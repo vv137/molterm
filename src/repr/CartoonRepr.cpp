@@ -16,17 +16,10 @@ static bool isNucleotide(const std::string& rn) {
            rn == "ADE" || rn == "GUA" || rn == "CYT" || rn == "URA" || rn == "THY";
 }
 
-// FNV-1a 64-bit. Cheap fingerprint for cache invalidation; we don't care
-// about cryptographic strength, only that ~all real changes flip a bit.
-static std::uint64_t fnv1a64(const void* data, std::size_t bytes) {
-    const auto* p = static_cast<const std::uint8_t*>(data);
-    std::uint64_t h = 1469598103934665603ULL;
-    for (std::size_t i = 0; i < bytes; ++i) {
-        h ^= p[i];
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
+// Atom-count thresholds for cartoon radial-segment LOD: above kLodLarge we
+// drop to the coarsest tessellation, above kLodMedium to the middle tier.
+static constexpr std::size_t kLodLarge  = 10000;
+static constexpr std::size_t kLodMedium = 5000;
 
 bool CartoonRepr::CacheKey::operator==(const CacheKey& o) const {
     return mol == o.mol &&
@@ -58,12 +51,12 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
     int subdiv = adjustLOD(subdivisions_, atoms.size());
     // Coil tube + elliptical helix radial vertex counts. Mol* uses 16 by
     // default; we LOD down to 8 for medium structures and 6 for very large.
-    int coilSegments = (atoms.size() > 10000) ? 6
-                     : (atoms.size() >  5000) ? 8
-                                              : 16;
-    int helixSegments = (atoms.size() > 10000) ? 8
-                      : (atoms.size() >  5000) ? 12
-                                               : helixRadialSegments_;
+    int coilSegments = (atoms.size() > kLodLarge)  ? 6
+                     : (atoms.size() > kLodMedium) ? 8
+                                                   : 16;
+    int helixSegments = (atoms.size() > kLodLarge)  ? 8
+                      : (atoms.size() > kLodMedium) ? 12
+                                                    : helixRadialSegments_;
 
     // Build cache fingerprint. The cartoon spline + parallel-transport
     // frame depend only on atoms/SS/coloring/repr params, not the camera —
@@ -96,21 +89,17 @@ void CartoonRepr::render(const MolObject& mol, const Camera& cam,
         // std::vector<bool> is bit-packed and exposes no .data(); fold one
         // bit per atom into the FNV state. ~35k atoms ≈ 35k FNV rounds ≈
         // a few hundred µs, comfortably under the cache rebuild cost.
-        std::uint64_t h = 1469598103934665603ULL;
-        for (std::size_t i = 0; i < ctx.atomVis.size(); ++i) {
-            h ^= ctx.atomVis[i] ? 1ULL : 0ULL;
-            h *= 1099511628211ULL;
-        }
+        std::uint64_t h = kFnvOffset;
+        for (std::size_t i = 0; i < ctx.atomVis.size(); ++i)
+            fnvFold(h, ctx.atomVis[i] ? 1ULL : 0ULL);
         key.visMaskHash = h;
     }
     // FNV1a over per-atom SS labels (1 byte each) — captures `:dssp`
     // recomputes that don't bump activeState or any other key field.
     {
-        std::uint64_t h = 1469598103934665603ULL;
-        for (const auto& a : atoms) {
-            h ^= static_cast<std::uint64_t>(a.ssType);
-            h *= 1099511628211ULL;
-        }
+        std::uint64_t h = kFnvOffset;
+        for (const auto& a : atoms)
+            fnvFold(h, static_cast<std::uint64_t>(a.ssType));
         key.ssHash = h;
     }
 

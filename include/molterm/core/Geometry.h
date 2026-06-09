@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
@@ -95,6 +96,30 @@ RmsdResult rmsdOf(const std::vector<float>& ax,
                   const std::vector<float>& by,
                   const std::vector<float>& bz);
 
+
+// Euclidean distance between two 3D points. Scalar-arg form to match the
+// rest of this header (callers pass atom .x/.y/.z components directly).
+inline float distance(float ax, float ay, float az,
+                      float bx, float by, float bz) {
+    float dx = ax - bx, dy = ay - by, dz = az - bz;
+    return std::sqrt(dx*dx + dy*dy + dz*dz);
+}
+
+// Interior angle in degrees at vertex b, for the points a-b-c. Returns 0
+// when either arm (a→b or c→b) is degenerate. Result is in [0, 180].
+inline float angleDeg(float ax, float ay, float az,
+                      float bx, float by, float bz,
+                      float cx, float cy, float cz) {
+    float v1x = ax - bx, v1y = ay - by, v1z = az - bz;
+    float v2x = cx - bx, v2y = cy - by, v2z = cz - bz;
+    float dot = v1x*v2x + v1y*v2y + v1z*v2z;
+    float len1 = std::sqrt(v1x*v1x + v1y*v1y + v1z*v1z);
+    float len2 = std::sqrt(v2x*v2x + v2y*v2y + v2z*v2z);
+    if (len1 <= 0.0f || len2 <= 0.0f) return 0.0f;
+    float cosA = dot / (len1 * len2);
+    cosA = std::max(-1.0f, std::min(1.0f, cosA));
+    return std::acos(cosA) * 180.0f / 3.14159265f;
+}
 
 // Signed dihedral angle in degrees, [-180, +180], for four 3D points.
 // Uses the standard atan2 convention (no IUPAC sign flip): callers that

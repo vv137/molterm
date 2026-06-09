@@ -25,6 +25,12 @@ struct AtomData {
     int8_t formalCharge = 0;
     bool isHet = false;       // HETATM (ligand, ion, non-standard residue)
     SSType ssType = SSType::Loop;
+
+    // Compact "chain/resName+resSeq/atom" identifier, e.g. "A/LYS72/NZ".
+    // The canonical short label used in measurement output.
+    std::string label() const {
+        return chainId + "/" + resName + std::to_string(resSeq) + "/" + name;
+    }
 };
 
 } // namespace molterm

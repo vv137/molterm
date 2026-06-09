@@ -2,8 +2,38 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 
 namespace molterm {
+
+// FNV-1a 64-bit fingerprinting for representation cache keys. Cheap, not
+// cryptographic — we only need ~all real changes to flip a bit. Seed an
+// accumulator with kFnvOffset and fold values with fnvFold/fnvFoldFloat,
+// or hash a contiguous byte buffer in one shot with fnv1a64.
+inline constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
+inline constexpr std::uint64_t kFnvPrime  = 1099511628211ULL;
+
+inline void fnvFold(std::uint64_t& h, std::uint64_t v) {
+    h ^= v;
+    h *= kFnvPrime;
+}
+
+// Fold a float by its raw bits, so the hash is stable across the exact
+// value (including NaN/±0 byte patterns) rather than its numeric compare.
+inline void fnvFoldFloat(std::uint64_t& h, float f) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &f, sizeof(bits));
+    fnvFold(h, bits);
+}
+
+inline std::uint64_t fnv1a64(const void* data, std::size_t bytes) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    std::uint64_t h = kFnvOffset;
+    for (std::size_t i = 0; i < bytes; ++i) fnvFold(h, p[i]);
+    return h;
+}
 
 // sqrt(zoom) clamped to [0.75, 1.8] — applied to thickness/marker sizes
 // in Backbone, Interface, and the selection-highlight overlay so they grow

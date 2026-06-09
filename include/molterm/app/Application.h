@@ -16,6 +16,7 @@
 #include "molterm/app/CommandScope.h"
 #include "molterm/app/TabManager.h"
 #include "molterm/app/TabViewState.h"
+#include "molterm/app/ViewSettings.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/cmd/Register.h"
 #include "molterm/cmd/UndoStack.h"
@@ -50,6 +51,29 @@ inline constexpr const char* kSele = "sele";
 enum class InspectLevel { Atom, Residue, Chain, Object };
 enum class PickMode { Inspect, SelectAtom, SelectResidue, SelectChain, Focus };
 
+// Short display names for the status bar / inspect HUD. Free + inline so the
+// input and render translation units (Application_Input/Render.cpp) share one
+// definition.
+inline const char* inspectLevelName(InspectLevel lvl) {
+    switch (lvl) {
+        case InspectLevel::Atom:    return "ATOM";
+        case InspectLevel::Residue: return "RESIDUE";
+        case InspectLevel::Chain:   return "CHAIN";
+        case InspectLevel::Object:  return "OBJECT";
+    }
+    return "?";
+}
+inline const char* pickModeName(PickMode pm) {
+    switch (pm) {
+        case PickMode::Inspect:       return "INSPECT";
+        case PickMode::SelectAtom:    return "SEL:ATOM";
+        case PickMode::SelectResidue: return "SEL:RES";
+        case PickMode::SelectChain:   return "SEL:CHAIN";
+        case PickMode::Focus:         return "FOCUS";
+    }
+    return "?";
+}
+
 // What to expand a clicked atom into when entering focus.
 //   Residue   — atoms sharing chainId+resSeq+insCode (default; matches prior F behavior)
 //   Chain     — every atom in the same chainId
@@ -64,20 +88,14 @@ enum class RendererType {
     Pixel,    // PixelCanvas + auto-detected protocol (Sixel/Kitty/iTerm2)
 };
 
-// PNG / pixel-canvas background. `Transparent` writes alpha=0 for untouched
-// pixels (deterministic, via canvas-tracked clear color + colorIds_ mask —
-// not the legacy "RGB==(0,0,0)" heuristic that flipped between canvas sizes).
-// Background color modes for screenshots and the live canvas.
-//   Transparent : touched-pixel mask → PNG alpha channel
-//   White       : flat 255,255,255 (publication light theme)
-//   Black       : flat 0,0,0       (publication dark theme)
-//   Custom      : user-supplied RGB triple stored in bgCustomR/G/B_ on
-//                 Application — set via `:set bg "#RRGGBB"` or
-//                 `:set bg "rgb(R,G,B)"`. Always opaque; for transparency
-//                 use BgMode::Transparent.
-enum class BgMode { Transparent, White, Black, Custom };
-// OutlineMode lives in molterm/render/OutlineMode.h — included via Canvas.h
-// transitively. App-layer code uses the unqualified name `OutlineMode`.
+// BgMode (PNG / pixel-canvas background) and the visual/overlay appearance
+// knobs live on ViewSettings (molterm/app/ViewSettings.h), reached via
+// Application::view(). OutlineMode lives in molterm/render/OutlineMode.h —
+// included transitively; app-layer code uses the unqualified name.
+
+// The script execution engine (molterm/app/ScriptRunner.h). Held by
+// unique_ptr so Application only needs this forward declaration.
+class ScriptRunner;
 
 class Application {
 public:
@@ -193,25 +211,6 @@ public:
                                     const std::unordered_map<std::string, std::string>& args,
                                     const std::string& sourcePath = "");
 
-private:
-    // Block-aware script dispatcher (issue #68). Buffers the script
-    // into a line vector then walks it with control-flow tracking —
-    // `:if / :elseif / :else / :endif` skip inactive branches;
-    // Control-flow outcome of dispatching a (sub)range of script lines.
-    // Normal: ran to the end. Stopped: strict-mode error halt. Break /
-    // Continue: a :break / :continue propagating up to the enclosing
-    // :foreach. Return: a :return unwinding to the script-frame boundary.
-    enum class ScriptFlow { Normal, Stopped, Break, Continue, Return };
-
-    // `:foreach VAR in LO..HI / :end` iterates a numeric range and
-    // re-dispatches the body N times. Mutually recursive (foreach
-    // body re-enters via the same dispatcher) but bounded by script
-    // size, so stack depth = number of nested :foreach loops.
-    ScriptFlow dispatchScriptLines(const std::vector<std::string>& lines,
-                                   size_t lo, size_t hi,
-                                   ScriptRunResult& result, bool strict);
-public:
-
     // Expand ${VAR} references against the in-process scriptEnv_ map (set by
     // :setenv) with a fall-through to the OS environment. Unset → empty.
     // Backslash-escapes the dollar: `\$X` → literal `$X`.
@@ -220,17 +219,12 @@ public:
     std::unordered_map<std::string, std::string>& scriptEnv() { return envStack_.back(); }
     const std::unordered_map<std::string, std::string>& scriptEnv() const { return envStack_.back(); }
 
-    BgMode bgMode() const { return bgMode_; }
-    void setBgMode(BgMode m) { bgMode_ = m; }
-    // Custom bg RGB used when bgMode_ == BgMode::Custom. Setter also
-    // flips the mode so callers don't have to remember to.
-    void setBgCustomRGB(uint8_t r, uint8_t g, uint8_t b) {
-        bgCustomR_ = r; bgCustomG_ = g; bgCustomB_ = b;
-        bgMode_ = BgMode::Custom;
-    }
-    uint8_t bgCustomR() const { return bgCustomR_; }
-    uint8_t bgCustomG() const { return bgCustomG_; }
-    uint8_t bgCustomB() const { return bgCustomB_; }
+    BgMode bgMode() const { return view_.bgMode(); }
+    void setBgMode(BgMode m) { view_.setBgMode(m); }
+    void setBgCustomRGB(uint8_t r, uint8_t g, uint8_t b) { view_.setBgCustomRGB(r, g, b); }
+    uint8_t bgCustomR() const { return view_.bgCustomR(); }
+    uint8_t bgCustomG() const { return view_.bgCustomG(); }
+    uint8_t bgCustomB() const { return view_.bgCustomB(); }
     // Push the current bgMode onto a PixelCanvas before clear()/savePNG().
     void applyBgMode(class PixelCanvas& pc) const;
 
@@ -299,136 +293,100 @@ public:
 
     bool running() const { return running_; }
 
-    // Settings
-    float fogStrength() const { return fogStrength_; }
-    void setFogStrength(float s) { fogStrength_ = s; }
-    bool outlineEnabled() const { return outlineEnabled_; }
-    void setOutlineEnabled(bool v) { outlineEnabled_ = v; }
-    bool screenshotOverlay() const { return screenshotOverlay_; }
-    void setScreenshotOverlay(bool v) { screenshotOverlay_ = v; }
-    float outlineThreshold() const { return outlineThreshold_; }
-    void setOutlineThreshold(float t) { outlineThreshold_ = t; }
-    float outlineDarken() const { return outlineDarken_; }
-    void setOutlineDarken(float d) { outlineDarken_ = d; }
+    // Settings. The visual/overlay appearance knobs (fog, outlines, stereo,
+    // labels, annotations, arrows, overlay sizing, custom colors) live on
+    // view() — a cohesive ViewSettings. The accessors below delegate to it for
+    // back-compat; new code may go through view() directly.
+    using ColorRGB = ViewSettings::ColorRGB;
+    using OverlaySizeMode = ViewSettings::OverlaySizeMode;
+    ViewSettings& view() { return view_; }
+    const ViewSettings& view() const { return view_; }
+
+    float fogStrength() const { return view_.fogStrength(); }
+    void setFogStrength(float s) { view_.setFogStrength(s); }
+    bool outlineEnabled() const { return view_.outlineEnabled(); }
+    void setOutlineEnabled(bool v) { view_.setOutlineEnabled(v); }
+    bool screenshotOverlay() const { return view_.screenshotOverlay(); }
+    void setScreenshotOverlay(bool v) { view_.setScreenshotOverlay(v); }
+    float outlineThreshold() const { return view_.outlineThreshold(); }
+    void setOutlineThreshold(float t) { view_.setOutlineThreshold(t); }
+    float outlineDarken() const { return view_.outlineDarken(); }
+    void setOutlineDarken(float d) { view_.setOutlineDarken(d); }
     bool autoCenter() const { return autoCenter_; }
     void setForcedProtocol(GraphicsProtocol p) { forcedProtocol_ = p; }
     void setAutoCenter(bool v) { autoCenter_ = v; }
 
-    StereoMode stereoMode() const { return stereoMode_; }
-    void setStereoMode(StereoMode m) { stereoMode_ = m; }
-    float stereoAngle() const { return stereoAngle_; }
-    void setStereoAngle(float deg) { stereoAngle_ = deg; }
+    StereoMode stereoMode() const { return view_.stereoMode(); }
+    void setStereoMode(StereoMode m) { view_.setStereoMode(m); }
+    float stereoAngle() const { return view_.stereoAngle(); }
+    void setStereoAngle(float deg) { view_.setStereoAngle(deg); }
 
-    // Overlay sizing — labels, measurement dashes/captions, selection rings.
-    // The cell-derived defaults render fine on small canvases but vanish at
-    // hi-DPI screenshot sizes (issue #25). Each knob has its own setting;
-    // overlayScale_ is a global multiplier applied on top.
-    int labelFontSize() const { return labelFontSize_; }
-    void setLabelFontSize(int px) { labelFontSize_ = px; }
+    int labelFontSize() const { return view_.labelFontSize(); }
+    void setLabelFontSize(int px) { view_.setLabelFontSize(px); }
     // Max rows of the live transcript shown above the command line
     // (`:set transcript_lines <n>`). Range-checked by the :set handler.
     int transcriptHintLines() const { return transcriptHintLines_; }
     void setTranscriptHintLines(int n) { transcriptHintLines_ = n; }
-    int annotationFontSize() const { return annotationFontSize_; }
-    void setAnnotationFontSize(int px) { annotationFontSize_ = px; }
-    int annotationLineWidth() const { return annotationLineWidth_; }
-    void setAnnotationLineWidth(int px) { annotationLineWidth_ = px; }
-    float overlayScale() const { return overlayScale_; }
-    void setOverlayScale(float s) { overlayScale_ = s; }
+    int annotationFontSize() const { return view_.annotationFontSize(); }
+    void setAnnotationFontSize(int px) { view_.setAnnotationFontSize(px); }
+    int annotationLineWidth() const { return view_.annotationLineWidth(); }
+    void setAnnotationLineWidth(int px) { view_.setAnnotationLineWidth(px); }
+    float overlayScale() const { return view_.overlayScale(); }
+    void setOverlayScale(float s) { view_.setOverlayScale(s); }
 
-    // Per-render auto-scale model (issue #48). With Pixels the *_font_size
-    // knobs are interpreted as raw screen pixels, so a hi-DPI screenshot
-    // renders labels tiny relative to the canvas. Physical treats them as
-    // point sizes (1 pt = liveDpi_/72 px live) and rescales by the
-    // screenshot's DPI so a `:screenshot W H 300` looks like the same figure
-    // printed at 300 dpi. Relative (default) interprets them as "pixels at
-    // referenceCanvasHeight_ tall canvas" and rescales by canvasH/refH so a
-    // rough 1200x900 render and a final 2400x1800 render show labels at the
-    // same fraction of the canvas (issue #98) — a single script round-trips
-    // between rough and hi-DPI sizes. Set `:set size_mode pixels` for the
-    // pre-#48 fixed-pixel behavior.
-    enum class OverlaySizeMode { Pixels, Physical, Relative };
-    OverlaySizeMode overlaySizeMode() const { return overlaySizeMode_; }
-    void setOverlaySizeMode(OverlaySizeMode m) { overlaySizeMode_ = m; }
-    int referenceCanvasHeight() const { return referenceCanvasHeight_; }
-    void setReferenceCanvasHeight(int h) { referenceCanvasHeight_ = h; }
-    int liveDpi() const { return liveDpi_; }
-    void setLiveDpi(int dpi) { liveDpi_ = dpi; }
-    // Compute the auto-scale multiplier for the given render context.
-    // Returns 1.0 in Pixels mode (back-compat) or when canvas/dpi look
-    // bogus, so callers don't have to special-case those.
-    float computeRenderScale(int canvasHeight, int dpi) const;
+    OverlaySizeMode overlaySizeMode() const { return view_.overlaySizeMode(); }
+    void setOverlaySizeMode(OverlaySizeMode m) { view_.setOverlaySizeMode(m); }
+    int referenceCanvasHeight() const { return view_.referenceCanvasHeight(); }
+    void setReferenceCanvasHeight(int h) { view_.setReferenceCanvasHeight(h); }
+    int liveDpi() const { return view_.liveDpi(); }
+    void setLiveDpi(int dpi) { view_.setLiveDpi(dpi); }
+    float computeRenderScale(int canvasHeight, int dpi) const {
+        return view_.computeRenderScale(canvasHeight, dpi);
+    }
 
-    // Text outline / halo for label and annotation legibility (issue #49).
-    // When enabled, drawTextOutlinedRGB paints a `*OutlineThickness_`-wide
-    // halo around each glyph in `*OutlineColor_` before the body color, so
-    // text reads cleanly against any background. Auto color (nullopt)
-    // picks white-on-dark / black-on-light against the body color.
-    bool labelOutline() const { return labelOutline_; }
-    void setLabelOutline(bool on) { labelOutline_ = on; }
-    int labelOutlineThickness() const { return labelOutlineThickness_; }
-    void setLabelOutlineThickness(int t) { labelOutlineThickness_ = t; }
-    bool annotationOutline() const { return annotationOutline_; }
-    void setAnnotationOutline(bool on) { annotationOutline_ = on; }
-    int annotationOutlineThickness() const { return annotationOutlineThickness_; }
-    void setAnnotationOutlineThickness(int t) { annotationOutlineThickness_ = t; }
+    bool labelOutline() const { return view_.labelOutline(); }
+    void setLabelOutline(bool on) { view_.setLabelOutline(on); }
+    int labelOutlineThickness() const { return view_.labelOutlineThickness(); }
+    void setLabelOutlineThickness(int t) { view_.setLabelOutlineThickness(t); }
+    bool annotationOutline() const { return view_.annotationOutline(); }
+    void setAnnotationOutline(bool on) { view_.setAnnotationOutline(on); }
+    int annotationOutlineThickness() const { return view_.annotationOutlineThickness(); }
+    void setAnnotationOutlineThickness(int t) { view_.setAnnotationOutlineThickness(t); }
 
-    // Custom overlay colors (issue #30, #31). Each is std::optional —
-    // unset means "use the legacy default color constant" (white for
-    // labels, yellow for annotation captions / measurement lines, plain
-    // darken for outlines). Set via :set <kind>_color <named|#hex|rgb()>.
-    using ColorRGB = std::array<uint8_t, 3>;
-    const std::optional<ColorRGB>& labelColor()                 const { return labelColor_; }
-    const std::optional<ColorRGB>& annotationColor()            const { return annotationColor_; }
-    const std::optional<ColorRGB>& measurementLineColor()       const { return measurementLineColor_; }
-    const std::optional<ColorRGB>& outlineColor()               const { return outlineColor_; }
-    const std::optional<ColorRGB>& labelOutlineColor()          const { return labelOutlineColor_; }
-    const std::optional<ColorRGB>& annotationOutlineColor()     const { return annotationOutlineColor_; }
-    void setLabelColor(std::optional<ColorRGB> c)             { labelColor_             = c; }
-    void setAnnotationColor(std::optional<ColorRGB> c)        { annotationColor_        = c; }
-    void setMeasurementLineColor(std::optional<ColorRGB> c)   { measurementLineColor_   = c; }
-    void setOutlineColor(std::optional<ColorRGB> c)           { outlineColor_           = c; }
-    void setLabelOutlineColor(std::optional<ColorRGB> c)      { labelOutlineColor_      = c; }
-    void setAnnotationOutlineColor(std::optional<ColorRGB> c) { annotationOutlineColor_ = c; }
-    // Pick the auto outline color from a body color: white on dark
-    // bodies, black on light bodies. Used when *OutlineColor_ is unset.
+    const std::optional<ColorRGB>& labelColor()             const { return view_.labelColor(); }
+    const std::optional<ColorRGB>& annotationColor()        const { return view_.annotationColor(); }
+    const std::optional<ColorRGB>& measurementLineColor()   const { return view_.measurementLineColor(); }
+    const std::optional<ColorRGB>& outlineColor()           const { return view_.outlineColor(); }
+    const std::optional<ColorRGB>& labelOutlineColor()      const { return view_.labelOutlineColor(); }
+    const std::optional<ColorRGB>& annotationOutlineColor() const { return view_.annotationOutlineColor(); }
+    void setLabelColor(std::optional<ColorRGB> c)             { view_.setLabelColor(c); }
+    void setAnnotationColor(std::optional<ColorRGB> c)        { view_.setAnnotationColor(c); }
+    void setMeasurementLineColor(std::optional<ColorRGB> c)   { view_.setMeasurementLineColor(c); }
+    void setOutlineColor(std::optional<ColorRGB> c)           { view_.setOutlineColor(c); }
+    void setLabelOutlineColor(std::optional<ColorRGB> c)      { view_.setLabelOutlineColor(c); }
+    void setAnnotationOutlineColor(std::optional<ColorRGB> c) { view_.setAnnotationOutlineColor(c); }
     static ColorRGB autoOutlineColor(uint8_t r, uint8_t g, uint8_t b) {
-        int luma = (r * 299 + g * 587 + b * 114) / 1000;
-        return luma < 128 ? ColorRGB{255, 255, 255} : ColorRGB{0, 0, 0};
+        return ViewSettings::autoOutlineColor(r, g, b);
     }
-    OutlineMode outlineMode() const { return outlineMode_; }
-    void setOutlineMode(OutlineMode m) { outlineMode_ = m; }
-    // Pre-multiplied effective values used by the overlay renderer. The
-    // renderScaleHint_ factor is set transiently by the render entry
-    // points (live and screenshot) based on overlaySizeMode_ + the
-    // current canvas size + DPI — see computeRenderScale().
-    int effectiveLabelFontSize() const {
-        return std::max(4, static_cast<int>(std::lround(labelFontSize_ * overlayScale_ * renderScaleHint_)));
-    }
-    int effectiveAnnotationFontSize() const {
-        return std::max(4, static_cast<int>(std::lround(annotationFontSize_ * overlayScale_ * renderScaleHint_)));
-    }
-    int effectiveAnnotationLineWidth() const {
-        return std::max(1, static_cast<int>(std::lround(annotationLineWidth_ * overlayScale_ * renderScaleHint_)));
-    }
-    int effectiveArrowThickness() const {
-        return std::max(1, static_cast<int>(std::lround(arrowThickness_ * overlayScale_ * renderScaleHint_)));
-    }
-    int effectiveArrowHeadSize() const {
-        return std::max(2, static_cast<int>(std::lround(arrowHeadSize_ * overlayScale_ * renderScaleHint_)));
-    }
-    // Set/clear the transient hint. Use the RAII helper below instead of
-    // calling these directly so the previous value is always restored.
-    float renderScaleHint() const { return renderScaleHint_; }
-    void setRenderScaleHint(float s) { renderScaleHint_ = s; }
+    OutlineMode outlineMode() const { return view_.outlineMode(); }
+    void setOutlineMode(OutlineMode m) { view_.setOutlineMode(m); }
+    int effectiveLabelFontSize() const { return view_.effectiveLabelFontSize(); }
+    int effectiveAnnotationFontSize() const { return view_.effectiveAnnotationFontSize(); }
+    int effectiveAnnotationLineWidth() const { return view_.effectiveAnnotationLineWidth(); }
+    int effectiveArrowThickness() const { return view_.effectiveArrowThickness(); }
+    int effectiveArrowHeadSize() const { return view_.effectiveArrowHeadSize(); }
+    float renderScaleHint() const { return view_.renderScaleHint(); }
+    void setRenderScaleHint(float s) { view_.setRenderScaleHint(s); }
+    // Transient per-render scale hint, restored on scope exit. Use this RAII
+    // helper instead of poking setRenderScaleHint directly.
     struct RenderScaleScope {
         Application& app;
         float saved;
         RenderScaleScope(Application& a, int canvasH, int dpi)
-            : app(a), saved(a.renderScaleHint_) {
-            a.renderScaleHint_ = a.computeRenderScale(canvasH, dpi);
+            : app(a), saved(a.view_.renderScaleHint()) {
+            a.view_.setRenderScaleHint(a.view_.computeRenderScale(canvasH, dpi));
         }
-        ~RenderScaleScope() { app.renderScaleHint_ = saved; }
+        ~RenderScaleScope() { app.view_.setRenderScaleHint(saved); }
         RenderScaleScope(const RenderScaleScope&)            = delete;
         RenderScaleScope& operator=(const RenderScaleScope&) = delete;
         RenderScaleScope(RenderScaleScope&&)                 = delete;
@@ -492,13 +450,9 @@ private:
     // the survivors. Without a shebang, scripts inherit frame[0] —
     // back-compat for pre-#67 scripts.
     std::vector<std::unordered_map<std::string, Register>> regStack_{1};
-
-    // User-defined script functions (`:def name(p1, ...) ... :enddef`). Calling
-    // `name a b` runs the body in a fresh local frame with the params seeded as
-    // env vars; :return exits early. scriptFnDepth_ guards runaway recursion.
-    struct UserScriptFn { std::vector<std::string> params; std::vector<std::string> body; };
-    std::unordered_map<std::string, UserScriptFn> userScriptFns_;
-    int scriptFnDepth_ = 0;
+    // The script execution engine. Drives runScriptStream / interactive
+    // command lines; owns the :def user-function table + recursion guard.
+    std::unique_ptr<ScriptRunner> script_;
 public:
     std::unordered_map<std::string, Register>& registers() { return regStack_.back(); }
     const std::unordered_map<std::string, Register>& registers() const { return regStack_.back(); }
@@ -669,8 +623,6 @@ private:
     // unused (top level has no caller).
     std::vector<std::vector<std::string>> exportStack_{ {} };
 
-    BgMode bgMode_ = BgMode::Transparent;
-    uint8_t bgCustomR_ = 0, bgCustomG_ = 0, bgCustomB_ = 0;
     bool verbose_ = false;
 
 public:
@@ -747,9 +699,6 @@ public:
     };
 private:
     std::vector<ArrowOverlay> arrows_;
-    std::optional<std::array<uint8_t, 3>> arrowColor_;
-    int arrowThickness_ = 2;
-    int arrowHeadSize_  = 8;
 
 public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
@@ -790,12 +739,12 @@ public:
     const std::vector<FreeLabel>& freeLabels() const { return freeLabels_; }
     std::vector<ArrowOverlay>& arrows() { return arrows_; }
     const std::vector<ArrowOverlay>& arrows() const { return arrows_; }
-    const std::optional<ColorRGB>& arrowColor() const { return arrowColor_; }
-    void setArrowColor(std::optional<ColorRGB> c) { arrowColor_ = c; }
-    int arrowThickness() const { return arrowThickness_; }
-    void setArrowThickness(int t) { arrowThickness_ = t; }
-    int arrowHeadSize() const { return arrowHeadSize_; }
-    void setArrowHeadSize(int s) { arrowHeadSize_ = s; }
+    const std::optional<ColorRGB>& arrowColor() const { return view_.arrowColor(); }
+    void setArrowColor(std::optional<ColorRGB> c) { view_.setArrowColor(c); }
+    int arrowThickness() const { return view_.arrowThickness(); }
+    void setArrowThickness(int t) { view_.setArrowThickness(t); }
+    int arrowHeadSize() const { return view_.arrowHeadSize(); }
+    void setArrowHeadSize(int s) { view_.setArrowHeadSize(s); }
     // Drop every per-atom label + every measurement/angle/dihedral entry.
     // Shared by `:overlay clear` and `:run --fresh`; keeping them in lockstep
     // here means a future overlay-list addition (e.g. arrows, axes) is wired
@@ -832,39 +781,13 @@ private:
     int64_t lastFrameMs_ = 0;
     int framesToSkip_ = 0;
     int frameCounter_ = 0;
-    float fogStrength_ = 0.35f;
-    bool outlineEnabled_ = true;
-    // Include the $sele / pk halo in :screenshot PNGs. Default off so
-    // editor HUD state (transient selection cue) doesn't bake into
-    // figure exports. Live render and stereo render always show the
-    // halo. Issue #96.
-    bool screenshotOverlay_ = false;
-    float outlineThreshold_ = 0.3f;
-    StereoMode stereoMode_ = StereoMode::Off;
-    float stereoAngle_ = 6.0f;  // total parallax in degrees (eyes ±half)
-    float outlineDarken_ = 0.15f;
-    int labelFontSize_ = 14;
-    int annotationFontSize_ = 14;
-    int annotationLineWidth_ = 2;
-    float overlayScale_ = 1.0f;
-    OverlaySizeMode overlaySizeMode_ = OverlaySizeMode::Relative;
-    int referenceCanvasHeight_ = 1080;
-    int liveDpi_ = 96;
-    // Set transiently by RenderScaleScope at the top of each render pass.
-    // Lives outside overlayScale_ so the user-visible scale knob isn't
-    // mutated by screenshot dispatch.
-    float renderScaleHint_ = 1.0f;
-    std::optional<std::array<uint8_t, 3>> labelColor_;
-    std::optional<std::array<uint8_t, 3>> annotationColor_;
-    std::optional<std::array<uint8_t, 3>> measurementLineColor_;
-    std::optional<std::array<uint8_t, 3>> outlineColor_;
-    std::optional<std::array<uint8_t, 3>> labelOutlineColor_;
-    std::optional<std::array<uint8_t, 3>> annotationOutlineColor_;
-    bool labelOutline_ = false;
-    int  labelOutlineThickness_ = 2;
-    bool annotationOutline_ = false;
-    int  annotationOutlineThickness_ = 2;
-    OutlineMode outlineMode_ = OutlineMode::Edge;
+    // Visual / overlay appearance knobs (fog, outlines, stereo, labels,
+    // annotations, arrows, overlay sizing, custom colors). Reached via view();
+    // the screenshotOverlay note below applies to view_.screenshotOverlay():
+    // include the $sele / pk halo in :screenshot PNGs (default off so editor
+    // HUD state doesn't bake into figure exports; live + stereo always show
+    // it — issue #96).
+    ViewSettings view_;
     bool autoCenter_ = true;
     GraphicsProtocol forcedProtocol_ = GraphicsProtocol::None;
 
@@ -948,7 +871,7 @@ private:
                                         float aspectYX);
     void restoreStereoCamera(const std::array<float, 9>& savedRot);
     int stereoEyeCount() const {
-        return stereoMode_ == StereoMode::Off ? 1 : 2;
+        return view_.stereoMode() == StereoMode::Off ? 1 : 2;
     }
 
     // Focus Selection mode (Mol*-style click-to-focus).

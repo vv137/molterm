@@ -4,9 +4,9 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 
 #include "molterm/core/VdwTable.h"
+#include "molterm/repr/ReprUtil.h"
 
 namespace molterm {
 
@@ -324,17 +324,6 @@ constexpr int kCornerOffset[8][3] = {
     {0,1,0},{1,1,0},{1,1,1},{0,1,1},
 };
 
-// FNV-1a accumulation helpers for the cache key.
-inline void fnv(std::uint64_t& h, std::uint64_t v) {
-    h ^= v;
-    h *= 1099511628211ULL;
-}
-inline void fnvf(std::uint64_t& h, float f) {
-    std::uint32_t bits;
-    std::memcpy(&bits, &f, sizeof(bits));
-    fnv(h, bits);
-}
-
 } // namespace
 
 void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
@@ -342,21 +331,21 @@ void SurfaceRepr::rebuildIfNeeded(const MolObject& mol) {
     const auto& atoms = ctx.atoms;
 
     // ---- cache key over everything that affects geometry or colour ---------
-    std::uint64_t key = 1469598103934665603ULL;
-    fnv(key, static_cast<std::uint64_t>(mode_));
-    fnvf(key, probe_);
-    fnvf(key, resolution_);
-    fnvf(key, scale_);
-    fnvf(key, smoothness_);
-    fnvf(key, isoValue_);
-    fnv(key, static_cast<std::uint64_t>(mol.colorScheme()));
-    fnv(key, atoms.size());
+    std::uint64_t key = kFnvOffset;
+    fnvFold(key, static_cast<std::uint64_t>(mode_));
+    fnvFoldFloat(key, probe_);
+    fnvFoldFloat(key, resolution_);
+    fnvFoldFloat(key, scale_);
+    fnvFoldFloat(key, smoothness_);
+    fnvFoldFloat(key, isoValue_);
+    fnvFold(key, static_cast<std::uint64_t>(mol.colorScheme()));
+    fnvFold(key, atoms.size());
     for (int i = 0; i < static_cast<int>(atoms.size()); ++i) {
         if (!ctx.visible(i)) continue;
         const auto& a = atoms[i];
-        fnv(key, static_cast<std::uint64_t>(i));
-        fnvf(key, a.x); fnvf(key, a.y); fnvf(key, a.z);
-        fnv(key, static_cast<std::uint64_t>(ctx.colorFor(i)));
+        fnvFold(key, static_cast<std::uint64_t>(i));
+        fnvFoldFloat(key, a.x); fnvFoldFloat(key, a.y); fnvFoldFloat(key, a.z);
+        fnvFold(key, static_cast<std::uint64_t>(ctx.colorFor(i)));
     }
     if (cacheValid_ && key == cacheKey_) return;
 

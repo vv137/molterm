@@ -152,6 +152,10 @@ set(MOLTERM_CORE_SOURCES
     src/app/Tab.cpp
     src/app/TabManager.cpp
     src/app/Application.cpp
+    src/app/Application_Focus.cpp
+    src/app/Application_Input.cpp
+    src/app/Application_Render.cpp
+    src/app/ScriptRunner.cpp
     src/app/CommandScope.cpp
     src/app/PathPatterns.cpp
     # Config

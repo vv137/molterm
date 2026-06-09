@@ -1,5 +1,6 @@
 #include "molterm/analysis/ContactMap.h"
 #include "molterm/core/BondTable.h"
+#include "molterm/core/Geometry.h"
 #include "molterm/core/SpatialHash.h"
 
 #include <algorithm>
@@ -233,10 +234,7 @@ void ContactMap::compute(const MolObject& mol, float cutoff) {
         for (int j = i + 1; j < n; ++j) {
             int aj = residues_[j].caAtomIdx;
             if (aj < 0) continue;
-            float dx = xi - atoms[aj].x;
-            float dy = yi - atoms[aj].y;
-            float dz = zi - atoms[aj].z;
-            float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            float d = geom::distance(xi, yi, zi, atoms[aj].x, atoms[aj].y, atoms[aj].z);
             distMatrix_[static_cast<size_t>(i) * n + j] = d;
             distMatrix_[static_cast<size_t>(j) * n + i] = d;
         }
