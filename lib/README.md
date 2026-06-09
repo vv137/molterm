@@ -8,6 +8,10 @@ composition of the register primitives (`:let` + `pos()` + `centroid()`/`com()`
 `min`/`max`/…), so the formula itself *is* the documentation — fork the script
 for variants, no rebuild required.
 
+> For the scripting language itself — expression grammar, control flow
+> (`:if`/`:foreach`/`:break`/`:continue`/`:return`), `:def` functions, scope,
+> and `:dump` JSON output — see [`docs/SCRIPTING.md`](../docs/SCRIPTING.md).
+
 ## Lookup chain
 
 `:run @lib/<name>` resolves `<name>` (with or without trailing `.mt`)
@@ -286,6 +290,27 @@ can't do arithmetic.
 :setenv CH A ; :setenv PREV 24 ; :setenv RES 25 ; :setenv NEXT 26
 :run @lib/phi_psi
 :registers     # → phi ≈ -65.5°,  psi ≈ -44.4°  (α-helical)
+```
+
+### `residue_scan.mt` — per-residue distance scan over a selection
+
+Walks every residue of `${SEL}` with `:foreach <var> in <selection>` and prints
+each residue's Cα distance to a reference atom `${REF}` — a quick proximity
+profile (e.g. rank a loop by distance to a ligand atom). Unlike `phi_psi.mt`,
+the loop needs no residue-number arithmetic: the selection drives iteration and
+binds `${r}` (a `chain:resi` spec), `${r_chain}`, `${r_resi}`, `${r_resn}`.
+
+| Var | Meaning | Example (1UBQ) |
+| --- | --- | --- |
+| `SEL` | selection to walk    | `"chain A and resi 1-6"` |
+| `REF` | reference atom spec  | `A:76:CA` |
+
+Output: one `<chain>:<resi> <resn>  <dist> A` line per residue on stdout.
+
+```text
+:load 1ubq.cif
+:setenv SEL "chain A and resi 1-6" ; :setenv REF A:76:CA
+:run @lib/residue_scan     # → A:1 MET 37.06 A, A:2 GLN 34.67 A, …
 ```
 
 ## Contributing

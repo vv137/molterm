@@ -372,6 +372,11 @@ Forks live at `~/.molterm/lib/`; shipped baselines stay untouched. See
 [`lib/README.md`](lib/README.md) for the recipe catalog with required
 env vars, output registers, and a validated PDB example per recipe.
 
+The full scripting language — expression builtins, control flow (`:if`,
+`:foreach` over ranges and selections, `:break`/`:continue`/`:return`),
+`:def` functions, scope/export, and `:dump` JSON output — is documented in
+[`docs/SCRIPTING.md`](docs/SCRIPTING.md).
+
 Shipped recipes declare a `#!molterm scope=local export=<names>`
 shebang, so they run in their own register frame and only the named
 output registers (`$crossing`, `$incident`, …) propagate back to the
