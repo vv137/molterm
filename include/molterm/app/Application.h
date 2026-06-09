@@ -550,6 +550,9 @@ private:
     // shown by :messages. Input lines are stored ':'-prefixed; output lines
     // indented. Capped to the most recent kTranscriptMax lines.
     std::vector<std::string> cmdTranscript_;
+    // Scroll offset for the live transcript shown above the active command line
+    // (0 = most recent; PgUp/PgDn page back/forward). Reset when `:` opens.
+    int transcriptHintScroll_ = 0;
 
     // Contact map + interface overlay state
     ContactMapPanel contactMapPanel_;

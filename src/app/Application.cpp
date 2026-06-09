@@ -1841,7 +1841,8 @@ void Application::handleAction(Action action) {
         case Action::EnterCommand:
             inputHandler_->setMode(Mode::Command);
             cmdLine_.activate(':');
-            dirty({C::CommandLine, C::StatusBar});
+            transcriptHintScroll_ = 0;   // start the live transcript at the bottom
+            dirty({C::CommandLine, C::StatusBar, C::Viewport});
             break;
         case Action::EnterSearch:
             inputHandler_->setMode(Mode::Search);
@@ -1868,7 +1869,9 @@ void Application::handleAction(Action action) {
                 cmdLine_.setMessage("Inspect mode | sele=" +
                     std::to_string(namedSelections_[kSele].size()));
             }
-            dirty({C::CommandLine, C::StatusBar});
+            // Viewport too: closing the command line must clear the dimmed
+            // transcript hint drawn over the viewport bottom.
+            dirty({C::CommandLine, C::StatusBar, C::Viewport});
             break;
 
         // Command mode actions — commands can affect any component
@@ -2365,6 +2368,19 @@ void Application::handleLineEdit(int key) {
 }
 
 void Application::handleCommandInput(int key) {
+    // PgUp/PgDn scroll the live transcript shown above the command line
+    // (they're meaningless for single-line editing otherwise).
+    if (key == KEY_PPAGE || key == KEY_NPAGE) {
+        int step = 3;
+        transcriptHintScroll_ = std::max(0,
+            transcriptHintScroll_ + (key == KEY_PPAGE ? step : -step));
+        if (transcriptHintScroll_ > static_cast<int>(cmdTranscript_.size()))
+            transcriptHintScroll_ = static_cast<int>(cmdTranscript_.size());
+        layout_.markDirty(Layout::Component::Viewport);
+        layout_.markDirty(Layout::Component::CommandLine);
+        needsRedraw_ = true;
+        return;
+    }
     handleLineEdit(key);
 }
 
@@ -2723,8 +2739,8 @@ void Application::renderViewport() {
         win.printColored(std::min(row, oy + oh - 1), footerX, footer, kColorTabActive);
     }
 
-    // Show history hint overlay when command line is active and empty
-    cmdLine_.renderHistoryHint(win);
+    // Live transcript (input + output) above the active command line.
+    cmdLine_.renderHistoryHint(win, cmdTranscript_, transcriptHintScroll_);
 
   if (overlayVisible_) {
     bool isPixel = (rendererType_ == RendererType::Pixel);

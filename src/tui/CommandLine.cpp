@@ -20,31 +20,30 @@ void CommandLine::render(Window& win) {
     win.refresh();
 }
 
-void CommandLine::renderHistoryHint(Window& win) {
-    if (!active_ || !input_.empty()) return;
-    if (history_.empty()) return;
+void CommandLine::renderHistoryHint(Window& win,
+                                    const std::vector<std::string>& transcript,
+                                    int scroll) {
+    if (!active_ || transcript.empty()) return;
 
-    int maxLines = std::min(static_cast<int>(history_.size()), 5);
+    const int kMaxRows = 8;
     int winH = win.height();
-    int startY = winH - maxLines;
-    if (startY < 0) startY = 0;
+    if (winH <= 0) return;
+    int rows = std::min({kMaxRows, winH, static_cast<int>(transcript.size())});
 
-    // Draw from bottom up: most recent at the bottom
-    for (int i = 0; i < maxLines; ++i) {
-        int histIdx = static_cast<int>(history_.size()) - maxLines + i;
-        if (histIdx < 0) continue;
+    // Most recent at the bottom; `scroll` pages backward into older lines.
+    int total = static_cast<int>(transcript.size());
+    int maxScroll = std::max(0, total - rows);
+    if (scroll < 0) scroll = 0;
+    if (scroll > maxScroll) scroll = maxScroll;
+    int endIdx = total - scroll;          // exclusive
+    int startIdx = endIdx - rows;
+    int startY = winH - rows;
 
-        int y = startY + i;
-        if (y >= winH) break;
-
-        // Dim appearance: line number + command
-        std::string line = " " + std::to_string(histIdx + 1) + "  :" + history_[histIdx];
-        // Truncate
-        int maxLen = win.width() - 1;
-        if (static_cast<int>(line.size()) > maxLen)
-            line = line.substr(0, maxLen);
-
-        win.printColored(y, 0, line, kColorGray);
+    int maxLen = win.width() - 1;
+    for (int i = 0; i < rows; ++i) {
+        std::string line = transcript[startIdx + i];   // ':'-prefixed input / indented output
+        if (static_cast<int>(line.size()) > maxLen) line = line.substr(0, maxLen);
+        win.printColored(startY + i, 0, line, kColorGray);
     }
 }
 

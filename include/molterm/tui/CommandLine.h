@@ -12,8 +12,11 @@ class CommandLine : public Widget {
 public:
     void render(Window& win);
 
-    // Render recent history overlay above command line (in viewport bottom)
-    void renderHistoryHint(Window& win);
+    // Render the recent command transcript (input + output) above the command
+    // line, in the viewport bottom, dimmed. `scroll` (>=0) pages backward into
+    // older lines; 0 keeps the most recent at the bottom.
+    void renderHistoryHint(Window& win, const std::vector<std::string>& transcript,
+                           int scroll);
 
     // Input handling
     void activate(char prefix = ':');
