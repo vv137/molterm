@@ -21,9 +21,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(gemmi)
 # NOTE: gemmi unconditionally registers a `cpptest` CTest case bound to an
-# EXCLUDE_FROM_ALL executable (never built). It can't be unregistered from this
-# (parent) scope in CMake 3.16, so molterm's own tests carry a `molterm` label
-# and CI/`ctest` select them with `-L molterm` (see tests/CMakeLists.txt).
+# EXCLUDE_FROM_ALL executable (never built), which a bare `ctest` would report
+# as failed. It's silenced via CTestCustom.cmake in the test section below.
+# molterm's own tests also carry a `molterm` label, so `ctest -L molterm`
+# remains a valid way to run just them (see tests/CMakeLists.txt).
 
 # toml++ — TOML config parser (header-only)
 FetchContent_Declare(
@@ -246,6 +247,13 @@ target_compile_options(molterm PRIVATE -Wall -Wextra -Wpedantic)
 option(MOLTERM_BUILD_TESTS "Build the unit test suite" ON)
 if(MOLTERM_BUILD_TESTS)
     enable_testing()
+    # gemmi (above) unconditionally registers a `cpptest` CTest case bound to an
+    # EXCLUDE_FROM_ALL executable that's never built, so a bare `ctest` reports
+    # it as a failure. v0.7.0 exposes no option to disable it and CMake 3.16
+    # can't unregister a subdirectory's test from this scope — so tell CTest to
+    # ignore it via CTestCustom.cmake. molterm's own tests still run normally.
+    file(WRITE "${CMAKE_BINARY_DIR}/CTestCustom.cmake"
+         "set(CTEST_CUSTOM_TESTS_IGNORE cpptest)\n")
     add_subdirectory(tests)
 endif()
 
