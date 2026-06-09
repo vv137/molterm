@@ -453,9 +453,11 @@ bool isControlKeyword(const std::string& line, const char* kw, std::string& body
 }
 }  // namespace
 
-bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
-                                       size_t lo, size_t hi,
-                                       ScriptRunResult& result, bool strict) {
+Application::ScriptFlow Application::dispatchScriptLines(
+        const std::vector<std::string>& lines,
+        size_t lo, size_t hi,
+        ScriptRunResult& result, bool strict) {
+    using Flow = ScriptFlow;
     // Centralise the "record a failure" path so every report (command
     // exec error, bad :if condition, malformed :foreach header, …)
     // contributes uniform context to result.failureList — issue #80.
@@ -626,7 +628,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             auto cond = evalCondition(expanded);
             if (!cond) {
                 recordFailure(i, srcLine, "bad :if condition: " + expanded);
-                if (strict) { result.stopped = true; return false; }
+                if (strict) { result.stopped = true; return Flow::Stopped; }
                 ifStack.push_back({false, false});
             } else {
                 ifStack.push_back({*cond, *cond});
@@ -661,7 +663,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             size_t endIdx = findMatchingClose(i, "foreach", "end", matched);
             if (!matched) {
                 recordFailure(i, srcLine, "unmatched :foreach (no :end found)");
-                if (strict) { result.stopped = true; return false; }
+                if (strict) { result.stopped = true; return Flow::Stopped; }
                 i = endIdx;
                 continue;
             }
@@ -672,7 +674,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             auto inPos = expanded.find(" in ");
             if (inPos == std::string::npos) {
                 recordFailure(i, srcLine, "bad :foreach header (expected `VAR in LO..HI`): " + expanded);
-                if (strict) { result.stopped = true; return false; }
+                if (strict) { result.stopped = true; return Flow::Stopped; }
                 i = endIdx;
                 continue;
             }
@@ -684,7 +686,7 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             auto dotPos = rangeExpr.find("..");
             if (dotPos == std::string::npos) {
                 recordFailure(i, srcLine, "bad :foreach range (expected LO..HI): " + rangeExpr);
-                if (strict) { result.stopped = true; return false; }
+                if (strict) { result.stopped = true; return Flow::Stopped; }
                 i = endIdx;
                 continue;
             }
@@ -694,17 +696,28 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
                 hiVal = std::stoi(rangeExpr.substr(dotPos + 2));
             } catch (const std::exception&) {
                 recordFailure(i, srcLine, "bad :foreach numeric range: " + rangeExpr);
-                if (strict) { result.stopped = true; return false; }
+                if (strict) { result.stopped = true; return Flow::Stopped; }
                 i = endIdx;
                 continue;
             }
+            // Scope the loop variable: save any prior binding and restore it
+            // after the loop so `$var` doesn't leak into the enclosing scope.
+            auto& regs = registers();
+            auto prior = regs.find(var);
+            bool hadPrior = prior != regs.end();
+            Register priorVal = hadPrior ? prior->second : Register{};
+            Flow outFlow = Flow::Normal;
             for (int v = loVal; v <= hiVal; ++v) {
                 Register r; r.kind = Register::Kind::Scalar; r.scalar = v;
                 registers()[var] = r;
-                if (!dispatchScriptLines(lines, i + 1, endIdx, result, strict)) {
-                    return false;
-                }
+                Flow f = dispatchScriptLines(lines, i + 1, endIdx, result, strict);
+                if (f == Flow::Continue) continue;
+                if (f == Flow::Break) break;
+                if (f == Flow::Stopped || f == Flow::Return) { outFlow = f; break; }
             }
+            if (hadPrior) registers()[var] = priorVal;
+            else          registers().erase(var);
+            if (outFlow != Flow::Normal) return outFlow;
             i = endIdx;       // past the :end
             continue;
         }
@@ -712,12 +725,27 @@ bool Application::dispatchScriptLines(const std::vector<std::string>& lines,
             // Stray :end (foreach consumed its own); ignore.
             continue;
         }
+        // Loop control — only act when no enclosing :if branch is inactive,
+        // so `:if cond / :break / :endif` honors the condition. They unwind to
+        // the nearest :foreach (break/continue) or the script frame (return).
+        if (isControlKeyword(srcLine, "break", body)) {
+            if (anyInactive()) continue;
+            return Flow::Break;
+        }
+        if (isControlKeyword(srcLine, "continue", body)) {
+            if (anyInactive()) continue;
+            return Flow::Continue;
+        }
+        if (isControlKeyword(srcLine, "return", body)) {
+            if (anyInactive()) continue;
+            return Flow::Return;
+        }
 
         // Non-control line. Skip if any enclosing :if branch is inactive.
         if (anyInactive()) continue;
-        if (!runLine(srcLine, i)) return false;
+        if (!runLine(srcLine, i)) return Flow::Stopped;
     }
-    return true;
+    return Flow::Normal;
 }
 
 namespace {

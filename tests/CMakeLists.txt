@@ -27,6 +27,11 @@ foreach(t test_dssp test_sasa)
     add_executable(${t} ${t}.cpp)
     target_link_libraries(${t} PRIVATE molterm_core)
 endforeach()
+# Script-runner integration test — drives control flow through the real binary.
+add_test(NAME test_script
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_script.sh $<TARGET_FILE:molterm>)
+set_tests_properties(test_script PROPERTIES LABELS molterm)
+
 if(MOLTERM_DSSP_FIXTURE AND MOLTERM_DSSP_REF)
     add_test(NAME test_dssp COMMAND test_dssp ${MOLTERM_DSSP_FIXTURE} ${MOLTERM_DSSP_REF})
     add_test(NAME test_sasa COMMAND test_sasa ${MOLTERM_DSSP_FIXTURE} ${MOLTERM_DSSP_REF})

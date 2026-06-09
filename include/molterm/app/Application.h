@@ -191,13 +191,19 @@ private:
     // Block-aware script dispatcher (issue #68). Buffers the script
     // into a line vector then walks it with control-flow tracking —
     // `:if / :elseif / :else / :endif` skip inactive branches;
+    // Control-flow outcome of dispatching a (sub)range of script lines.
+    // Normal: ran to the end. Stopped: strict-mode error halt. Break /
+    // Continue: a :break / :continue propagating up to the enclosing
+    // :foreach. Return: a :return unwinding to the script-frame boundary.
+    enum class ScriptFlow { Normal, Stopped, Break, Continue, Return };
+
     // `:foreach VAR in LO..HI / :end` iterates a numeric range and
     // re-dispatches the body N times. Mutually recursive (foreach
     // body re-enters via the same dispatcher) but bounded by script
     // size, so stack depth = number of nested :foreach loops.
-    bool dispatchScriptLines(const std::vector<std::string>& lines,
-                             size_t lo, size_t hi,
-                             ScriptRunResult& result, bool strict);
+    ScriptFlow dispatchScriptLines(const std::vector<std::string>& lines,
+                                   size_t lo, size_t hi,
+                                   ScriptRunResult& result, bool strict);
 public:
 
     // Expand ${VAR} references against the in-process scriptEnv_ map (set by
