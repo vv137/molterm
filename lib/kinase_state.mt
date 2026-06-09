@@ -48,3 +48,4 @@ let ke_dist = min($_l1, $_l2)
 let _cz   = pos(${KIN_CHAIN}:${DFG_PHE}:CZ)
 let dfg_d1 = distance(pos(${KIN_CHAIN}:${AC_GLU4}:CA), $_cz)
 let dfg_d2 = distance(pos(${KIN_CHAIN}:${B3_LYS}:CA),  $_cz)
+:echo K-E = ${ke_dist:.2f} A, DFG d1/d2 = ${dfg_d1:.2f}/${dfg_d2:.2f} A

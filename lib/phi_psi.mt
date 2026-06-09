@@ -28,3 +28,4 @@ let _phi_raw = dihedral(pos(${CH}:${PREV}:C), pos(${CH}:${RES}:N), pos(${CH}:${R
 let _psi_raw = dihedral(pos(${CH}:${RES}:N), pos(${CH}:${RES}:CA), pos(${CH}:${RES}:C), pos(${CH}:${NEXT}:N))
 let phi = 0.0 - $_phi_raw
 let psi = 0.0 - $_psi_raw
+:echo phi/psi = ${phi:.1f}/${psi:.1f} deg

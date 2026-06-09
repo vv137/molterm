@@ -14,12 +14,17 @@ This document is the language reference. For the analysis-recipe catalog see
 ## Running scripts
 
 ```
-:run path/to/script.mt              # run a script file
-:run @lib/<name>                    # run a shipped/​user recipe (see lib/README.md)
-:run @lib/phi_psi KEY=VAL KEY2=VAL  # pass arguments as KEY=VALUE env vars
-:run script.mt --strict             # abort on the first command error
-:run script.mt --fresh              # clear overlays before running
+:run path/to/script.mt                      # run a script file
+:run @lib/<name>                            # run a shipped/user recipe (see lib/README.md)
+:run @lib/phi_psi CH=A PREV=24 RES=25 NEXT=26   # pass args inline as KEY=VALUE env vars
+:run @lib/label LABEL="hello, world"        # quote values containing spaces or commas
+:run script.mt --strict                     # abort on the first command error
+:run script.mt --fresh                      # clear overlays before running
 ```
+
+Inline `KEY=VALUE` args are seeded into the recipe's env (so `${KEY}` resolves)
+and force a `scope=local` frame — no `:setenv` needed first. Quote a value if it
+contains spaces or commas (`KEY="a, b"`).
 
 A script may begin with a shebang declaring its frame behavior:
 

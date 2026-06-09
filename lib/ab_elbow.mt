@@ -54,3 +54,4 @@ let _ov = ($_sv / abs($_sv)) * $_axv
 let _oc = ($_sc / abs($_sc)) * $_axc
 let bend  = angle($_ov, $_oc)
 let elbow = 180.0 - $bend
+:echo elbow = ${elbow:.1f} deg (bend ${bend:.1f} deg)

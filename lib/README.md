@@ -28,6 +28,26 @@ Forks live at `~/.molterm/lib/`; shipped baselines (delivered by
 --install` to the same location) stay untouched. The updater never
 writes to `~/.molterm/`.
 
+## Passing arguments
+
+Every recipe reads its inputs from env vars. Set them inline on the `:run`
+line as `KEY=VALUE` (no `:setenv` needed) — these seed a local frame, so they
+don't leak into your session:
+
+```text
+:run @lib/phi_psi CH=A PREV=24 RES=25 NEXT=26
+```
+
+Quote a value that contains spaces or commas:
+
+```text
+:run @lib/residue_scan SEL="chain A and resi 1-6" REF=A:76:CA
+```
+
+The per-recipe blocks below use the explicit `:setenv` form for readability, but
+the inline form works for all of them. Each recipe also prints a one-line `:echo`
+summary of its result when run.
+
 ## Shipped recipes
 
 ### `tcr_angles.mt` — TCR-pMHC crossing & incident angle

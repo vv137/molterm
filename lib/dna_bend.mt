@@ -39,3 +39,4 @@ select _h2 = chain ${DNA_CHAIN} and resi ${HALF2} and name P
 let _p1 = helix_axis($_h1)
 let _p2 = helix_axis($_h2)
 let bend = angle($_p1.axis1, $_p2.axis1)
+:echo bend = ${bend:.1f} deg

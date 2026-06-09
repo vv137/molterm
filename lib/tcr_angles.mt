@@ -56,3 +56,4 @@ let _p_proj = $p_axis - dot($p_axis, $groove_normal) * $groove_normal
 let crossing = angle($_v_proj, $_p_proj)
 let _v_to_n  = angle($v_axis, $groove_normal)
 let incident = $_v_to_n - 90.0
+:echo crossing = ${crossing:.1f} deg, incident = ${incident:.1f} deg

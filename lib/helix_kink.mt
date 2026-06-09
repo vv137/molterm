@@ -32,3 +32,4 @@ select _hb = chain ${HELIX_CHAIN} and resi ${SEG2} and name CA
 let _pa = helix_axis($_ha)
 let _pb = helix_axis($_hb)
 let kink = angle($_pa.axis1, $_pb.axis1)
+:echo kink = ${kink:.1f} deg

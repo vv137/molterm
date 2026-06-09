@@ -360,6 +360,14 @@ backbone φ/ψ — composed from the register primitives (`:let` / `pos()` /
 :label corner topright = "incident = ${incident:.1f}°"
 ```
 
+Arguments can also be passed inline on the `:run` line (no `:setenv` needed;
+quote any value with spaces or commas). Each recipe prints a one-line summary:
+
+```vim
+:run @lib/phi_psi CH=A PREV=24 RES=25 NEXT=26          " → phi/psi = -65.5/-44.4 deg
+:run @lib/residue_scan SEL="chain A and resi 1-6" REF=A:76:CA
+```
+
 `@lib/<name>` resolves against this lookup chain (first match wins):
 
 1. `$MOLTERM_LIB_DIR/<name>.mt`

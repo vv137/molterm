@@ -316,7 +316,13 @@ void Application::registerScriptingCommands(CommandRegistry& reg) {
     // it via the command-bar return path would print echo lines
     // twice in script mode (printf during + lastMsg at script end).
     reg.registerCmd("echo", [](Application&, const ParsedCommand& cmd) -> ExecResult {
-        std::string text = joinArgs(cmd.args, 0, cmd.args.size());
+        // Print the raw argument tail verbatim — preserving commas and spacing
+        // the command tokenizer would otherwise collapse. Strip one layer of
+        // surrounding quotes so `:echo "a, b"` and `:echo a, b` both print `a, b`.
+        std::string text = cmd.rawArgs;
+        if (text.size() >= 2 && (text.front() == '"' || text.front() == '\'') &&
+            text.back() == text.front())
+            text = text.substr(1, text.size() - 2);
         if (isHeadless()) {
             // Headless: write straight to stdout for pipelines / agents.
             std::printf("%s\n", text.c_str());
