@@ -65,6 +65,10 @@ out=$(run ':let a = 2 + 3 * 4
 ')
 assert_has "let arithmetic" "$out" "a=14"
 
+out=$(run ':setenv A 1 ; :setenv B 2 ; :echo ${A}-${B}
+')
+assert_has "semicolon chains commands on one line" "$out" "1-2"
+
 out=$(run ':let d = 3.5
 :let v = [1, 2, 3]
 :dump

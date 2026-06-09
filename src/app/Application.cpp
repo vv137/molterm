@@ -1877,9 +1877,16 @@ void Application::handleAction(Action action) {
             cmdLine_.pushHistory(input);
             cmdLine_.deactivate();
             inputHandler_->setMode(Mode::Normal);
-            input = expandScriptVars(input);
-            ExecResult result = cmdRegistry_.execute(*this, input);
-            if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
+            // Route an interactively typed/pasted line through the same
+            // dispatcher scripts use, so it gets identical handling: ';'-
+            // separated commands, ${var} expansion, '#' comments, and
+            // user-defined :def functions. (Pasting a README block like
+            // `:setenv A ; :setenv B` previously ran as one mangled command.)
+            std::vector<std::string> lineBuf = {input};
+            ScriptRunResult sr;
+            dispatchScriptLines(lineBuf, 0, 1, sr, /*strict=*/false);
+            if (!sr.firstFail.empty())     cmdLine_.setMessage(sr.firstFail);
+            else if (!sr.lastMsg.empty())  cmdLine_.setMessage(sr.lastMsg);
             layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
