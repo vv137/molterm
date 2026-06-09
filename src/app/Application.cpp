@@ -1885,8 +1885,10 @@ void Application::handleAction(Action action) {
             std::vector<std::string> lineBuf = {input};
             ScriptRunResult sr;
             dispatchScriptLines(lineBuf, 0, 1, sr, /*strict=*/false);
-            if (!sr.firstFail.empty())     cmdLine_.setMessage(sr.firstFail);
-            else if (!sr.lastMsg.empty())  cmdLine_.setMessage(sr.lastMsg);
+            std::string msg = !sr.firstFail.empty() ? sr.firstFail : sr.lastMsg;
+            if (!msg.empty()) cmdLine_.setMessage(msg);
+            // Keep an input/output transcript for the :messages overlay.
+            recordTranscript(input, msg);
             layout_.markAllDirty(); needsRedraw_ = true;
             break;
         }
@@ -4033,6 +4035,31 @@ void Application::showKeybindingHelp() {
         ":help [cmd]   :load   :fetch   :align   :measure",
         ":focus   :dssp   :interface   :export   :screenshot",
     });
+}
+
+void Application::recordTranscript(const std::string& input, const std::string& output) {
+    static constexpr size_t kTranscriptMax = 1000;
+    if (input.empty()) return;
+    cmdTranscript_.push_back(":" + input);
+    if (!output.empty()) {
+        std::istringstream iss(output);
+        std::string line;
+        while (std::getline(iss, line)) cmdTranscript_.push_back("  " + line);
+    }
+    if (cmdTranscript_.size() > kTranscriptMax)
+        cmdTranscript_.erase(cmdTranscript_.begin(),
+                             cmdTranscript_.begin() +
+                                 (cmdTranscript_.size() - kTranscriptMax));
+}
+
+void Application::showCommandTranscript() {
+    std::vector<std::string> lines = cmdTranscript_;
+    if (lines.empty()) lines.push_back("(no command history yet)");
+    activateOverlay("Command history  (\":\" = input, indented = output)",
+                    lines, {}, "Command history");
+    // Start at the bottom so the most recent commands are visible; the render
+    // path clamps scrollOffset to the last page.
+    infoOverlay_.scrollOffset = static_cast<int>(lines.size());
 }
 
 void Application::showCommandIndex() {

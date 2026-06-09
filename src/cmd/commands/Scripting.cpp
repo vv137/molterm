@@ -118,6 +118,16 @@ void Application::registerScriptingCommands(CommandRegistry& reg) {
     }, ":registers", "List all named registers and their typed values",
        {":registers"}, "Registers");
 
+    // :messages — overlay of recent interactive command input + output, so you
+    // can scroll back through results the status line only showed once.
+    reg.registerCmd("messages", [](Application& app, const ParsedCommand&) -> ExecResult {
+        app.showCommandTranscript();
+        return {true, ""};
+    }, ":messages",
+       "Show the command input/output history overlay (':' marks input lines; "
+       "scroll with PgUp/PgDn, Esc to close).",
+       {":messages"}, "Session");
+
     // :dump [name...] — emit registers as a JSON object to stdout for an agent
     // / pipeline to parse (vs. :registers' human text). All registers, or just
     // the named ones. Keyed by register name; per-kind fields mirror the

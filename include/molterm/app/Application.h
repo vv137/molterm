@@ -120,6 +120,12 @@ public:
     void showCommandIndex();
     void showCommandHelp(const CommandInfo& info);
     void showInterfaceLegend();
+    // Open the command transcript (interactive input + output) overlay.
+    void showCommandTranscript();
+    // Record one interactive command line and its result message in the
+    // transcript (input lines are stored ':'-prefixed). Multi-line output is
+    // split; the buffer is capped.
+    void recordTranscript(const std::string& input, const std::string& output);
 
 private:
     // Activate the centered overlay with the given content. In headless
@@ -539,6 +545,11 @@ private:
     std::optional<ScopeMode> scopeOverride_;
 
     InfoOverlay infoOverlay_;
+
+    // Rolling transcript of interactive command lines + their result output,
+    // shown by :messages. Input lines are stored ':'-prefixed; output lines
+    // indented. Capped to the most recent kTranscriptMax lines.
+    std::vector<std::string> cmdTranscript_;
 
     // Contact map + interface overlay state
     ContactMapPanel contactMapPanel_;
