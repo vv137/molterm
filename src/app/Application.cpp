@@ -1755,6 +1755,10 @@ void Application::handleAction(Action action) {
         case Action::Redraw:
             clearScreenAndRepaint();
             layout_.markAllDirty(); needsRedraw_ = true;
+            // clearScreenAndRepaint() wiped the terminal, but the canvas frame-diff
+            // cache still holds the pre-clear frame — invalidate it so the next render
+            // re-transmits the viewport instead of skipping as "unchanged" (black screen).
+            if (canvas_) canvas_->invalidate();
             framesToSkip_ = 0;
             break;
 
