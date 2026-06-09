@@ -18,6 +18,15 @@
 
 namespace molterm {
 
+// JSON number / vec3 formatters for :dump. %.10g keeps enough precision to
+// round-trip the stored doubles without trailing noise.
+static std::string jnum(double v) {
+    char b[40]; std::snprintf(b, sizeof(b), "%.10g", v); return b;
+}
+static std::string jvec(const std::array<double, 3>& v) {
+    return "[" + jnum(v[0]) + "," + jnum(v[1]) + "," + jnum(v[2]) + "]";
+}
+
 void Application::registerScriptingCommands(CommandRegistry& reg) {
     // :let <name> = <expr> — typed registers (#32, #33, #35).
     //
@@ -107,6 +116,52 @@ void Application::registerScriptingCommands(CommandRegistry& reg) {
         return {true, out};
     }, ":registers", "List all named registers and their typed values",
        {":registers"}, "Registers");
+
+    // :dump [name...] — emit registers as a JSON object to stdout for an agent
+    // / pipeline to parse (vs. :registers' human text). All registers, or just
+    // the named ones. Keyed by register name; per-kind fields mirror the
+    // session format so values round-trip.
+    reg.registerCmd("dump", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
+        const auto& tbl = app.registers();
+        std::vector<std::string> names = cmd.args;
+        if (names.empty())
+            for (const auto& [n, r] : tbl) { (void)r; names.push_back(n); }
+        std::string out = "{";
+        bool first = true;
+        for (const auto& n : names) {
+            auto it = tbl.find(n);
+            if (it == tbl.end()) continue;
+            const Register& r = it->second;
+            out += (first ? "" : ",");
+            first = false;
+            out += "\"" + n + "\":{";
+            switch (r.kind) {
+                case Register::Kind::Scalar:
+                    out += "\"kind\":\"scalar\",\"value\":" + jnum(r.scalar);
+                    break;
+                case Register::Kind::Vec3:
+                    out += "\"kind\":\"vec3\",\"value\":" + jvec(r.vec);
+                    break;
+                case Register::Kind::Pca:
+                    out += "\"kind\":\"pca\",\"center\":" + jvec(r.pca.center) +
+                           ",\"axis1\":" + jvec(r.pca.axis1) +
+                           ",\"axis2\":" + jvec(r.pca.axis2) +
+                           ",\"axis3\":" + jvec(r.pca.axis3) +
+                           ",\"eigvals\":" + jvec(r.pca.eigvals) +
+                           ",\"angle\":" + jnum(r.pca.angle) +
+                           ",\"rmsd\":" + jnum(r.pca.rmsd);
+                    break;
+            }
+            out += "}";
+        }
+        out += "}";
+        std::printf("%s\n", out.c_str());
+        std::fflush(stdout);
+        return {true, ""};
+    }, ":dump [name...]",
+       "Print registers as a JSON object to stdout (all, or only the named "
+       "ones) for machine parsing — the structured counterpart to :registers.",
+       {":dump", ":dump phi psi"}, "Registers");
 
     // :expose <name> [<name> ...] — mark registers for export from the
     // current script frame (issue #67). Each name will be copied into

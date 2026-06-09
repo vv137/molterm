@@ -213,6 +213,35 @@ server.registerTool("run_script", {
   return { content: parts };
 });
 
+server.registerTool("dump_registers", {
+  description: "Run a sequence of molterm commands, then return all named registers " +
+    "(:let results — scalars, vec3 vectors, and pca/superpose results) as structured JSON. " +
+    "Use this instead of run_script + text parsing when you need the computed numeric values " +
+    "back (distances, angles, axes, eigenvalues, RMSD), e.g. after :run @lib/<recipe>.",
+  inputSchema: {
+    commands: z.array(z.string()).describe("molterm commands to execute (fetch, :setenv, :run @lib/..., :let ...)"),
+    names: z.array(z.string()).optional().describe("Only return these register names (default: all)"),
+    cwd: z.string().optional().describe("Working directory"),
+  },
+}, async ({ commands, names, cwd }) => {
+  const dumpCmd = names && names.length ? `:dump ${names.join(" ")}` : ":dump";
+  const result = await runMolterm([...commands, dumpCmd], { cwd });
+  // :dump prints one JSON object line to stdout; take the last {...} line.
+  const line = result.stdout.split("\n").reverse().find((l) => l.trim().startsWith("{"));
+  let registers: unknown = {};
+  let parseError: string | undefined;
+  if (line) {
+    try { registers = JSON.parse(line); } catch (e) { parseError = String(e); }
+  }
+  const payload = {
+    ok: result.ok && !parseError,
+    registers,
+    ...(parseError ? { parseError } : {}),
+    ...(result.stderr ? { stderr: result.stderr } : {}),
+  };
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+});
+
 server.registerTool("help", {
   description: "Get help for molterm commands. Without arguments, lists all available commands grouped by category. " +
     "With a command name, shows usage, description, and examples.",

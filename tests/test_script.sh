@@ -65,6 +65,13 @@ out=$(run ':let a = 2 + 3 * 4
 ')
 assert_has "let arithmetic" "$out" "a=14"
 
+out=$(run ':let d = 3.5
+:let v = [1, 2, 3]
+:dump
+')
+assert_has "dump scalar json" "$out" '"d":{"kind":"scalar","value":3.5}'
+assert_has "dump vec3 json"   "$out" '"v":{"kind":"vec3","value":[1,2,3]}'
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL SCRIPT TESTS PASSED"; else echo "SCRIPT TESTS FAILED"; fi
 exit "$fail"
