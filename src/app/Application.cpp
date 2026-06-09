@@ -682,41 +682,88 @@ Application::ScriptFlow Application::dispatchScriptLines(
             std::string rangeExpr = expanded.substr(inPos + 4);
             trimWhitespace(var);
             if (var.empty()) { i = endIdx; continue; }
-            // parse `LO..HI`
+            // `LO..HI` → numeric range. Otherwise the tail is a selection and
+            // we iterate its residues, binding ${var} (a `chain:resi` spec
+            // usable in pos()), ${var_chain}, ${var_resi}, ${var_resn}.
             auto dotPos = rangeExpr.find("..");
-            if (dotPos == std::string::npos) {
-                recordFailure(i, srcLine, "bad :foreach range (expected LO..HI): " + rangeExpr);
+            if (dotPos != std::string::npos) {
+                int loVal = 0, hiVal = 0;
+                try {
+                    loVal = std::stoi(rangeExpr.substr(0, dotPos));
+                    hiVal = std::stoi(rangeExpr.substr(dotPos + 2));
+                } catch (const std::exception&) {
+                    recordFailure(i, srcLine, "bad :foreach numeric range: " + rangeExpr);
+                    if (strict) { result.stopped = true; return Flow::Stopped; }
+                    i = endIdx;
+                    continue;
+                }
+                // Scope the loop variable: save any prior binding and restore
+                // it after the loop so `$var` doesn't leak into the enclosing
+                // scope.
+                auto prior = registers().find(var);
+                bool hadPrior = prior != registers().end();
+                Register priorVal = hadPrior ? prior->second : Register{};
+                Flow outFlow = Flow::Normal;
+                for (int v = loVal; v <= hiVal; ++v) {
+                    Register r; r.kind = Register::Kind::Scalar; r.scalar = v;
+                    registers()[var] = r;
+                    Flow f = dispatchScriptLines(lines, i + 1, endIdx, result, strict);
+                    if (f == Flow::Continue) continue;
+                    if (f == Flow::Break) break;
+                    if (f == Flow::Stopped || f == Flow::Return) { outFlow = f; break; }
+                }
+                if (hadPrior) registers()[var] = priorVal;
+                else          registers().erase(var);
+                if (outFlow != Flow::Normal) return outFlow;
+                i = endIdx;
+                continue;
+            }
+            // Selection form: iterate distinct residues. rangeExpr is already
+            // ${}-expanded, so `chain ${CH}` resolves before parsing.
+            auto fobj = tabMgr_.currentTab().currentObject();
+            if (!fobj) {
+                recordFailure(i, srcLine, ":foreach over a selection needs a current object");
                 if (strict) { result.stopped = true; return Flow::Stopped; }
                 i = endIdx;
                 continue;
             }
-            int loVal = 0, hiVal = 0;
-            try {
-                loVal = std::stoi(rangeExpr.substr(0, dotPos));
-                hiVal = std::stoi(rangeExpr.substr(dotPos + 2));
-            } catch (const std::exception&) {
-                recordFailure(i, srcLine, "bad :foreach numeric range: " + rangeExpr);
-                if (strict) { result.stopped = true; return Flow::Stopped; }
-                i = endIdx;
-                continue;
+            Selection fsel = parseSelection(rangeExpr, *fobj);
+            // Atoms of a residue are contiguous, so group consecutive picks by
+            // (chain, resSeq, insCode) to get distinct residues in order.
+            struct ResKey { std::string chain, resn; int resSeq; char ins; };
+            std::vector<ResKey> residues;
+            for (int idx : fsel.indices()) {
+                if (idx < 0 || idx >= static_cast<int>(fobj->atoms().size())) continue;
+                const auto& a = fobj->atoms()[idx];
+                if (!residues.empty() && residues.back().chain == a.chainId &&
+                    residues.back().resSeq == a.resSeq && residues.back().ins == a.insCode)
+                    continue;
+                residues.push_back({a.chainId, a.resName, a.resSeq, a.insCode});
             }
-            // Scope the loop variable: save any prior binding and restore it
-            // after the loop so `$var` doesn't leak into the enclosing scope.
-            auto& regs = registers();
-            auto prior = regs.find(var);
-            bool hadPrior = prior != regs.end();
-            Register priorVal = hadPrior ? prior->second : Register{};
+            // Save/restore the four bound env keys around the loop.
+            const std::string keys[] = {var, var + "_chain", var + "_resi", var + "_resn"};
+            std::unordered_map<std::string, std::optional<std::string>> saved;
+            for (const auto& k : keys) {
+                auto it = scriptEnv().find(k);
+                saved[k] = it != scriptEnv().end()
+                    ? std::optional<std::string>(it->second) : std::nullopt;
+            }
             Flow outFlow = Flow::Normal;
-            for (int v = loVal; v <= hiVal; ++v) {
-                Register r; r.kind = Register::Kind::Scalar; r.scalar = v;
-                registers()[var] = r;
+            for (const auto& rk : residues) {
+                std::string resi = std::to_string(rk.resSeq);
+                scriptEnv()[var]            = rk.chain + ":" + resi;
+                scriptEnv()[var + "_chain"] = rk.chain;
+                scriptEnv()[var + "_resi"]  = resi;
+                scriptEnv()[var + "_resn"]  = rk.resn;
                 Flow f = dispatchScriptLines(lines, i + 1, endIdx, result, strict);
                 if (f == Flow::Continue) continue;
                 if (f == Flow::Break) break;
                 if (f == Flow::Stopped || f == Flow::Return) { outFlow = f; break; }
             }
-            if (hadPrior) registers()[var] = priorVal;
-            else          registers().erase(var);
+            for (const auto& [k, v] : saved) {
+                if (v) scriptEnv()[k] = *v;
+                else   scriptEnv().erase(k);
+            }
             if (outFlow != Flow::Normal) return outFlow;
             i = endIdx;       // past the :end
             continue;
