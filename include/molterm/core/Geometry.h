@@ -17,6 +17,12 @@ namespace molterm::geom {
 // Used by `:orient` to align the camera and by `:let G = pca(<sel>)`
 // to expose the PCA frame to scripts (issue #33).
 struct PcaResult {
+    // Which builtin produced this result. The struct is reused for three
+    // shapes; the tag lets the script accessor reject reading a field that is
+    // meaningless for the producer (e.g. eig1 on a superpose result) instead
+    // of returning a silent 0.
+    enum class Source { Pca, Helix, Superpose };
+
     std::array<double, 3> axis1{};
     std::array<double, 3> axis2{};
     std::array<double, 3> axis3{};
@@ -28,6 +34,7 @@ struct PcaResult {
     // genuine eigenvalues. Exposed to scripts as `$reg.angle` / `$reg.rmsd`.
     double angle = 0.0;
     double rmsd = 0.0;
+    Source source = Source::Pca;
     bool valid = false;  // false if input had < 2 points
 };
 

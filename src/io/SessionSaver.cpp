@@ -222,6 +222,9 @@ bool SessionSaver::saveSession(const Application& app) {
                 // survive a session round-trip. 0 for pca()/helix_axis().
                 out << "angle = " << r.pca.angle << "\n";
                 out << "rmsd = "  << r.pca.rmsd  << "\n";
+                // Producer tag (0 = pca, 1 = helix, 2 = superpose) so the
+                // angle/eig field-access rules survive a session round-trip.
+                out << "source = " << static_cast<int>(r.pca.source) << "\n";
                 break;
         }
     }
@@ -347,6 +350,8 @@ std::string SessionSaver::restoreSession(Application& app) {
             else if (key == "eigvals") parseTriple(val, curReg->pca.eigvals);
             else if (key == "angle")   curReg->pca.angle = std::stod(val);
             else if (key == "rmsd")    curReg->pca.rmsd = std::stod(val);
+            else if (key == "source")  curReg->pca.source =
+                static_cast<geom::PcaResult::Source>(std::stoi(val));
             continue;
         }
 

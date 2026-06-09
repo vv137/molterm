@@ -119,6 +119,7 @@ PcaResult helixAxisOf(const std::vector<float>& xs,
                       const std::vector<float>& ys,
                       const std::vector<float>& zs) {
     PcaResult out;
+    out.source = PcaResult::Source::Helix;
     const size_t n = std::min({xs.size(), ys.size(), zs.size()});
     if (n < 3) return out;
 
@@ -268,6 +269,7 @@ PcaResult superposeAxisOf(const std::vector<float>& ax, const std::vector<float>
                           const std::vector<float>& az, const std::vector<float>& bx,
                           const std::vector<float>& by, const std::vector<float>& bz) {
     PcaResult out;
+    out.source = PcaResult::Source::Superpose;
     HornFit fit = hornFit(ax, ay, az, bx, by, bz);
     if (!fit.valid || fit.n < 3) return out;
 

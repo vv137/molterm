@@ -380,45 +380,49 @@ private:
         // scalar and return a scalar; two-arg primitives same. Vec3
         // input is rejected — `length(v)` already exists for vector
         // magnitudes.
-        if (name == "abs"   || name == "sqrt"  || name == "exp"   ||
-            name == "log"   || name == "log10" || name == "log2"  ||
-            name == "sin"   || name == "cos"   || name == "tan"   ||
-            name == "asin"  || name == "acos"  || name == "atan"  ||
-            name == "floor" || name == "ceil"  || name == "round") {
+        // Single-argument scalar math — table-dispatched (captureless lambdas
+        // decay to function pointers). Adding a function is one table row.
+        static const std::pair<const char*, double (*)(double)> kUnary[] = {
+            {"abs",  [](double x){ return std::fabs(x); }},
+            {"sqrt", [](double x){ return std::sqrt(x); }},
+            {"exp",  [](double x){ return std::exp(x); }},
+            {"log",  [](double x){ return std::log(x); }},
+            {"log10",[](double x){ return std::log10(x); }},
+            {"log2", [](double x){ return std::log2(x); }},
+            {"sin",  [](double x){ return std::sin(x); }},
+            {"cos",  [](double x){ return std::cos(x); }},
+            {"tan",  [](double x){ return std::tan(x); }},
+            {"asin", [](double x){ return std::asin(x); }},
+            {"acos", [](double x){ return std::acos(x); }},
+            {"atan", [](double x){ return std::atan(x); }},
+            {"floor",[](double x){ return std::floor(x); }},
+            {"ceil", [](double x){ return std::ceil(x); }},
+            {"round",[](double x){ return std::round(x); }},
+        };
+        for (const auto& [nm, fn] : kUnary) {
+            if (name != nm) continue;
             if (args.size() != 1 || args[0].kind != Register::Kind::Scalar) {
                 fail(name + "(x): arg must be scalar"); return {};
             }
-            double x = args[0].scalar, y = 0;
-            if      (name == "abs")   y = std::fabs(x);
-            else if (name == "sqrt")  y = std::sqrt(x);
-            else if (name == "exp")   y = std::exp(x);
-            else if (name == "log")   y = std::log(x);
-            else if (name == "log10") y = std::log10(x);
-            else if (name == "log2")  y = std::log2(x);
-            else if (name == "sin")   y = std::sin(x);
-            else if (name == "cos")   y = std::cos(x);
-            else if (name == "tan")   y = std::tan(x);
-            else if (name == "asin")  y = std::asin(x);
-            else if (name == "acos")  y = std::acos(x);
-            else if (name == "atan")  y = std::atan(x);
-            else if (name == "floor") y = std::floor(x);
-            else if (name == "ceil")  y = std::ceil(x);
-            else                       y = std::round(x);
-            Register r; r.kind = Register::Kind::Scalar; r.scalar = y;
+            Register r; r.kind = Register::Kind::Scalar; r.scalar = fn(args[0].scalar);
             return r;
         }
-        if (name == "min" || name == "max" || name == "pow" || name == "atan2") {
+        // Two-argument scalar math — table-dispatched. atan2 returns degrees.
+        static const std::pair<const char*, double (*)(double, double)> kBinary[] = {
+            {"min",  [](double a, double b){ return std::min(a, b); }},
+            {"max",  [](double a, double b){ return std::max(a, b); }},
+            {"pow",  [](double a, double b){ return std::pow(a, b); }},
+            {"atan2",[](double a, double b){ return std::atan2(a, b) * kRadToDeg; }},
+        };
+        for (const auto& [nm, fn] : kBinary) {
+            if (name != nm) continue;
             if (args.size() != 2 ||
                 args[0].kind != Register::Kind::Scalar ||
                 args[1].kind != Register::Kind::Scalar) {
                 fail(name + "(a, b): both args must be scalar"); return {};
             }
-            double a = args[0].scalar, b = args[1].scalar, y = 0;
-            if      (name == "min")   y = std::min(a, b);
-            else if (name == "max")   y = std::max(a, b);
-            else if (name == "pow")   y = std::pow(a, b);
-            else                       y = std::atan2(a, b) * kRadToDeg;
-            Register r; r.kind = Register::Kind::Scalar; r.scalar = y;
+            Register r; r.kind = Register::Kind::Scalar;
+            r.scalar = fn(args[0].scalar, args[1].scalar);
             return r;
         }
         fail("unknown function: " + name);

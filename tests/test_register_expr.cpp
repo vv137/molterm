@@ -106,6 +106,31 @@ int main() {
         ok(isScalar(RegisterExpr::eval("v.y", ctx), 4.0),      "bare name v.y = 4");
     }
 
+    // ── Scalar-math builtins (table-dispatched) all reachable ───────────────
+    ok(isScalar(ev("sqrt(9)"), 3.0),        "sqrt");
+    ok(isScalar(ev("abs(-2.5)"), 2.5),      "abs");
+    ok(isScalar(ev("floor(2.9)"), 2.0),     "floor");
+    ok(isScalar(ev("round(2.5)"), 3.0),     "round");
+    ok(isScalar(ev("max(3, 7)"), 7.0),      "max");
+    ok(isScalar(ev("pow(2, 10)"), 1024.0),  "pow");
+    ok(isScalar(ev("min(3, 7)"), 3.0),      "min");
+
+    // ── Pca producer tag: mismatched field access is an error, not a 0 ──────
+    {
+        using Src = molterm::geom::PcaResult::Source;
+        std::unordered_map<std::string, Register> regs;
+        Register g; g.kind = Register::Kind::Pca; g.pca.eigvals = {10, 5, 1};
+        g.pca.source = Src::Pca; regs["g"] = g;
+        Register sp; sp.kind = Register::Kind::Pca; sp.pca.angle = 35; sp.pca.rmsd = 0.5;
+        sp.pca.source = Src::Superpose; regs["sp"] = sp;
+        auto ctx = makeStubCtx(regs);
+        ok(isScalar(RegisterExpr::eval("$g.eig1", ctx), 10.0), "pca .eig1 ok");
+        ok(!RegisterExpr::eval("$g.angle", ctx).ok,            "pca .angle errors");
+        ok(isScalar(RegisterExpr::eval("$sp.angle", ctx), 35.0), "superpose .angle ok");
+        ok(isScalar(RegisterExpr::eval("$sp.rmsd", ctx), 0.5),   "superpose .rmsd ok");
+        ok(!RegisterExpr::eval("$sp.eig1", ctx).ok,              "superpose .eig1 errors");
+    }
+
     // ── Error paths ─────────────────────────────────────────────────────────
     ok(!ev("[1,0,0] + 5").ok,   "type error: vec + scalar rejected");
     ok(!ev("1 / 0").ok,         "division by zero rejected");
