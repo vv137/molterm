@@ -131,11 +131,13 @@ set(MOLTERM_CORE_SOURCES
     src/cmd/CommandParser.cpp
     src/cmd/CommandRegistry.cpp
     src/cmd/CommandHelpers.cpp
+    src/cmd/ExprContext.cpp
     src/cmd/Register.cpp
     src/cmd/RegisterExpr.cpp
     src/cmd/UndoStack.cpp
     # Cmd/Commands — per-area command registration (decomposed registerCommands)
     src/cmd/commands/Session.cpp
+    src/cmd/commands/Files.cpp
     # App
     src/app/Tab.cpp
     src/app/TabManager.cpp

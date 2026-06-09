@@ -15,6 +15,9 @@
 
 namespace molterm {
 
+// In-place trim of leading + trailing ASCII whitespace.
+void trimWhitespace(std::string& s);
+
 // Join args[lo..hi) with single-space separators.
 std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi);
 

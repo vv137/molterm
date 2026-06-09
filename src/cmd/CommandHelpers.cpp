@@ -8,6 +8,13 @@
 
 namespace molterm {
 
+void trimWhitespace(std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r");
+    if (a == std::string::npos) { s.clear(); return; }
+    size_t b = s.find_last_not_of(" \t\r");
+    s = s.substr(a, b - a + 1);
+}
+
 std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi) {
     std::string out;
     for (size_t i = lo; i < hi && i < args.size(); ++i) {
