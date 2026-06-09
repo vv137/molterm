@@ -130,6 +130,7 @@ set(MOLTERM_CORE_SOURCES
     # Cmd
     src/cmd/CommandParser.cpp
     src/cmd/CommandRegistry.cpp
+    src/cmd/CommandHelpers.cpp
     src/cmd/Register.cpp
     src/cmd/RegisterExpr.cpp
     src/cmd/UndoStack.cpp

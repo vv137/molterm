@@ -2,6 +2,7 @@
 
 #include "molterm/app/CommandScope.h"
 #include "molterm/app/PathPatterns.h"
+#include "molterm/cmd/CommandHelpers.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/RegisterExpr.h"
 #include "molterm/core/SASA.h"
@@ -838,60 +839,6 @@ std::string expandLabelTemplate(const std::string& fmt, const AtomData& a) {
     return out;
 }
 
-// `[A-Za-z_][A-Za-z0-9_]*` — accepted in both ${NAME} expansion and :setenv.
-bool isValidEnvName(const std::string& s) {
-    if (s.empty() || !(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_'))
-        return false;
-    for (size_t k = 1; k < s.size(); ++k) {
-        char c = s[k];
-        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_'))
-            return false;
-    }
-    return true;
-}
-
-// A bare binding name for `:let <name> =` / `:select <name> =`: starts with a
-// letter or underscore and holds no whitespace. Looser than isValidEnvName()
-// (the rest of the character set is unconstrained), matching the historical
-// `:let` rule that only ever checked the first character + token-ness.
-bool isBareName(const std::string& s) {
-    return !s.empty() &&
-           (std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_') &&
-           s.find_first_of(" \t") == std::string::npos;
-}
-
-// Join args[lo..hi) with single-space separators.
-std::string joinArgs(const std::vector<std::string>& args, size_t lo, size_t hi) {
-    std::string out;
-    for (size_t i = lo; i < hi && i < args.size(); ++i) {
-        if (i > lo) out += ' ';
-        out += args[i];
-    }
-    return out;
-}
-
-// Split args at literal "=" token. Returns (left, right_joined). When no "="
-// is present, right is empty and left is the original args vector. Used by
-// :label and the :measure/:angle/:dihedral caption parsers.
-std::pair<std::vector<std::string>, std::string>
-splitAtToken(const std::vector<std::string>& args, std::string_view token) {
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (args[i] == token) {
-            return {std::vector<std::string>(args.begin(), args.begin() + i),
-                    joinArgs(args, i + 1, args.size())};
-        }
-    }
-    return {args, ""};
-}
-
-// Back-compat wrapper for the original "=" caller. New callers should
-// invoke splitAtToken directly with whichever keyword they want
-// (`as` for :copy / :extract, `vs` for :cmp, etc.).
-std::pair<std::vector<std::string>, std::string>
-splitAtEqToken(const std::vector<std::string>& args) {
-    return splitAtToken(args, "=");
-}
-
 // Resolve a single endpoint token to an atom index — used by the
 // distance/bond commands (:measure, :bond, :arrow). Accepts a pk1..pk4
 // pick, a $named-selection (first atom), or a PDB serial number. Returns
@@ -1208,75 +1155,6 @@ const char* bgModeName(BgMode m) {
         case BgMode::Custom:      return "custom";
     }
     return "transparent";
-}
-
-// Parse a bg color spec into (r,g,b). Accepts "#RGB", "#RRGGBB", and
-// "rgb(R,G,B)" — the parser is forgiving on whitespace and case so that
-// `:set bg "#202020"`, `:set bg "rgb(32,32,32)"`, and PyMOL-style
-// `bg "#FFF"` all round-trip. Returns std::nullopt on malformed input;
-// callers fall back to the named-mode parser before erroring out.
-std::optional<std::array<uint8_t, 3>> parseHexColor(std::string s) {
-    auto trim = [](std::string& v) {
-        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.erase(v.begin());
-        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back())))  v.pop_back();
-    };
-    trim(s);
-    if (s.empty()) return std::nullopt;
-
-    // rgb(R,G,B) form: optional whitespace inside, decimal channels 0..255.
-    if (s.size() > 4 &&
-        (s[0] == 'r' || s[0] == 'R') && (s[1] == 'g' || s[1] == 'G') &&
-        (s[2] == 'b' || s[2] == 'B') && s[3] == '(' && s.back() == ')') {
-        std::string body = s.substr(4, s.size() - 5);
-        int r = -1, g = -1, b = -1;
-        if (std::sscanf(body.c_str(), " %d , %d , %d ", &r, &g, &b) != 3) return std::nullopt;
-        if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) return std::nullopt;
-        return std::array<uint8_t, 3>{static_cast<uint8_t>(r),
-                                      static_cast<uint8_t>(g),
-                                      static_cast<uint8_t>(b)};
-    }
-
-    // #RGB / #RRGGBB form.
-    if (s[0] != '#') return std::nullopt;
-    std::string hex = s.substr(1);
-    auto fromHex = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
-        if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
-        return -1;
-    };
-    if (hex.size() == 3) {
-        int r = fromHex(hex[0]), g = fromHex(hex[1]), b = fromHex(hex[2]);
-        if (r < 0 || g < 0 || b < 0) return std::nullopt;
-        return std::array<uint8_t, 3>{static_cast<uint8_t>(r * 17),
-                                      static_cast<uint8_t>(g * 17),
-                                      static_cast<uint8_t>(b * 17)};
-    }
-    if (hex.size() == 6) {
-        int rh = fromHex(hex[0]), rl = fromHex(hex[1]);
-        int gh = fromHex(hex[2]), gl = fromHex(hex[3]);
-        int bh = fromHex(hex[4]), bl = fromHex(hex[5]);
-        if (rh < 0 || rl < 0 || gh < 0 || gl < 0 || bh < 0 || bl < 0) return std::nullopt;
-        return std::array<uint8_t, 3>{static_cast<uint8_t>((rh << 4) | rl),
-                                      static_cast<uint8_t>((gh << 4) | gl),
-                                      static_cast<uint8_t>((bh << 4) | bl)};
-    }
-    return std::nullopt;
-}
-
-// Resolve a color spec — named ("red", "white"), hex ("#RRGGBB", "#RGB"),
-// or rgb(R,G,B) — to an RGB triple. Used by :set label_color /
-// annotation_color / measurement_line_color / outline_color so all four
-// share one accept-list and stay in sync.
-std::optional<std::array<uint8_t, 3>> parseColorSpec(const std::string& s) {
-    if (s.empty()) return std::nullopt;
-    if (auto rgb = parseHexColor(s)) return rgb;
-    int pair = ColorMapper::colorByName(s);
-    if (pair > 0) {
-        auto rgb = PixelCanvas::colorPairToRGB(pair);
-        return std::array<uint8_t, 3>{rgb.r, rgb.g, rgb.b};
-    }
-    return std::nullopt;
 }
 
 }  // namespace
