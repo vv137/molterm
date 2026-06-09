@@ -15,6 +15,7 @@
 #include "molterm/core/Logger.h"
 #include "molterm/io/PdbWriter.h"
 #include "molterm/io/SessionSaver.h"
+#include "molterm/tui/Screen.h"
 
 namespace molterm {
 
@@ -155,9 +156,12 @@ void Application::registerScriptingCommands(CommandRegistry& reg) {
             out += "}";
         }
         out += "}";
-        std::printf("%s\n", out.c_str());
-        std::fflush(stdout);
-        return {true, ""};
+        if (isHeadless()) {
+            std::printf("%s\n", out.c_str());
+            std::fflush(stdout);
+            return {true, ""};
+        }
+        return {true, out};   // TUI: status line, not raw stdout
     }, ":dump [name...]",
        "Print registers as a JSON object to stdout (all, or only the named "
        "ones) for machine parsing — the structured counterpart to :registers.",
@@ -313,12 +317,19 @@ void Application::registerScriptingCommands(CommandRegistry& reg) {
     // twice in script mode (printf during + lastMsg at script end).
     reg.registerCmd("echo", [](Application&, const ParsedCommand& cmd) -> ExecResult {
         std::string text = joinArgs(cmd.args, 0, cmd.args.size());
-        std::printf("%s\n", text.c_str());
-        std::fflush(stdout);
-        return {true, ""};
+        if (isHeadless()) {
+            // Headless: write straight to stdout for pipelines / agents.
+            std::printf("%s\n", text.c_str());
+            std::fflush(stdout);
+            return {true, ""};
+        }
+        // TUI: raw stdout would corrupt the ncurses screen, so surface the
+        // text through the status line via the result message instead.
+        return {true, text};
     }, ":echo <text>",
-       "Print text to stdout (after ${var} / ${reg:fmt} expansion). Useful for "
-       "machine-readable script output and LLM-agent telemetry.",
+       "Print text (after ${var} / ${reg:fmt} expansion): to stdout when headless "
+       "(machine-readable script output / agent telemetry), or the status line in "
+       "TUI mode.",
        {":echo crossing = ${crossing:.2f}",
         ":echo workspace = ${WS}",
         ":echo \"label A\\tlabel B\""}, "Session");
