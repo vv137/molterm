@@ -2369,13 +2369,10 @@ void Application::handleLineEdit(int key) {
 
 void Application::handleCommandInput(int key) {
     // PgUp/PgDn scroll the live transcript shown above the command line
-    // (they're meaningless for single-line editing otherwise).
+    // (they're meaningless for single-line editing otherwise). The renderer
+    // clamps the offset to the valid range and feeds it back, so we just step.
     if (key == KEY_PPAGE || key == KEY_NPAGE) {
-        int step = 3;
-        transcriptHintScroll_ = std::max(0,
-            transcriptHintScroll_ + (key == KEY_PPAGE ? step : -step));
-        if (transcriptHintScroll_ > static_cast<int>(cmdTranscript_.size()))
-            transcriptHintScroll_ = static_cast<int>(cmdTranscript_.size());
+        transcriptHintScroll_ += (key == KEY_PPAGE ? 3 : -3);
         layout_.markDirty(Layout::Component::Viewport);
         layout_.markDirty(Layout::Component::CommandLine);
         needsRedraw_ = true;
@@ -2739,8 +2736,10 @@ void Application::renderViewport() {
         win.printColored(std::min(row, oy + oh - 1), footerX, footer, kColorTabActive);
     }
 
-    // Live transcript (input + output) above the active command line.
-    cmdLine_.renderHistoryHint(win, cmdTranscript_, transcriptHintScroll_);
+    // Live transcript (input + output) above the active command line. The
+    // renderer clamps and returns the scroll offset (it knows the height).
+    transcriptHintScroll_ = cmdLine_.renderHistoryHint(
+        win, cmdTranscript_, transcriptHintScroll_, transcriptHintLines_);
 
   if (overlayVisible_) {
     bool isPixel = (rendererType_ == RendererType::Pixel);

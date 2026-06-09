@@ -13,10 +13,13 @@ public:
     void render(Window& win);
 
     // Render the recent command transcript (input + output) above the command
-    // line, in the viewport bottom, dimmed. `scroll` (>=0) pages backward into
-    // older lines; 0 keeps the most recent at the bottom.
-    void renderHistoryHint(Window& win, const std::vector<std::string>& transcript,
-                           int scroll);
+    // line, in the viewport bottom, dimmed: up to `maxRows` lines. `scroll`
+    // (>=0) pages backward into older lines; 0 keeps the most recent at the
+    // bottom. Returns `scroll` clamped to the valid range — the single source
+    // of truth for the bound (it knows the window height), so callers just
+    // store the result back instead of clamping themselves.
+    int renderHistoryHint(Window& win, const std::vector<std::string>& transcript,
+                          int scroll, int maxRows);
 
     // Input handling
     void activate(char prefix = ':');

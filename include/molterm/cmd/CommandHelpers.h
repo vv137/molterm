@@ -135,6 +135,7 @@ inline constexpr const char* kSetOptionsLong[] = {
     "panel",
     "seqbar",
     "seqwrap",
+    "transcript_lines",
     "interface_color",
     "interface_thickness",
     "interface_classify",

@@ -325,6 +325,10 @@ public:
     // overlayScale_ is a global multiplier applied on top.
     int labelFontSize() const { return labelFontSize_; }
     void setLabelFontSize(int px) { labelFontSize_ = px; }
+    // Max rows of the live transcript shown above the command line
+    // (`:set transcript_lines <n>`). Range-checked by the :set handler.
+    int transcriptHintLines() const { return transcriptHintLines_; }
+    void setTranscriptHintLines(int n) { transcriptHintLines_ = n; }
     int annotationFontSize() const { return annotationFontSize_; }
     void setAnnotationFontSize(int px) { annotationFontSize_ = px; }
     int annotationLineWidth() const { return annotationLineWidth_; }
@@ -553,6 +557,8 @@ private:
     // Scroll offset for the live transcript shown above the active command line
     // (0 = most recent; PgUp/PgDn page back/forward). Reset when `:` opens.
     int transcriptHintScroll_ = 0;
+    // Max rows the transcript hint renders (`:set transcript_lines`).
+    int transcriptHintLines_ = 8;
 
     // Contact map + interface overlay state
     ContactMapPanel contactMapPanel_;

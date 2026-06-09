@@ -158,6 +158,13 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             app.setLabelFontSize(px);
             return {true, "label_font_size = " + std::to_string(px) + " px"};
         }
+        if (opt == "transcript_lines") {
+            if (cmd.args.size() < 2) return {false, "Usage: :set transcript_lines <1..30>"};
+            int n = std::stoi(cmd.args[1]);
+            if (n < 1 || n > 30) return {false, "transcript_lines out of range (1..30)"};
+            app.setTranscriptHintLines(n);
+            return {true, "transcript_lines = " + std::to_string(n)};
+        }
         if (opt == "annotation_font_size" || opt == "anf") {
             if (cmd.args.size() < 2) return {false, "Usage: :set annotation_font_size <8..72>"};
             int px = std::stoi(cmd.args[1]);
@@ -894,6 +901,8 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             return {true, "outline_darken = " + std::to_string(app.outlineDarken())};
         if (opt == "label_font_size" || opt == "lfs")
             return {true, "label_font_size = " + std::to_string(app.labelFontSize()) + " px"};
+        if (opt == "transcript_lines")
+            return {true, "transcript_lines = " + std::to_string(app.transcriptHintLines())};
         if (opt == "annotation_font_size" || opt == "anf")
             return {true, "annotation_font_size = " + std::to_string(app.annotationFontSize()) + " px"};
         if (opt == "annotation_linewidth" || opt == "anlw")

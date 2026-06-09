@@ -20,23 +20,18 @@ void CommandLine::render(Window& win) {
     win.refresh();
 }
 
-void CommandLine::renderHistoryHint(Window& win,
-                                    const std::vector<std::string>& transcript,
-                                    int scroll) {
-    if (!active_ || transcript.empty()) return;
-
-    const int kMaxRows = 8;
+int CommandLine::renderHistoryHint(Window& win,
+                                   const std::vector<std::string>& transcript,
+                                   int scroll, int maxRows) {
+    if (!active_ || transcript.empty()) return scroll;
     int winH = win.height();
-    if (winH <= 0) return;
-    int rows = std::min({kMaxRows, winH, static_cast<int>(transcript.size())});
+    if (winH <= 0) return scroll;
 
-    // Most recent at the bottom; `scroll` pages backward into older lines.
     int total = static_cast<int>(transcript.size());
-    int maxScroll = std::max(0, total - rows);
-    if (scroll < 0) scroll = 0;
-    if (scroll > maxScroll) scroll = maxScroll;
-    int endIdx = total - scroll;          // exclusive
-    int startIdx = endIdx - rows;
+    int rows = std::min({std::max(1, maxRows), winH, total});
+    // Most recent at the bottom; `scroll` pages backward into older lines.
+    scroll = std::clamp(scroll, 0, total - rows);
+    int startIdx = total - scroll - rows;
     int startY = winH - rows;
 
     int maxLen = win.width() - 1;
@@ -45,6 +40,7 @@ void CommandLine::renderHistoryHint(Window& win,
         if (static_cast<int>(line.size()) > maxLen) line = line.substr(0, maxLen);
         win.printColored(startY + i, 0, line, kColorGray);
     }
+    return scroll;
 }
 
 void CommandLine::activate(char prefix) {
