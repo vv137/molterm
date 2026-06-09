@@ -1,6 +1,6 @@
 {
   "name": "molterm-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server for MolTerm — molecular structure analysis, rendering, and alignment tools for LLM clients",
   "main": "dist/index.js",
   "bin": {
