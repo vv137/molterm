@@ -138,6 +138,16 @@ set(MOLTERM_CORE_SOURCES
     # Cmd/Commands — per-area command registration (decomposed registerCommands)
     src/cmd/commands/Session.cpp
     src/cmd/commands/Files.cpp
+    src/cmd/commands/Display.cpp
+    src/cmd/commands/View.cpp
+    src/cmd/commands/Settings.cpp
+    src/cmd/commands/Objects.cpp
+    src/cmd/commands/Scripting.cpp
+    src/cmd/commands/Selection.cpp
+    src/cmd/commands/Alignment.cpp
+    src/cmd/commands/Fetch.cpp
+    src/cmd/commands/Annotation.cpp
+    src/cmd/commands/Measurement.cpp
     # App
     src/app/Tab.cpp
     src/app/TabManager.cpp

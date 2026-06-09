@@ -91,4 +91,24 @@ ScopedAtoms collectInScope(Application& app, ScopeMode mode,
     return out;
 }
 
+std::shared_ptr<MolObject> findObjectByName(Application& app, const std::string& name) {
+    for (const auto& o : app.tabs().currentTab().objects())
+        if (o && o->name() == name) return o;
+    return nullptr;
+}
+
+Selection resolveScoped(Application& app, const std::string& expr,
+                        std::shared_ptr<MolObject>& obj) {
+    Selection sel = app.parseSelection(expr, *obj);
+    if (sel.empty()) {
+        forEachInScope(app, ScopeMode::All, expr, [&](ScopedTarget& t) {
+            if (t.obj == obj) return true;             // already tried it
+            obj = t.obj;
+            sel = std::move(t.sel);
+            return false;                              // stop on first match
+        });
+    }
+    return sel;
+}
+
 }  // namespace molterm

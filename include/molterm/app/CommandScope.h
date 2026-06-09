@@ -53,4 +53,15 @@ ScopedAtoms collectInScope(Application& app, const std::string& expr);
 ScopedAtoms collectInScope(Application& app, ScopeMode mode,
                            const std::string& expr);
 
+// Find a loaded object by name in the active tab (nullptr if none).
+std::shared_ptr<MolObject> findObjectByName(Application& app, const std::string& name);
+
+// Resolve `expr` honoring the `<obj>/(...)` qualifier and scoped `$name`: try
+// `obj` first, then fan out across the tab so a qualifier can target a
+// non-current object (mirrors :select). On return `obj` is the object the
+// (non-empty) selection belongs to. Shared by :label/:unlabel and the
+// measurement/bond endpoint resolvers.
+Selection resolveScoped(Application& app, const std::string& expr,
+                        std::shared_ptr<MolObject>& obj);
+
 }  // namespace molterm

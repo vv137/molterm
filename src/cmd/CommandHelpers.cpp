@@ -8,6 +8,12 @@
 
 namespace molterm {
 
+std::optional<bool> parseBool(const std::string& v) {
+    if (v == "on" || v == "1" || v == "true" || v == "yes")  return true;
+    if (v == "off" || v == "0" || v == "false" || v == "no") return false;
+    return std::nullopt;
+}
+
 void trimWhitespace(std::string& s) {
     size_t a = s.find_first_not_of(" \t\r");
     if (a == std::string::npos) { s.clear(); return; }

@@ -22,6 +22,9 @@ struct AlignResult {
     std::string message;
 };
 
+// Mode override for :align / :cmp — TM-align vs MM-align selection.
+enum class AlignMode { Auto, ForceTM, ForceMM };
+
 class Aligner {
 public:
     // Set path to USalign binary (auto-detected from build dir)

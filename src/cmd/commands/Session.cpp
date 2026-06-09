@@ -1,6 +1,5 @@
 // Session-lifecycle commands: :q / :quit / :qa.
 
-#include "molterm/cmd/commands/Commands.h"
 
 #include "molterm/app/Application.h"
 #include "molterm/cmd/CommandParser.h"
@@ -8,7 +7,7 @@
 
 namespace molterm {
 
-void registerSessionCommands(Application& /*app*/, CommandRegistry& reg) {
+void Application::registerSessionCommands(CommandRegistry& reg) {
     // :q / :quit
     reg.registerCmd("q", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         app.quit(cmd.forced);

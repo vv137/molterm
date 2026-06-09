@@ -856,6 +856,21 @@ private:
     void updateStatusBar();
 
     void registerCommands();
+    // Per-area command registration, decomposed from registerCommands() into
+    // src/cmd/commands/*.cpp. Member functions so handler lambdas keep full
+    // access to Application's private state. CommandRegistry is forward-declared.
+    void registerSessionCommands(CommandRegistry& reg);
+    void registerFilesCommands(CommandRegistry& reg);
+    void registerDisplayCommands(CommandRegistry& reg);
+    void registerViewCommands(CommandRegistry& reg);
+    void registerSettingsCommands(CommandRegistry& reg);
+    void registerObjectCommands(CommandRegistry& reg);
+    void registerScriptingCommands(CommandRegistry& reg);
+    void registerSelectionCommands(CommandRegistry& reg);
+    void registerAlignmentCommands(CommandRegistry& reg);
+    void registerFetchCommands(CommandRegistry& reg);
+    void registerAnnotationCommands(CommandRegistry& reg);
+    void registerMeasurementCommands(CommandRegistry& reg);
     void buildProjCache();
 
     // Draw labels, measurement dashed lines/labels, and sele/pk highlight
@@ -955,5 +970,14 @@ public:
     void onResize();
 private:
 };
+
+// Free-label / bg-mode helpers shared between Application and the annotation /
+// settings command modules (definitions in Application.cpp). Declared after the
+// class so they can name its nested FreeLabel* types.
+std::optional<Application::FreeLabelCorner> parseCornerName(const std::string& w);
+std::size_t clearFreeLabelsByAnchor(std::vector<Application::FreeLabel>& fls,
+                                    Application::FreeLabelAnchor anchor,
+                                    std::optional<Application::FreeLabelCorner> corner);
+const char* bgModeName(BgMode m);
 
 } // namespace molterm
