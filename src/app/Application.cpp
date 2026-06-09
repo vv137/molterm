@@ -499,6 +499,36 @@ Application::ScriptFlow Application::dispatchScriptLines(
         if (end == std::string::npos) return true;
         cmd.resize(end + 1);
         cmd = expandScriptVars(cmd);
+        // User-defined function call? If the first token names a :def function,
+        // run its body in a fresh local frame with params seeded from the call
+        // args (as env vars) instead of dispatching to a built-in command.
+        {
+            size_t sp = cmd.find_first_of(" \t");
+            std::string fname = cmd.substr(0, sp);
+            auto fit = userScriptFns_.find(fname);
+            if (fit != userScriptFns_.end()) {
+                std::vector<std::string> callArgs;
+                if (sp != std::string::npos) {
+                    std::istringstream iss(cmd.substr(sp));
+                    std::string tok;
+                    while (iss >> tok) callArgs.push_back(tok);
+                }
+                if (++scriptFnDepth_ > 64) {
+                    --scriptFnDepth_;
+                    recordFailure(bufIdx, srcLine, "script function recursion too deep: " + fname);
+                    if (strict) { result.stopped = true; return false; }
+                    return true;
+                }
+                std::unordered_map<std::string, std::string> seed;
+                for (size_t k = 0; k < fit->second.params.size(); ++k)
+                    seed[fit->second.params[k]] = k < callArgs.size() ? callArgs[k] : "";
+                const std::vector<std::string> fnBody = fit->second.body;  // stable copy
+                ScriptFrameGuard guard(*this, true, seed, {});
+                ScriptFlow ff = dispatchScriptLines(fnBody, 0, fnBody.size(), result, strict);
+                --scriptFnDepth_;
+                return ff != ScriptFlow::Stopped;
+            }
+        }
         ExecResult r = cmdRegistry_.execute(*this, cmd);
         ++result.count;
         if (!r.msg.empty()) result.lastMsg = r.msg;
@@ -770,6 +800,60 @@ Application::ScriptFlow Application::dispatchScriptLines(
         }
         if (isControlKeyword(srcLine, "end", body)) {
             // Stray :end (foreach consumed its own); ignore.
+            continue;
+        }
+        // `:def name(p1, p2) ... :enddef` — capture the body (without running
+        // it) and register a callable function. The header is NOT expanded:
+        // name and params are literal identifiers.
+        if (isControlKeyword(srcLine, "def", body)) {
+            bool matched = false;
+            size_t endIdx = findMatchingClose(i, "def", "enddef", matched);
+            if (!matched) {
+                recordFailure(i, srcLine, "unmatched :def (no :enddef found)");
+                if (strict) { result.stopped = true; return Flow::Stopped; }
+                i = endIdx;
+                continue;
+            }
+            if (anyInactive()) { i = endIdx; continue; }
+            std::string fname;
+            std::vector<std::string> params;
+            auto lp = body.find('(');
+            if (lp != std::string::npos) {
+                fname = body.substr(0, lp);
+                auto rp = body.find(')', lp);
+                std::string inside = body.substr(lp + 1,
+                    rp == std::string::npos ? std::string::npos : rp - lp - 1);
+                size_t p = 0;
+                while (p <= inside.size()) {
+                    size_t comma = inside.find(',', p);
+                    std::string tok = inside.substr(p, comma == std::string::npos ? std::string::npos : comma - p);
+                    trimWhitespace(tok);
+                    if (!tok.empty()) params.push_back(tok);
+                    if (comma == std::string::npos) break;
+                    p = comma + 1;
+                }
+            } else {
+                std::istringstream iss(body);
+                iss >> fname;
+                std::string p;
+                while (iss >> p) params.push_back(p);
+            }
+            trimWhitespace(fname);
+            if (!isBareName(fname)) {
+                recordFailure(i, srcLine, "bad :def name: " + fname);
+                if (strict) { result.stopped = true; return Flow::Stopped; }
+                i = endIdx;
+                continue;
+            }
+            UserScriptFn fn;
+            fn.params = std::move(params);
+            for (size_t k = i + 1; k < endIdx; ++k) fn.body.push_back(lines[k]);
+            userScriptFns_[fname] = std::move(fn);
+            i = endIdx;
+            continue;
+        }
+        if (isControlKeyword(srcLine, "enddef", body)) {
+            // Stray :enddef (def consumed its own); ignore.
             continue;
         }
         // Loop control — only act when no enclosing :if branch is inactive,

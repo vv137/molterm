@@ -482,6 +482,13 @@ private:
     // the survivors. Without a shebang, scripts inherit frame[0] —
     // back-compat for pre-#67 scripts.
     std::vector<std::unordered_map<std::string, Register>> regStack_{1};
+
+    // User-defined script functions (`:def name(p1, ...) ... :enddef`). Calling
+    // `name a b` runs the body in a fresh local frame with the params seeded as
+    // env vars; :return exits early. scriptFnDepth_ guards runaway recursion.
+    struct UserScriptFn { std::vector<std::string> params; std::vector<std::string> body; };
+    std::unordered_map<std::string, UserScriptFn> userScriptFns_;
+    int scriptFnDepth_ = 0;
 public:
     std::unordered_map<std::string, Register>& registers() { return regStack_.back(); }
     const std::unordered_map<std::string, Register>& registers() const { return regStack_.back(); }

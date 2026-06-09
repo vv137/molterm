@@ -72,6 +72,26 @@ out=$(run ':let d = 3.5
 assert_has "dump scalar json" "$out" '"d":{"kind":"scalar","value":3.5}'
 assert_has "dump vec3 json"   "$out" '"v":{"kind":"vec3","value":[1,2,3]}'
 
+out=$(run ':def greet(who)
+  :echo hi ${who}
+  :let _x = 1
+:enddef
+greet World
+:echo leak=[${_x}]
+')
+assert_has "def: param bound" "$out" "hi World"
+assert_has "def: local scope"  "$out" "leak=[]"
+
+out=$(run ':def early(x)
+  :echo got ${x}
+  :return
+  :echo NEVER
+:enddef
+early 9
+')
+assert_has    "def: return before" "$out" "got 9"
+assert_absent "def: return stops"  "$out" "NEVER"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL SCRIPT TESTS PASSED"; else echo "SCRIPT TESTS FAILED"; fi
 exit "$fail"
