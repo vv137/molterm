@@ -140,7 +140,15 @@ void PixelCanvas::writePixel(int sx, int sy, uint8_t r, uint8_t g, uint8_t b, fl
 }
 
 void PixelCanvas::claimPixel(size_t pIdx, int colorPair, int atomIdx, float alpha) {
-    if (alpha >= kOpaqueAlpha) colorIds_[pIdx] = static_cast<int8_t>(colorPair);
+    // colorIds_ is a per-pixel "geometry rendered here" flag: every consumer
+    // (outline, fog, PNG alpha) only tests `< 0` for background. Store a fixed
+    // non-negative marker rather than the raw colorPair — custom 24-bit colors
+    // (kColorCustomTag | rgb) truncate under static_cast<int8_t> to their blue
+    // byte, so any blue >= 128 would alias to negative and make those pixels
+    // invisible to the outline/fog passes (custom-colored atoms got no
+    // silhouette and didn't recede with depth).
+    (void)colorPair;
+    if (alpha >= kOpaqueAlpha) colorIds_[pIdx] = 0;
     if (!atomIds_.empty()) atomIds_[pIdx] = atomIdx;
 }
 

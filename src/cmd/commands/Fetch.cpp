@@ -2,6 +2,7 @@
 
 
 #include "molterm/app/Application.h"
+#include "molterm/core/StringParse.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/cmd/CommandHelpers.h"
@@ -130,25 +131,26 @@ void Application::registerFetchCommands(CommandRegistry& reg) {
 
         // Last token is DPI iff we have ≥4 args; W H are then args[-3..-2].
         if (positional.size() >= 4) {
-            try {
-                reqDpi = std::stoi(positional.back());
-                positional.pop_back();
-            } catch (...) {
+            auto dpi = parseInt(positional.back());
+            if (!dpi) {
                 return {false, "Usage: :screenshot [file.png] [W H [DPI]]"};
             }
+            reqDpi = *dpi;
+            positional.pop_back();
             if (reqDpi < 1 || reqDpi > 4800) {
                 return {false, "DPI out of range (1..4800)"};
             }
         }
         if (positional.size() >= 3) {
-            try {
-                reqPixW = std::stoi(positional[positional.size() - 2]);
-                reqPixH = std::stoi(positional[positional.size() - 1]);
-                positional.pop_back();
-                positional.pop_back();
-            } catch (...) {
+            auto w = parseInt(positional[positional.size() - 2]);
+            auto h = parseInt(positional[positional.size() - 1]);
+            if (!w || !h) {
                 return {false, "Usage: :screenshot [file.png] [W H [DPI]]"};
             }
+            reqPixW = *w;
+            reqPixH = *h;
+            positional.pop_back();
+            positional.pop_back();
             if (reqPixW < 64 || reqPixH < 64 ||
                 reqPixW > 8192 || reqPixH > 8192) {
                 return {false, "Screenshot size out of range (64..8192 px)"};
@@ -243,7 +245,7 @@ void Application::registerFetchCommands(CommandRegistry& reg) {
                              offscreen.aspectYX());
 
         if (auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe))) {
-            wf->setHeteroatomCarbonScheme(app.interfaceOverlay_ || app.focusSnapshot_.active);
+            wf->setHeteroatomCarbonScheme(app.interfaceOverlay_ || app.focus().snapshot.active);
         }
 
         // Render reprs once per stereoscopic eye (single-pass when
@@ -281,12 +283,12 @@ void Application::registerFetchCommands(CommandRegistry& reg) {
         const std::vector<bool>* dimMask = nullptr;
         if (app.interfaceOverlay_ && !app.interfaceAtomMask_.empty()) {
             dimMask = &app.interfaceAtomMask_;
-        } else if (!app.focusAtomMask_.empty()) {
-            dimMask = &app.focusAtomMask_;
+        } else if (!app.focus().atomMask.empty()) {
+            dimMask = &app.focus().atomMask;
         }
-        if (dimMask) offscreen.applyFocusDim(*dimMask, app.focusDimStrength_);
+        if (dimMask) offscreen.applyFocusDim(*dimMask, app.focus().dimStrength);
 
-        if ((app.interfaceOverlay_ || app.focusSnapshot_.active) &&
+        if ((app.interfaceOverlay_ || app.focus().snapshot.active) &&
             app.interfaceRepr_.hasData()) {
             if (auto obj = tab.currentObject()) {
                 for (int eye = 0; eye < app.stereoEyeCount(); ++eye) {

@@ -474,6 +474,37 @@ static void testSlashFormScope(const MolObject& mol) {
     CHECK(glob.objectScope().empty(), "/*/.../ stays unscoped");
 }
 
+static void testSlashObjectGlobMatches(const MolObject& mol) {
+    // Regression: "*"/"all" in the object segment are globs and must match
+    // every object's atoms. The predicate used to compare them as a literal
+    // object name, so `/*/A/10` and `/all/A/10` selected NOTHING (the scope
+    // test in testSlashFormScope passed without ever checking match count).
+    auto star = Selection::parse("/*/A/10", mol);
+    auto sStar = toSet(star);
+    CHECK(sStar.count(0) && sStar.count(1) && sStar.count(2) && sStar.count(3),
+          "/*/A/10 selects chain A resi 10 (not empty)");
+    CHECK(star.objectScope().empty(), "/*/A/10 stays unscoped");
+    auto all = Selection::parse("/all/A/10", mol);
+    CHECK(toSet(all) == sStar, "/all/A/10 matches /*/A/10");
+    // A concrete object segment still both scopes and matches.
+    auto concrete = Selection::parse("/test/A/10", mol);
+    CHECK(concrete.size() == star.size() && concrete.objectScope() == "test",
+          "/test/A/10 still matches and scopes");
+}
+
+static void testWithinOverflow(const MolObject& mol) {
+    // Regression: an out-of-range distance (> FLT_MAX) used to throw
+    // std::out_of_range out of std::stof and crash the process; now the
+    // parser catches it and returns an empty selection.
+    auto sel = Selection::parse(
+        "within 99999999999999999999999999999999999999999 of resi 10", mol);
+    CHECK(sel.empty(), "within <overflow distance> returns empty, not a crash");
+    // A normal within still resolves (all test atoms share the origin, so a
+    // positive radius around resi 10 captures atoms).
+    auto ok = Selection::parse("within 5 of resi 10", mol);
+    CHECK(!ok.empty(), "within <normal distance> still selects");
+}
+
 static void testNamedSelectionScopeGate(const MolObject& mol) {
     // A named selection scoped to "test" re-expands only against an object
     // of that name; against a differently-named object it matches nothing
@@ -686,6 +717,8 @@ int main() {
     testObjQualifierMismatch(mol);
     testObjWildcardUnscoped(mol);
     testSlashFormScope(mol);
+    testSlashObjectGlobMatches(mol);
+    testWithinOverflow(mol);
     testNamedSelectionScopeGate(mol);
     testUnscopedNamedSelectionStillResolves(mol);
     testScopedOrKeepsScope(mol);

@@ -32,15 +32,26 @@ ExecResult CommandRegistry::execute(Application& app, const std::string& input) 
     // unaffected (e.g. :delete pins to current regardless), and :q
     // continues to read cmd.forced for its own force-quit semantics —
     // setting a scope override on top is a no-op for those handlers.
-    if (cmd.forced) {
+    const bool flipScope = cmd.forced;
+    if (flipScope) {
         ScopeMode flipped = (app.commandScope() == ScopeMode::All)
                                 ? ScopeMode::Current : ScopeMode::All;
         app.setScopeOverride(flipped);
-        ExecResult r = it->second.handler(app, cmd);
-        app.clearScopeOverride();
-        return r;
     }
-    return it->second.handler(app, cmd);
+    // Backstop: a handler that throws (e.g. an unguarded std::stoi on
+    // malformed user/script input) must surface as a failed command, not
+    // crash the whole TUI session or abort a batch script. Convert any
+    // std::exception into an error result. Individual handlers still do
+    // their own validation for friendlier per-option messages; this is
+    // the safety net that keeps one bad argument from being fatal.
+    ExecResult r;
+    try {
+        r = it->second.handler(app, cmd);
+    } catch (const std::exception& e) {
+        r = {false, std::string("error: ") + e.what()};
+    }
+    if (flipScope) app.clearScopeOverride();
+    return r;
 }
 
 std::vector<std::string> CommandRegistry::complete(const std::string& prefix) const {

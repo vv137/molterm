@@ -179,13 +179,20 @@ void ContactMap::extractResidues(const MolObject& mol) {
     const auto& atoms = mol.atoms();
     int nAtoms = static_cast<int>(atoms.size());
 
-    // Group atoms into residues and find CA atoms
+    // Group atoms into residues and find CA atoms. The boundary test must
+    // include the insertion code: residues sharing chain+resSeq but differing
+    // in insCode (antibody CDR loops 100/100A/100B, crystal insertions) are
+    // distinct and must not be folded into one — otherwise the second
+    // residue's atoms inherit the first's identity and corrupt the contact
+    // map. The rest of the codebase keys residues by insCode too.
     std::string prevChain;
     int prevResSeq = std::numeric_limits<int>::min();
+    char prevInsCode = '\0';
 
     for (int i = 0; i < nAtoms; ++i) {
         const auto& a = atoms[i];
-        bool newResidue = (a.chainId != prevChain || a.resSeq != prevResSeq);
+        bool newResidue = (a.chainId != prevChain || a.resSeq != prevResSeq ||
+                           a.insCode != prevInsCode);
 
         if (newResidue && !residues_.empty()) {
             residues_.back().lastAtomIdx = i - 1;
@@ -195,6 +202,7 @@ void ContactMap::extractResidues(const MolObject& mol) {
             residues_.push_back({a.resSeq, a.chainId, a.resName, -1, i, i});
             prevChain = a.chainId;
             prevResSeq = a.resSeq;
+            prevInsCode = a.insCode;
         }
 
         // Track CA atom

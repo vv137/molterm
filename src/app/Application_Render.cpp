@@ -128,7 +128,7 @@ void Application::renderViewport() {
     // the scheme color whenever the user is looking at an interface
     // (overlay or focus) — N/O/S/P need to pop as donors/acceptors there.
     if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
-        wf->setHeteroatomCarbonScheme(interfaceOverlay_ || focusSnapshot_.active);
+        wf->setHeteroatomCarbonScheme(interfaceOverlay_ || focus_.active());
     }
 
     // Render reprs once per stereoscopic eye. setupStereoEye() handles the
@@ -199,10 +199,10 @@ void Application::renderViewport() {
             const std::vector<bool>* dimMask = nullptr;
             if (interfaceOverlay_ && !interfaceAtomMask_.empty()) {
                 dimMask = &interfaceAtomMask_;
-            } else if (!focusAtomMask_.empty()) {
-                dimMask = &focusAtomMask_;
+            } else if (!focus_.atomMask.empty()) {
+                dimMask = &focus_.atomMask;
             }
-            if (dimMask) pc->applyFocusDim(*dimMask, focusDimStrength_);
+            if (dimMask) pc->applyFocusDim(*dimMask, focus_.dimStrength);
         }
     }
 
@@ -212,7 +212,7 @@ void Application::renderViewport() {
     //   • global :interface overlay (full structure)
     //   • focus mode (filtered to the focus neighborhood)
     // Per-eye in stereo mode so each half gets its own vivid overlay.
-    if ((interfaceOverlay_ || focusSnapshot_.active) &&
+    if ((interfaceOverlay_ || focus_.active()) &&
         interfaceRepr_.hasData()) {
         if (auto obj = tab.currentObject(); obj && obj->visible()) {
             std::array<float, 9> savedIfaceRot{};

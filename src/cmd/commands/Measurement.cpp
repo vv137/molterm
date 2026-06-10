@@ -2,6 +2,7 @@
 
 
 #include "molterm/app/Application.h"
+#include "molterm/core/StringParse.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/cmd/CommandHelpers.h"
@@ -37,11 +38,10 @@ static int resolveEndpointToken(Application& app, const std::string& s) {
     auto obj = app.tabs().currentTab().currentObject();
     if (!obj) return -1;
     const auto& atoms = obj->atoms();
-    try {
-        int serial = std::stoi(s);
+    if (auto serial = parseInt(s)) {
         for (int i = 0; i < static_cast<int>(atoms.size()); ++i)
-            if (atoms[i].serial == serial) return i;
-    } catch (...) {}
+            if (atoms[i].serial == *serial) return i;
+    }
     return -1;
 }
 
@@ -721,7 +721,7 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
     reg.registerCmd("contactmap", [](Application& app, const ParsedCommand& cmd) -> ExecResult {
         float cutoff = 8.0f;
         if (!cmd.args.empty()) {
-            try { cutoff = std::stof(cmd.args[0]); } catch (...) {}
+            cutoff = parseFloat(cmd.args[0]).value_or(cutoff);
         }
         app.layout().toggleAnalysisPanel();
         app.tabs().currentTab().viewState().analysisPanelVisible = app.layout().analysisPanelVisible();
@@ -768,12 +768,14 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
             wantOn = *parsedBool;
         } else {
             // Try as numeric cutoff → "on" with that cutoff.
-            try { cutoff = std::stof(cmd.args[0]); wantOn = true; cutoffArgIdx = 99; }
-            catch (...) { return {false, "Usage: :interface on|off|legend [cutoff]"}; }
+            auto c = parseFloat(cmd.args[0]);
+            if (!c) return {false, "Usage: :interface on|off|legend [cutoff]"};
+            cutoff = *c; wantOn = true; cutoffArgIdx = 99;
         }
         if (cmd.args.size() > cutoffArgIdx) {
-            try { cutoff = std::stof(cmd.args[cutoffArgIdx]); }
-            catch (...) { return {false, "Cutoff must be a number"}; }
+            auto c = parseFloat(cmd.args[cutoffArgIdx]);
+            if (!c) return {false, "Cutoff must be a number"};
+            cutoff = *c;
         }
         app.interfaceOverlay_ = wantOn;
         if (app.interfaceOverlay_) {

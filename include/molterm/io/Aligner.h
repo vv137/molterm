@@ -53,8 +53,10 @@ private:
                                    bool complex,
                                    const std::vector<int>& mobileAtoms = {},
                                    const std::vector<int>& targetAtoms = {});
-    static void writeTempPDB(const MolObject& obj, const std::string& path,
-                             const std::vector<int>& atomIndices = {});
+    // Build a minimal PDB document (ATOM records + END) as a string. Pure —
+    // no I/O — so the caller can write it through a securely-created fd.
+    static std::string buildTempPDB(const MolObject& obj,
+                                    const std::vector<int>& atomIndices = {});
     static AlignResult parseOutput(const std::string& stdout, const std::string& matrixFile);
 };
 

@@ -2,6 +2,7 @@
 
 
 #include "molterm/app/Application.h"
+#include "molterm/core/StringParse.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/cmd/CommandHelpers.h"
@@ -130,15 +131,11 @@ void Application::registerDisplayCommands(CommandRegistry& reg) {
             for (const auto& o : objs) if (o) out.push_back(o);
             return out;
         }
-        try {
-            size_t parsed = 0;
-            int n = std::stoi(a, &parsed);
-            if (parsed == a.size() && n >= 1 &&
-                n <= static_cast<int>(objs.size()) && objs[n - 1]) {
-                out.push_back(objs[n - 1]);
-                return out;
-            }
-        } catch (...) {}
+        if (auto n = parseInt(a); n && *n >= 1 &&
+                *n <= static_cast<int>(objs.size()) && objs[*n - 1]) {
+            out.push_back(objs[*n - 1]);
+            return out;
+        }
         for (const auto& o : objs) {
             if (o && o->name() == a) { out.push_back(o); return out; }
         }

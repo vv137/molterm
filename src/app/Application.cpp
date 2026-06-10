@@ -28,9 +28,11 @@
 #include "molterm/core/Selection.h"
 #include "molterm/io/SessionSaver.h"
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -336,6 +338,27 @@ std::string expandLabelTemplate(const std::string& fmt, const AtomData& a) {
     return out;
 }
 
+// Validate the printf conversion body of a ${reg:fmt} spec (the text after
+// the ':') before it is spliced into snprintf with a `double` argument.
+// The register value is ALWAYS a double, so only float conversions are
+// type-safe. Accept: flags [-+ #0], optional width digits, optional
+// '.'+precision digits, then exactly one of e/E/f/F/g/G/a/A. Reject
+// everything else — notably `s` (reinterprets the double's bits as a char*
+// → crash) and `n` (writes through the argument → format-string write
+// primitive). An empty/invalid fmt falls back to the caller's default.
+bool isSafeFloatFormat(const std::string& fmt) {
+    if (fmt.empty()) return false;
+    size_t i = 0;
+    while (i < fmt.size() && fmt[i] && std::strchr("-+ #0", fmt[i])) ++i;  // flags
+    while (i < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[i]))) ++i;
+    if (i < fmt.size() && fmt[i] == '.') {
+        ++i;
+        while (i < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[i]))) ++i;
+    }
+    if (i + 1 != fmt.size()) return false;  // exactly one conversion char left
+    return std::strchr("eEfFgGaA", fmt[i]) != nullptr;
+}
+
 
 }  // namespace
 // The label-corner / bg-mode helpers below have external linkage: they are
@@ -544,15 +567,16 @@ std::string Application::expandScriptVars(const std::string& line) const {
                         // Try Scalar field first, then Vec3.
                         if (auto s = r.getScalar(field)) {
                             char buf[64];
-                            std::string spec = fmt.empty() ? std::string("%g") : ("%" + fmt);
+                            std::string spec = isSafeFloatFormat(fmt)
+                                ? ("%" + fmt) : std::string("%g");
                             std::snprintf(buf, sizeof(buf), spec.c_str(), *s);
                             out += buf;
                             consumed = true;
                         } else if (auto v = r.getVec(field)) {
                             char buf[128];
-                            std::string spec = fmt.empty()
-                                ? std::string("(%.3f, %.3f, %.3f)")
-                                : ("(%" + fmt + ", %" + fmt + ", %" + fmt + ")");
+                            std::string one = isSafeFloatFormat(fmt)
+                                ? ("%" + fmt) : std::string("%.3f");
+                            std::string spec = "(" + one + ", " + one + ", " + one + ")";
                             std::snprintf(buf, sizeof(buf), spec.c_str(),
                                           (*v)[0], (*v)[1], (*v)[2]);
                             out += buf;
@@ -995,10 +1019,10 @@ void Application::showInterfaceLegend() {
         // When focus mode is active, restrict statistics to contacts that
         // touch the focus subject — the user is looking at one binding site,
         // so the legend should reflect that site, not the whole structure.
-        const bool focusFiltered = focusSnapshot_.active && !focusAtomMask_.empty();
+        const bool focusFiltered = focus_.active() && !focus_.atomMask.empty();
         auto inFocus = [&](int atomIdx) {
-            return atomIdx >= 0 && atomIdx < (int)focusAtomMask_.size()
-                   && focusAtomMask_[atomIdx];
+            return atomIdx >= 0 && atomIdx < (int)focus_.atomMask.size()
+                   && focus_.atomMask[atomIdx];
         };
 
         struct TypeStats {
@@ -1036,7 +1060,7 @@ void Application::showInterfaceLegend() {
         add("Statistics:");
         char buf[200];
         if (focusFiltered) {
-            const std::string& expr = focusExpr_.empty() ? std::string("focus subject") : focusExpr_;
+            const std::string& expr = focus_.expr.empty() ? std::string("focus subject") : focus_.expr;
             std::snprintf(buf, sizeof(buf), "  Scope: focus subject  (%.*s)",
                           static_cast<int>(std::min<size_t>(expr.size(), 80)), expr.c_str());
             add(buf);

@@ -2,6 +2,7 @@
 
 
 #include "molterm/app/Application.h"
+#include "molterm/core/StringParse.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/app/PathPatterns.h"
@@ -121,14 +122,10 @@ void Application::registerFilesCommands(CommandRegistry& reg) {
             // Try as 1-based index first (matches the listing in :objects),
             // fall back to name lookup.
             int newIdx = -1;
-            try {
-                size_t parsed = 0;
-                int n = std::stoi(a, &parsed);
-                if (parsed == a.size() && n >= 1 &&
-                    n <= static_cast<int>(objs.size())) {
-                    newIdx = n - 1;
-                }
-            } catch (...) {}
+            if (auto n = parseInt(a); n && *n >= 1 &&
+                    *n <= static_cast<int>(objs.size())) {
+                newIdx = *n - 1;
+            }
             if (newIdx < 0) {
                 for (size_t i = 0; i < objs.size(); ++i) {
                     if (objs[i] && objs[i]->name() == a) {

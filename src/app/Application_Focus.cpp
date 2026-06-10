@@ -145,6 +145,13 @@ void Application::onCurrentObjectChanged() {
             interfaceFromZoom_ = false;
         }
     }
+    // searchMatches_ holds atom indices valid only for the object that was
+    // current at search time. After an object swap (or delete) those indices
+    // may exceed the new object's atom count, so `n`/`N` would read past the
+    // end of obj->atoms(). Drop the stale results — the user re-runs `/`.
+    lastSearch_.clear();
+    searchMatches_.clear();
+    searchIdx_ = -1;
     if (canvas_) canvas_->invalidate();
 }
 
@@ -174,14 +181,14 @@ std::vector<int> Application::expandByFocusGranularity(const MolObject& mol,
     if (atomIdx < 0 || atomIdx >= (int)atoms.size()) return out;
     const auto& a = atoms[atomIdx];
 
-    if (focusGranularity_ == FocusGranularity::Chain) {
+    if (focus_.granularity == FocusGranularity::Chain) {
         for (int i = 0; i < (int)atoms.size(); ++i) {
             if (atoms[i].chainId == a.chainId) out.push_back(i);
         }
         return out;
     }
 
-    if (focusGranularity_ == FocusGranularity::Sidechain) {
+    if (focus_.granularity == FocusGranularity::Sidechain) {
         for (int i = 0; i < (int)atoms.size(); ++i) {
             const auto& b = atoms[i];
             if (b.chainId != a.chainId || b.resSeq != a.resSeq ||
@@ -279,42 +286,42 @@ void Application::enterFocus(MolObject& mol,
                              const std::vector<int>& subjectIndices,
                              const std::string& exprDesc) {
     if (subjectIndices.empty()) return;
-    if (focusSnapshot_.active) exitFocus();   // refocus → exit then re-enter
+    if (focus_.active()) exitFocus();   // refocus → exit then re-enter
 
     const auto& atoms = mol.atoms();
 
     // Snapshot camera state.
     auto& cam = tabMgr_.currentTab().camera();
-    focusSnapshot_.active = true;
-    focusSnapshot_.rot    = cam.rotation();
-    focusSnapshot_.cx     = cam.centerX();
-    focusSnapshot_.cy     = cam.centerY();
-    focusSnapshot_.cz     = cam.centerZ();
-    focusSnapshot_.panX   = cam.panXOffset();
-    focusSnapshot_.panY   = cam.panYOffset();
-    focusSnapshot_.zoom   = cam.zoom();
+    focus_.snapshot.active = true;
+    focus_.snapshot.rot    = cam.rotation();
+    focus_.snapshot.cx     = cam.centerX();
+    focus_.snapshot.cy     = cam.centerY();
+    focus_.snapshot.cz     = cam.centerZ();
+    focus_.snapshot.panX   = cam.panXOffset();
+    focus_.snapshot.panY   = cam.panYOffset();
+    focus_.snapshot.zoom   = cam.zoom();
 
     // Snapshot per-repr visibility for the atom-direct reprs we touch.
     static const ReprType kTouchedReprs[] = {
         ReprType::Wireframe, ReprType::BallStick, ReprType::Spacefill,
     };
-    focusSnapshot_.reprs.clear();
+    focus_.snapshot.reprs.clear();
     for (ReprType r : kTouchedReprs) {
-        FocusSavedRepr s;
+        FocusState::SavedRepr s;
         s.type        = r;
         s.objectLevel = mol.reprVisible(r);
         s.atomMask    = mol.atomVisMask(r);    // empty if all-visible
-        focusSnapshot_.reprs.push_back(std::move(s));
+        focus_.snapshot.reprs.push_back(std::move(s));
     }
     // Spline reprs are hidden during focus (they obscure the close-up
     // sidechain/wireframe view); save their object-level state so we can
     // put them back on exit.
-    focusSnapshot_.cartoonVisible  = mol.reprVisible(ReprType::Cartoon);
-    focusSnapshot_.ribbonVisible   = mol.reprVisible(ReprType::Ribbon);
-    focusSnapshot_.backboneVisible = mol.reprVisible(ReprType::Backbone);
+    focus_.snapshot.cartoonVisible  = mol.reprVisible(ReprType::Cartoon);
+    focus_.snapshot.ribbonVisible   = mol.reprVisible(ReprType::Ribbon);
+    focus_.snapshot.backboneVisible = mol.reprVisible(ReprType::Backbone);
     // Snapshot wireframe thickness so we can bump it during focus.
     if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
-        focusSnapshot_.wireframeThickness = wf->thickness();
+        focus_.snapshot.wireframeThickness = wf->thickness();
     }
 
     // Compute subject centroid (for camera snap) + enclosing radius
@@ -333,7 +340,7 @@ void Application::enterFocus(MolObject& mol,
         fzs.push_back(atoms[idx].z);
         ++n;
     }
-    if (n == 0) { focusSnapshot_.active = false; return; }
+    if (n == 0) { focus_.snapshot.active = false; return; }
     sx /= n; sy /= n; sz /= n;
 
     // Snap the camera to the subject centroid, then fit its *projected*
@@ -341,28 +348,28 @@ void Application::enterFocus(MolObject& mol,
     // canvas (live + each :screenshot), so it fills the frame at any
     // resolution/aspect instead of a fixed reference viewport.
     cam.focusOn(sx, sy, sz, cam.zoom());
-    setViewFit(fxs, fys, fzs, focusFillFraction_, focusExtraRadius_,
-               focusMinRadius_);
+    setViewFit(fxs, fys, fzs, focus_.fillFraction, focus_.extraRadius,
+               focus_.minRadius);
 
     // Build subject mask first.
-    focusAtomMask_.assign(atoms.size(), false);
+    focus_.atomMask.assign(atoms.size(), false);
     for (int idx : subjectIndices) {
-        if (idx >= 0 && idx < (int)atoms.size()) focusAtomMask_[idx] = true;
+        if (idx >= 0 && idx < (int)atoms.size()) focus_.atomMask[idx] = true;
     }
 
     // Spatial neighborhood: every atom within focus_radius of any
     // subject atom. This catches the close-pocket geometry — backbone
     // + sidechains touching the subject — but it's distance-based, so
     // a long sidechain reaching the pocket may have its CA outside.
-    const float r2 = focusRadius_ * focusRadius_;
-    focusNbhdMask_.assign(atoms.size(), false);
+    const float r2 = focus_.radius * focus_.radius;
+    focus_.nbhdMask.assign(atoms.size(), false);
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& ai = atoms[i];
         for (int j : subjectIndices) {
             if (j < 0 || j >= (int)atoms.size()) continue;
             const auto& aj = atoms[j];
             float dx = ai.x - aj.x, dy = ai.y - aj.y, dz = ai.z - aj.z;
-            if (dx*dx + dy*dy + dz*dz <= r2) { focusNbhdMask_[i] = true; break; }
+            if (dx*dx + dy*dy + dz*dz <= r2) { focus_.nbhdMask[i] = true; break; }
         }
     }
 
@@ -373,7 +380,7 @@ void Application::enterFocus(MolObject& mol,
         contactMapPanel_.update(mol);
         contactMapPanel_.contactMap().computeInterface(mol, 4.5f);
         interfaceContacts_ = contactMapPanel_.contactMap().interfaceContacts();
-        focusComputedInterface_ = true;
+        focus_.computedInterface = true;
     }
 
     // Promote any residue that has a contact reaching into the subject:
@@ -385,8 +392,8 @@ void Application::enterFocus(MolObject& mol,
     for (const auto& c : interfaceContacts_) {
         if (c.atom1 < 0 || c.atom2 < 0) continue;
         if (c.atom1 >= (int)atoms.size() || c.atom2 >= (int)atoms.size()) continue;
-        bool s1 = focusAtomMask_[c.atom1];
-        bool s2 = focusAtomMask_[c.atom2];
+        bool s1 = focus_.atomMask[c.atom1];
+        bool s2 = focus_.atomMask[c.atom2];
         if (s1 == s2) continue;     // both in subject, or neither — no partner edge
         int partner = s1 ? c.atom2 : c.atom1;
         const auto& a = atoms[partner];
@@ -398,11 +405,11 @@ void Application::enterFocus(MolObject& mol,
     nbhdIndices.reserve(atoms.size());
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
-        if (!focusNbhdMask_[i] && !partnerResidues.empty()
+        if (!focus_.nbhdMask[i] && !partnerResidues.empty()
             && partnerResidues.count({a.chainId, a.resSeq, a.insCode})) {
-            focusNbhdMask_[i] = true;
+            focus_.nbhdMask[i] = true;
         }
-        if (focusNbhdMask_[i]) nbhdIndices.push_back((int)i);
+        if (focus_.nbhdMask[i]) nbhdIndices.push_back((int)i);
     }
 
     mol.hideRepr(ReprType::Cartoon);
@@ -412,7 +419,7 @@ void Application::enterFocus(MolObject& mol,
     // Bump wireframe thickness modestly so the local scaffold reads;
     // the zoom-scaling in WireframeRepr::render does the rest.
     if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
-        wf->setThickness(std::max(0.14f, focusSnapshot_.wireframeThickness * 1.4f));
+        wf->setThickness(std::max(0.14f, focus_.snapshot.wireframeThickness * 1.4f));
     }
     mol.showRepr(ReprType::Wireframe);
     mol.showReprForAtoms(ReprType::Wireframe, nbhdIndices);
@@ -432,45 +439,45 @@ void Application::enterFocus(MolObject& mol,
     for (const auto& c : interfaceContacts_) {
         if (c.atom1 < 0 || c.atom2 < 0) continue;
         if (c.atom1 >= (int)atoms.size() || c.atom2 >= (int)atoms.size()) continue;
-        if (focusNbhdMask_[c.atom1] && focusNbhdMask_[c.atom2])
+        if (focus_.nbhdMask[c.atom1] && focus_.nbhdMask[c.atom2])
             filtered.push_back(c);
     }
-    interfaceRepr_.setData(focusNbhdMask_, std::move(filtered));
+    interfaceRepr_.setData(focus_.nbhdMask, std::move(filtered));
     interfaceRepr_.setDrawSidechains(false);   // wireframe already covers it
     interfaceRepr_.setInteractionThickness(interfaceThickness_);
     interfaceRepr_.setShowMask(interfaceShowMask_);
 
-    focusExpr_ = exprDesc.empty() ? std::string("focus") : exprDesc;
+    focus_.expr = exprDesc.empty() ? std::string("focus") : exprDesc;
     char msg[160];
     std::snprintf(msg, sizeof(msg),
         "Focus: %d atoms (radius=%.1fA zoom=%.2f) — F or Esc to exit",
-        (int)nbhdIndices.size(), focusRadius_,
+        (int)nbhdIndices.size(), focus_.radius,
         tabMgr_.currentTab().camera().zoom());
     cmdLine_.setMessage(msg);
     needsRedraw_ = true;
 }
 
 void Application::exitFocus() {
-    if (!focusSnapshot_.active) return;
+    if (!focus_.active()) return;
     clearViewFit();   // restoring the saved zoom — drop the fit intent
     auto obj = tabMgr_.currentTab().currentObject();
     if (!obj) {
-        focusSnapshot_.active = false;
-        focusAtomMask_.clear();
-        focusNbhdMask_.clear();
-        focusExpr_.clear();
+        focus_.snapshot.active = false;
+        focus_.atomMask.clear();
+        focus_.nbhdMask.clear();
+        focus_.expr.clear();
         return;
     }
 
     // Restore camera.
     auto& cam = tabMgr_.currentTab().camera();
-    cam.setRotation(focusSnapshot_.rot);
-    cam.setCenter(focusSnapshot_.cx, focusSnapshot_.cy, focusSnapshot_.cz);
-    cam.setPan(focusSnapshot_.panX, focusSnapshot_.panY);
-    cam.setZoom(focusSnapshot_.zoom);
+    cam.setRotation(focus_.snapshot.rot);
+    cam.setCenter(focus_.snapshot.cx, focus_.snapshot.cy, focus_.snapshot.cz);
+    cam.setPan(focus_.snapshot.panX, focus_.snapshot.panY);
+    cam.setZoom(focus_.snapshot.zoom);
 
     // Restore per-repr visibility atom-for-atom.
-    for (const auto& s : focusSnapshot_.reprs) {
+    for (const auto& s : focus_.snapshot.reprs) {
         if (s.atomMask.empty()) {
             // Pre-focus state was "all visible" → clear any per-atom mask.
             // showRepr with no per-atom args resets the mask in current API.
@@ -489,26 +496,26 @@ void Application::exitFocus() {
     }
 
     // Restore spline reprs.
-    if (focusSnapshot_.cartoonVisible)  obj->showRepr(ReprType::Cartoon);
+    if (focus_.snapshot.cartoonVisible)  obj->showRepr(ReprType::Cartoon);
     else                                obj->hideRepr(ReprType::Cartoon);
-    if (focusSnapshot_.ribbonVisible)   obj->showRepr(ReprType::Ribbon);
+    if (focus_.snapshot.ribbonVisible)   obj->showRepr(ReprType::Ribbon);
     else                                obj->hideRepr(ReprType::Ribbon);
-    if (focusSnapshot_.backboneVisible) obj->showRepr(ReprType::Backbone);
+    if (focus_.snapshot.backboneVisible) obj->showRepr(ReprType::Backbone);
     else                                obj->hideRepr(ReprType::Backbone);
 
     // Restore wireframe thickness.
     if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
-        wf->setThickness(focusSnapshot_.wireframeThickness);
+        wf->setThickness(focus_.snapshot.wireframeThickness);
     }
 
     // Put the unfiltered interface contact list back if the global
     // overlay was on. If focus computed interactions on demand (no
     // pre-existing :interface), drop them entirely on exit.
-    if (focusComputedInterface_) {
+    if (focus_.computedInterface) {
         interfaceContacts_.clear();
         interfaceAtomMask_.clear();
         interfaceRepr_.clear();
-        focusComputedInterface_ = false;
+        focus_.computedInterface = false;
     } else if (interfaceOverlay_ && !interfaceContacts_.empty()) {
         interfaceRepr_.setData(interfaceAtomMask_, interfaceContacts_);
         interfaceRepr_.setDrawSidechains(interfaceSidechains_);
@@ -517,11 +524,11 @@ void Application::exitFocus() {
         interfaceRepr_.clear();
     }
 
-    focusSnapshot_.active = false;
-    focusSnapshot_.reprs.clear();
-    focusAtomMask_.clear();
-    focusNbhdMask_.clear();
-    focusExpr_.clear();
+    focus_.snapshot.active = false;
+    focus_.snapshot.reprs.clear();
+    focus_.atomMask.clear();
+    focus_.nbhdMask.clear();
+    focus_.expr.clear();
     cmdLine_.setMessage("Focus exited");
     needsRedraw_ = true;
 }

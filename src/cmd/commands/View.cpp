@@ -2,6 +2,7 @@
 
 
 #include "molterm/app/Application.h"
+#include "molterm/core/StringParse.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/cmd/CommandHelpers.h"
@@ -138,13 +139,13 @@ void Application::registerViewCommands(CommandRegistry& reg) {
                 if (cmd.args.size() < 4) {
                     return {false, "Usage: :orient " + cmd.args[0] + " <vx> <vy> <vz> | $reg [selection]"};
                 }
-                try {
-                    vx = std::stod(cmd.args[1]);
-                    vy = std::stod(cmd.args[2]);
-                    vz = std::stod(cmd.args[3]);
-                } catch (...) {
+                auto px = parseDouble(cmd.args[1]);
+                auto py = parseDouble(cmd.args[2]);
+                auto pz = parseDouble(cmd.args[3]);
+                if (!px || !py || !pz) {
                     return {false, "Invalid view vector: " + cmd.args[1] + " " + cmd.args[2] + " " + cmd.args[3]};
                 }
+                vx = *px; vy = *py; vz = *pz;
                 selStart = 4;
             }
             double vlen = std::sqrt(vx*vx + vy*vy + vz*vz);
@@ -252,12 +253,11 @@ void Application::registerViewCommands(CommandRegistry& reg) {
             return {false, "Usage: :turn x|y|z <degrees>"};
         }
         const auto& axis = cmd.args[0];
-        float deg;
-        try {
-            deg = std::stof(cmd.args[1]);
-        } catch (...) {
+        auto degOpt = parseFloat(cmd.args[1]);
+        if (!degOpt) {
             return {false, "Invalid angle: " + cmd.args[1]};
         }
+        float deg = *degOpt;
         auto& cam = app.tabs().currentTab().camera();
         if      (axis == "x" || axis == "X") cam.rotateX(deg);
         else if (axis == "y" || axis == "Y") cam.rotateY(deg);

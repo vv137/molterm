@@ -382,6 +382,25 @@ void Application::handleAction(Action action) {
         needsRedraw_ = true;
     };
 
+    // Show the current search hit (searchIdx_ → searchMatches_) in the command
+    // line, or invalidate a stale result whose atom index no longer maps into
+    // the current object. Shared by SearchNext/SearchPrev, which differ only in
+    // how they advance searchIdx_ before calling this.
+    auto showSearchHit = [&](MolObject& obj) {
+        if (searchMatches_[searchIdx_] >= static_cast<int>(obj.atoms().size())) {
+            searchMatches_.clear(); searchIdx_ = -1;
+            cmdLine_.setMessage("Search results no longer valid; re-run /");
+            dirty({C::CommandLine});
+            return;
+        }
+        const auto& a = obj.atoms()[searchMatches_[searchIdx_]];
+        cmdLine_.setMessage("/" + lastSearch_ + " [" + std::to_string(searchIdx_ + 1) +
+                            "/" + std::to_string(searchMatches_.size()) + "] " +
+                            a.chainId + " " + a.resName + " " + std::to_string(a.resSeq) +
+                            " " + a.name);
+        dirty({C::Viewport, C::CommandLine});
+    };
+
     switch (action) {
         // Navigation — only viewport + status bar
         case Action::RotateLeft:   cam.rotateY(-rs);  dirty({C::Viewport, C::StatusBar}); break;
@@ -434,6 +453,10 @@ void Application::handleAction(Action action) {
                 auto obj = tab.currentObject();
                 if (obj) store_.remove(obj->name());
                 tab.removeObject(idx);
+                // The current object changed — refresh per-object overlays and
+                // drop stale search results (their atom indices no longer map
+                // to the new current object).
+                onCurrentObjectChanged();
             }
             dirty({C::Viewport, C::ObjectPanel, C::SeqBar, C::StatusBar});
             break;
@@ -509,7 +532,7 @@ void Application::handleAction(Action action) {
         case Action::ExitToNormal:
             // First, if we're in focus mode, exiting back to "normal" view
             // means leaving focus — restore camera + visibility.
-            if (focusSnapshot_.active) {
+            if (focus_.active()) {
                 exitFocus();
                 dirty({C::CommandLine, C::StatusBar, C::Viewport});
                 break;
@@ -696,12 +719,7 @@ void Application::handleAction(Action action) {
             auto obj = tab.currentObject();
             if (!obj) break;
             searchIdx_ = (searchIdx_ + 1) % static_cast<int>(searchMatches_.size());
-            const auto& a = obj->atoms()[searchMatches_[searchIdx_]];
-            cmdLine_.setMessage("/" + lastSearch_ + " [" + std::to_string(searchIdx_ + 1) +
-                               "/" + std::to_string(searchMatches_.size()) + "] " +
-                               a.chainId + " " + a.resName + " " + std::to_string(a.resSeq) +
-                               " " + a.name);
-            dirty({C::Viewport, C::CommandLine});
+            showSearchHit(*obj);
             break;
         }
         case Action::SearchPrev: {
@@ -713,12 +731,7 @@ void Application::handleAction(Action action) {
             if (!obj) break;
             searchIdx_--;
             if (searchIdx_ < 0) searchIdx_ = static_cast<int>(searchMatches_.size()) - 1;
-            const auto& a = obj->atoms()[searchMatches_[searchIdx_]];
-            cmdLine_.setMessage("/" + lastSearch_ + " [" + std::to_string(searchIdx_ + 1) +
-                               "/" + std::to_string(searchMatches_.size()) + "] " +
-                               a.chainId + " " + a.resName + " " + std::to_string(a.resSeq) +
-                               " " + a.name);
-            dirty({C::Viewport, C::CommandLine});
+            showSearchHit(*obj);
             break;
         }
 
@@ -768,7 +781,7 @@ void Application::handleAction(Action action) {
         //   • Fresh pick → focus on that residue.
         //   • No pick + named selection $sele exists → focus on it.
         case Action::FocusPick: {
-            if (focusSnapshot_.active) {
+            if (focus_.active()) {
                 exitFocus();
                 break;
             }
@@ -919,8 +932,8 @@ void Application::handleAction(Action action) {
             pickMode_ = (pickMode_ == PickMode::Focus) ? PickMode::Inspect
                                                        : PickMode::Focus;
             const char* gran =
-                focusGranularity_ == FocusGranularity::Chain    ? "chain" :
-                focusGranularity_ == FocusGranularity::Sidechain ? "sidechain" :
+                focus_.granularity == FocusGranularity::Chain    ? "chain" :
+                focus_.granularity == FocusGranularity::Sidechain ? "sidechain" :
                                                                   "residue";
             if (pickMode_ == PickMode::Focus) {
                 cmdLine_.setMessage(std::string("FOCUS pick mode — click an atom (granularity=") +

@@ -19,13 +19,20 @@ namespace {
 namespace fs = std::filesystem;
 
 // Uppercase and strip whitespace — CCD codes are case-insensitive and the
-// component file name uses the bare code (e.g. "ATP.cif").
+// component file name uses the bare code (e.g. "ATP.cif"). Returns "" for
+// anything that isn't a valid CCD id (1-5 alphanumeric chars): a residue name
+// outside that shape is never a real wwPDB component, and rejecting it also
+// closes a shell-injection hole — `name` is interpolated into the curl
+// command in download(), so a residue code from a crafted file containing a
+// quote or `$(...)`/`;` could otherwise run arbitrary commands.
 std::string normalizeName(const std::string& resName) {
     std::string s;
     for (char c : resName) {
         if (std::isspace(static_cast<unsigned char>(c))) continue;
+        if (!std::isalnum(static_cast<unsigned char>(c))) return {};  // reject metachars
         s += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     }
+    if (s.empty() || s.size() > 5) return {};
     return s;
 }
 

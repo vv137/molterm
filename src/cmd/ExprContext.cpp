@@ -8,6 +8,7 @@
 #include "molterm/app/Application.h"
 #include "molterm/core/BondTable.h"
 #include "molterm/core/MolObject.h"
+#include "molterm/core/StringParse.h"
 
 namespace molterm {
 
@@ -60,8 +61,9 @@ RegisterExpr::Context makeExprContext(Application& app) {
             else if (part == 1) resi += c;
             else                name += c;
         }
-        int rs = -1;
-        try { rs = std::stoi(resi); } catch (...) { return false; }
+        auto rsOpt = parseInt(resi);
+        if (!rsOpt) return false;
+        int rs = *rsOpt;
         for (const auto& a : obj->atoms()) {
             if (!chain.empty() && a.chainId != chain) continue;
             if (a.resSeq != rs) continue;

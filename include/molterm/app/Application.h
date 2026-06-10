@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "molterm/app/CommandScope.h"
+#include "molterm/app/FocusState.h"
 #include "molterm/app/TabManager.h"
 #include "molterm/app/TabViewState.h"
 #include "molterm/app/ViewSettings.h"
@@ -74,12 +75,8 @@ inline const char* pickModeName(PickMode pm) {
     return "?";
 }
 
-// What to expand a clicked atom into when entering focus.
-//   Residue   — atoms sharing chainId+resSeq+insCode (default; matches prior F behavior)
-//   Chain     — every atom in the same chainId
-//   Sidechain — same residue minus backbone (N/CA/C/O); falls back to Residue
-//               when sidechain is empty (Gly).
-enum class FocusGranularity { Residue, Chain, Sidechain };
+// FocusGranularity + the focus-mode state cluster live in
+// molterm/app/FocusState.h (reached via Application::focus()).
 
 enum class RendererType {
     Ascii,
@@ -301,6 +298,12 @@ public:
     using OverlaySizeMode = ViewSettings::OverlaySizeMode;
     ViewSettings& view() { return view_; }
     const ViewSettings& view() const { return view_; }
+
+    // Focus-mode state cluster (Mol*-style click-to-focus). Command handlers
+    // read/write the tunables through here (`:set focus_*`); enterFocus/
+    // exitFocus drive the snapshot/restore.
+    FocusState& focus() { return focus_; }
+    const FocusState& focus() const { return focus_; }
 
     float fogStrength() const { return view_.fogStrength(); }
     void setFogStrength(float s) { view_.setFogStrength(s); }
@@ -530,50 +533,11 @@ private:
     // True iff the overlay is currently engaged via the zoom gate
     // (so we can auto-disengage cleanly without clobbering a manual toggle).
     bool interfaceFromZoom_ = false;
-    // Focus mode (Mol*-style click-to-focus). Tracks the live "focus
-    // subject" (a Selection) and the saved view + visibility state to
-    // restore on exit. focusActive_ false → no focus mode; the
-    // focusAtomMask_ drives `applyFocusDim` only.
-    struct FocusSavedRepr {
-        ReprType  type;
-        bool      objectLevel;            // pre-focus mol.reprVisible(type)
-        std::vector<bool> atomMask;       // pre-focus per-atom mask (empty = all)
-    };
-    struct FocusSnapshot {
-        bool                 active = false;
-        // Camera
-        std::array<float, 9> rot{};
-        float cx = 0, cy = 0, cz = 0;
-        float panX = 0, panY = 0;
-        float zoom = 1.0f;
-        // Per-repr visibility, captured on entry, restored on exit.
-        std::vector<FocusSavedRepr> reprs;
-        // Object-level (no per-atom mask) visibility for the spline
-        // reprs we toggle off during focus — restore to original on exit.
-        bool cartoonVisible  = false;
-        bool ribbonVisible   = false;
-        bool backboneVisible = false;
-        // Original wireframe thickness (Å) — temporarily bumped during focus.
-        float wireframeThickness = 0.10f;
-    };
-    FocusSnapshot     focusSnapshot_;
-    std::vector<bool> focusAtomMask_;       // focus subject (kept vivid)
-    std::vector<bool> focusNbhdMask_;       // neighborhood (visible during focus)
-    std::string       focusExpr_;
-    float             focusDimStrength_ = 0.55f;
-    float             focusRadius_      = 5.0f;   // Å around the subject
-    float             focusZoom_        = 4.0f;   // fallback zoom (used only when
-                                                  // subject bounding sphere can't
-                                                  // be computed)
-    // Subject-size aware zoom (Mol*-style). The effective zoom for a focus
-    // subject of enclosing radius R is:
-    //   zoom = focusFillFraction_ * 20.0 / max(R + focusExtraRadius_, focusMinRadius_)
-    // Calibration: at fillFraction=1.0 the formula matches the existing
-    // `:zoom` heuristic (40 / span ≈ 20 / R) so a default of 0.6 leaves
-    // generous headroom around the subject.
-    float             focusFillFraction_ = 0.6f;
-    float             focusExtraRadius_  = 4.0f;  // Å padding (matches Mol*)
-    float             focusMinRadius_    = 2.0f;  // Å clamp (single-atom subject)
+    // Focus mode (Mol*-style click-to-focus): the saved view + visibility
+    // state plus the user tunables, as one cohesive cluster (FocusState.h).
+    // enterFocus/exitFocus below snapshot into / restore from focus_; the
+    // focus().atomMask drives applyFocusDim. Reached publicly via focus().
+    FocusState        focus_;
     // issue #98 — see hasViewFit()/setViewFit() for the rationale.
     struct ViewFit {
         bool active = false;
@@ -583,11 +547,6 @@ private:
         float minExtent = 1.0f;         // Å floor (avoids over-zoom on a point)
     };
     ViewFit           viewFit_;
-    FocusGranularity  focusGranularity_  = FocusGranularity::Residue;
-    bool              focusComputedInterface_ = false;   // true if enterFocus
-                                                          // ran computeInterface
-                                                          // itself (so exitFocus
-                                                          // clears the cache).
     // Fallback color used when classification is disabled
     // (`:set interface_classify off`).
     int interfaceColor_ = kColorYellow;
@@ -884,7 +843,7 @@ private:
                     const std::vector<int>& subjectIndices,
                     const std::string& exprDesc);
     void exitFocus();
-    bool focusActive() const { return focusSnapshot_.active; }
+    bool focusActive() const { return focus_.active(); }
 
     // ── View-fit intent (issue #98) ────────────────────────────────────
     // :focus/:zoom/:orient remember the world-space points they framed and
@@ -911,7 +870,7 @@ private:
     // Apply computeFitZoom() to the camera for the given canvas.
     void applyViewFit(int W, int H, float aspectYX);
     // Expand a single clicked atom into the focus subject according to
-    // `focusGranularity_`. Used by both Action::FocusPick (F key) and
+    // `focus_.granularity`. Used by both Action::FocusPick (F key) and
     // PickMode::Focus (gf + click) so they stay in lockstep.
     std::vector<int> expandByFocusGranularity(const MolObject& mol,
                                               int atomIdx) const;

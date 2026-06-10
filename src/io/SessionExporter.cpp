@@ -1,4 +1,5 @@
 #include "molterm/io/SessionExporter.h"
+#include "molterm/io/PdbWriter.h"
 #include "molterm/render/ColorMapper.h"
 
 #include <algorithm>
@@ -38,23 +39,12 @@ static bool writePDB(const MolObject& obj, const std::string& path) {
 
         // HETATM for ligands/heteroatoms so PyMOL recognizes them as
         // non-polymer (distance-bonds them, honors `resn`/het selections).
+        // serial == atomIndex+1 keeps the .pml's `id` selections valid, so
+        // raw (un-aligned) names via formatPdbAtomRecord(alignName=false).
         const char* record = a.isHet ? "HETATM" : "ATOM";
         char line[82];
-        snprintf(line, sizeof(line),
-            "%-6s%5d %-4s %3s %c%4d%c   %8.3f%8.3f%8.3f%6.2f%6.2f          %2s",
-            record,
-            (i + 1) % 100000,
-            a.name.c_str(),
-            a.resName.c_str(),
-            a.chainId.empty() ? ' ' : a.chainId[0],
-            a.resSeq % 10000,
-            a.insCode,
-            static_cast<double>(a.x),
-            static_cast<double>(a.y),
-            static_cast<double>(a.z),
-            static_cast<double>(a.occupancy),
-            static_cast<double>(a.bFactor),
-            a.element.c_str());
+        formatPdbAtomRecord(line, sizeof(line), record, i + 1, a,
+                            /*alignName=*/false);
         out << line << "\n";
     }
     out << "TER\nEND\n";

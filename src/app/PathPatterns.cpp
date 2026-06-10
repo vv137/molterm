@@ -1,5 +1,7 @@
 #include "molterm/app/PathPatterns.h"
 
+#include "molterm/core/StringParse.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <glob.h>
@@ -18,20 +20,18 @@ std::vector<std::string> expandBrace(const std::string& p) {
     auto inner = p.substr(lb + 1, rb - lb - 1);
     auto dots = inner.find("..");
     if (dots == std::string::npos) return {p};
-    try {
-        int lo = std::stoi(inner.substr(0, dots));
-        int hi = std::stoi(inner.substr(dots + 2));
-        if (hi < lo) std::swap(lo, hi);
-        std::vector<std::string> out;
-        out.reserve(static_cast<size_t>(hi - lo + 1));
-        for (int i = lo; i <= hi; ++i) {
-            out.push_back(p.substr(0, lb) + std::to_string(i) +
-                          p.substr(rb + 1));
-        }
-        return out;
-    } catch (...) {
-        return {p};
+    auto lo = parseInt(inner.substr(0, dots));
+    auto hi = parseInt(inner.substr(dots + 2));
+    if (!lo || !hi) return {p};
+    int loV = *lo, hiV = *hi;
+    if (hiV < loV) std::swap(loV, hiV);
+    std::vector<std::string> out;
+    out.reserve(static_cast<size_t>(hiV - loV + 1));
+    for (int i = loV; i <= hiV; ++i) {
+        out.push_back(p.substr(0, lb) + std::to_string(i) +
+                      p.substr(rb + 1));
     }
+    return out;
 }
 
 bool hasGlobMeta(const std::string& s) {

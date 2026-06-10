@@ -11,6 +11,7 @@
 #include "molterm/core/BondTable.h"
 #include "molterm/core/MolObject.h"
 #include "molterm/core/SpatialHash.h"
+#include "molterm/core/StringParse.h"
 
 namespace molterm {
 
@@ -24,6 +25,14 @@ std::string mergeScope(const Selection& a, const Selection& b) {
     if (a.empty()) return b.objectScope();
     if (b.empty()) return a.objectScope();
     return (a.objectScope() == b.objectScope()) ? a.objectScope() : std::string();
+}
+
+// An object segment that matches every loaded object: the "*"/"all" globs, or
+// an empty segment. Concrete names (everything else) scope the selection to
+// that object. One spelling shared by the slash predicate, its scope-tagging,
+// and the `<obj>/(...)` paren form so they can't drift.
+bool isObjGlob(const std::string& objName) {
+    return objName.empty() || objName == "*" || objName == "all";
 }
 }  // namespace
 
@@ -427,8 +436,8 @@ private:
         // Parse resi pattern: "42", "10-20", "10+20+30-40", or signed forms
         // like "-5--1" (issue #63). Signed support: a leading '-' is part
         // of the start value, so the range separator is the FIRST '-'
-        // *after* index 0. std::stoi is wrapped in try/catch so a
-        // malformed component (e.g. "abc") yields an empty selection
+        // *after* index 0. parseInt is no-throw, so a malformed component
+        // (e.g. "abc") is simply skipped — that chunk contributes no range
         // instead of crashing the process.
         std::vector<std::pair<int,int>> resiRanges;
         if (!resiPat.empty()) {
@@ -437,16 +446,12 @@ private:
                 if (buf.empty()) return;
                 size_t searchFrom = (buf[0] == '-') ? 1 : 0;
                 auto dash = buf.find('-', searchFrom);
-                try {
-                    if (dash != std::string::npos) {
-                        resiRanges.push_back({std::stoi(buf.substr(0, dash)),
-                                              std::stoi(buf.substr(dash + 1))});
-                    } else {
-                        int v = std::stoi(buf);
-                        resiRanges.push_back({v, v});
-                    }
-                } catch (...) {
-                    // skip — leave resiRanges empty for this chunk
+                if (dash != std::string::npos) {
+                    auto lo = parseInt(buf.substr(0, dash));
+                    auto hi = parseInt(buf.substr(dash + 1));
+                    if (lo && hi) resiRanges.push_back({*lo, *hi});
+                } else if (auto v = parseInt(buf)) {
+                    resiRanges.push_back({*v, *v});
                 }
                 buf.clear();
             };
@@ -480,10 +485,14 @@ private:
 
         std::string objName = objPat;
         std::string molName = mol_.name();
+        // "*" / "all" (and an empty segment) are object globs: match every
+        // object, not an object literally named "*"/"all" (issue: slash
+        // wildcard selected nothing). Mirrors the scope-tagging below.
+        const bool objGlob = isObjGlob(objName);
 
         auto sel = Selection::fromPredicate(mol_,
-            [objName, molName, chains, resiRanges, names](int, const AtomData& a) {
-                if (!objName.empty() && molName != objName) return false;
+            [objGlob, objName, molName, chains, resiRanges, names](int, const AtomData& a) {
+                if (!objGlob && molName != objName) return false;
                 if (!chains.empty()) {
                     bool found = false;
                     for (const auto& c : chains) if (a.chainId == c) { found = true; break; }
@@ -506,7 +515,7 @@ private:
         // A concrete object segment scopes the result the same way the
         // `<obj>/(...)` paren form does (issue #101). Globs ("*"/"all") stay
         // unscoped so they keep matching every object.
-        if (!objPat.empty() && objPat != "*" && objPat != "all")
+        if (!isObjGlob(objPat))
             sel.setObjectScope(objPat);
         return sel;
     }
@@ -533,8 +542,9 @@ private:
             advance();   // consume LParen
             Selection inner = parseOr();
             match(Token::RParen);
-            bool wildcard = (objName == "all" || objName == "*");
-            if (wildcard) return inner;                  // every object — unscoped
+            // objName is always non-empty here (the grammar read a Word/Number
+            // before "/("), so isObjGlob reduces to the "*"/"all" test.
+            if (isObjGlob(objName)) return inner;        // every object — unscoped
             // Tag the scope so the qualifier survives storage in a named
             // selection: `$name` re-expansion is then gated to this object
             // instead of leaking into every loaded object (issue #101).
@@ -661,11 +671,10 @@ private:
                     advance();
                 }
                 if (current_.type != Token::Number) return std::nullopt;
-                int v = 0;
-                try { v = std::stoi(current_.value); }
-                catch (const std::exception&) { advance(); return std::nullopt; }
+                auto vOpt = parseInt(current_.value);
+                if (!vOpt) { advance(); return std::nullopt; }
                 advance();
-                return v * sign;
+                return *vOpt * sign;
             };
             auto parseOneResi = [&]() {
                 // GCC 11 confuses bare `end` here with `std::end` via the
@@ -877,16 +886,17 @@ private:
             if (current_.type == Token::Number) {
                 // Numeric form. Parse N or N-M, separated by '+'.
                 while (current_.type == Token::Number) {
-                    int n = 0;
-                    try { n = std::stoi(current_.value); }
-                    catch (...) { return Selection({}, label); }
+                    auto nOpt = parseInt(current_.value);
+                    if (!nOpt) return Selection({}, label);
+                    int n = *nOpt;
                     advance();
                     int m = n;
                     if (current_.type == Token::Dash) {
                         advance();
                         if (current_.type != Token::Number) return Selection({}, label);
-                        try { m = std::stoi(current_.value); }
-                        catch (...) { return Selection({}, label); }
+                        auto mOpt = parseInt(current_.value);
+                        if (!mOpt) return Selection({}, label);
+                        m = *mOpt;
                         advance();
                     }
                     if (m < n) std::swap(n, m);
@@ -934,7 +944,11 @@ private:
             if (current_.type != Token::Number) {
                 return Selection({}, kwLower);   // malformed → empty
             }
-            float dist = std::stof(current_.value);
+            auto distOpt = parseFloat(current_.value);   // no-throw; nullopt on > FLT_MAX
+            if (!distOpt) {
+                return Selection({}, kwLower);   // unparsable distance → empty
+            }
+            float dist = *distOpt;
             advance();
             if (!matchWord("of")) {
                 return Selection({}, kwLower);   // missing "of" → empty

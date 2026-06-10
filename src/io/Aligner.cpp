@@ -1,15 +1,60 @@
 #include "molterm/io/Aligner.h"
 
+#include "molterm/io/PdbWriter.h"
+
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <unistd.h>
 #include <fstream>
-#include <regex>
 #include <sstream>
-#include <stdexcept>
+#include <string>
 
 namespace molterm {
+
+namespace {
+
+// Unpredictable token (16 hex chars) for temp file names, so a local attacker
+// can't pre-create or symlink them ahead of us. Reads /dev/urandom and mixes
+// in the pid as a fallback. Portable (no mkstemp, which strict -std=c++17 can
+// hide on glibc).
+std::string randomToken() {
+    unsigned char b[8] = {};
+    if (FILE* f = std::fopen("/dev/urandom", "rb")) {
+        (void)std::fread(b, 1, sizeof(b), f);
+        std::fclose(f);
+    }
+    unsigned long pid = static_cast<unsigned long>(getpid());
+    for (size_t i = 0; i < sizeof(b); ++i)
+        b[i] ^= static_cast<unsigned char>(pid >> (8 * (i % sizeof(pid))));
+    static const char* hex = "0123456789abcdef";
+    std::string s;
+    for (unsigned char c : b) { s += hex[c >> 4]; s += hex[c & 0xF]; }
+    return s;
+}
+
+// Securely create + write a temp file: O_EXCL fails if the path already
+// exists (no hijack of a pre-created file), O_NOFOLLOW fails on a symlink
+// (no redirect to an attacker target), mode 0600. Returns false on any error.
+bool writeSecureFile(const std::string& path, const std::string& content) {
+    int fd = ::open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0600);
+    if (fd < 0) return false;
+    const char* p = content.data();
+    size_t left = content.size();
+    bool ok = true;
+    while (left > 0) {
+        ssize_t w = ::write(fd, p, left);
+        if (w <= 0) { ok = false; break; }
+        p += w;
+        left -= static_cast<size_t>(w);
+    }
+    ::close(fd);
+    if (!ok) std::remove(path.c_str());
+    return ok;
+}
+
+}  // namespace
 
 std::string Aligner::usalignPath_ = "USalign";
 
@@ -53,17 +98,20 @@ AlignResult Aligner::runUSalign(const MolObject& mobile, const MolObject& target
                                  const std::vector<int>& targetAtoms) {
     AlignResult result;
 
-    // Write temp PDB files
+    // Write temp PDB files under unpredictable, exclusively-created paths
+    // (writeSecureFile). A shared token keeps the trio easy to correlate.
+    std::string token = randomToken();
     std::string tmpDir = "/tmp";
-    std::string mobilePdb = tmpDir + "/molterm_mobile_" + std::to_string(getpid()) + ".pdb";
-    std::string targetPdb = tmpDir + "/molterm_target_" + std::to_string(getpid()) + ".pdb";
-    std::string matrixFile = tmpDir + "/molterm_matrix_" + std::to_string(getpid()) + ".txt";
+    std::string mobilePdb = tmpDir + "/molterm_mobile_" + token + ".pdb";
+    std::string targetPdb = tmpDir + "/molterm_target_" + token + ".pdb";
+    std::string matrixFile = tmpDir + "/molterm_matrix_" + token + ".txt";
 
-    try {
-        writeTempPDB(mobile, mobilePdb, mobileAtoms);
-        writeTempPDB(target, targetPdb, targetAtoms);
-    } catch (const std::exception& e) {
-        result.message = std::string("Failed to write temp PDB: ") + e.what();
+    if (!writeSecureFile(mobilePdb, buildTempPDB(mobile, mobileAtoms)) ||
+        !writeSecureFile(targetPdb, buildTempPDB(target, targetAtoms))) {
+        // Remove whichever of the two we managed to create before failing.
+        std::remove(mobilePdb.c_str());
+        std::remove(targetPdb.c_str());
+        result.message = "Failed to write temp PDB for alignment";
         return result;
     }
 
@@ -111,31 +159,19 @@ AlignResult Aligner::runUSalign(const MolObject& mobile, const MolObject& target
     return result;
 }
 
-void Aligner::writeTempPDB(const MolObject& obj, const std::string& path,
-                           const std::vector<int>& atomIndices) {
-    std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write " + path);
-
+std::string Aligner::buildTempPDB(const MolObject& obj,
+                                  const std::vector<int>& atomIndices) {
+    std::string out;
     const auto& atoms = obj.atoms();
 
     auto writeAtom = [&](int i, int serial) {
-        const auto& a = atoms[i];
         char line[82];
-        snprintf(line, sizeof(line),
-            "ATOM  %5d %-4s %3s %c%4d%c   %8.3f%8.3f%8.3f%6.2f%6.2f          %2s",
-            serial % 100000,
-            a.name.c_str(),
-            a.resName.c_str(),
-            a.chainId.empty() ? ' ' : a.chainId[0],
-            a.resSeq % 10000,
-            a.insCode,
-            static_cast<double>(a.x),
-            static_cast<double>(a.y),
-            static_cast<double>(a.z),
-            static_cast<double>(a.occupancy),
-            static_cast<double>(a.bFactor),
-            a.element.c_str());
-        out << line << "\n";
+        // USalign only needs tolerant ATOM records (raw names, no HETATM/TER),
+        // so alignName=false; serial is 1..N over the written atoms.
+        formatPdbAtomRecord(line, sizeof(line), "ATOM", serial, atoms[i],
+                            /*alignName=*/false);
+        out += line;
+        out += '\n';
     };
 
     if (atomIndices.empty()) {
@@ -146,7 +182,8 @@ void Aligner::writeTempPDB(const MolObject& obj, const std::string& path,
         for (int idx : atomIndices)
             writeAtom(idx, serial++);
     }
-    out << "END\n";
+    out += "END\n";
+    return out;
 }
 
 AlignResult Aligner::parseOutput(const std::string& output, const std::string& matrixFile) {
@@ -188,6 +225,7 @@ AlignResult Aligner::parseOutput(const std::string& output, const std::string& m
     std::ifstream matFile(matrixFile);
     if (matFile) {
         std::string mline;
+        bool seen[3] = {false, false, false};
         while (std::getline(matFile, mline)) {
             int m;
             double t, u0, u1, u2;
@@ -197,10 +235,19 @@ AlignResult Aligner::parseOutput(const std::string& output, const std::string& m
                     result.rotation[m][0] = u0;
                     result.rotation[m][1] = u1;
                     result.rotation[m][2] = u2;
+                    seen[m] = true;
                 }
             }
         }
-        result.success = true;
+        // Only a *complete* 3-row matrix is a success. A file that opened but
+        // held no/partial rotation rows previously set success=true with an
+        // all-zero matrix, so applyTransform silently collapsed every mobile
+        // atom onto the origin — corruption reported as success.
+        if (seen[0] && seen[1] && seen[2]) {
+            result.success = true;
+        } else {
+            result.message = "USalign produced no usable rotation matrix";
+        }
     } else {
         result.message = "Failed to read rotation matrix";
     }

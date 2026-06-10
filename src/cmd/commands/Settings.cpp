@@ -10,6 +10,7 @@
 #include "molterm/cmd/ExprContext.h"
 #include "molterm/core/MolObject.h"
 #include "molterm/core/Selection.h"
+#include "molterm/core/StringParse.h"
 #include "molterm/repr/CartoonRepr.h"
 #include "molterm/repr/SpacefillRepr.h"
 #include "molterm/repr/SurfaceRepr.h"
@@ -134,12 +135,18 @@ const std::vector<ReprScalar>& reprScalarTable() {
     return kTable;
 }
 
-// Look up a row by any of its alias names.
-const ReprScalar* findReprScalar(const std::string& opt) {
-    for (const auto& row : reprScalarTable())
+// Look up a row by any of its alias names. Shared by the ReprScalar and
+// AppIntScalar tables, which both expose a `.names` alias list.
+template <class Row>
+const Row* findByAlias(const std::vector<Row>& table, const std::string& opt) {
+    for (const auto& row : table)
         for (const char* n : row.names)
             if (opt == n) return &row;
     return nullptr;
+}
+
+const ReprScalar* findReprScalar(const std::string& opt) {
+    return findByAlias(reprScalarTable(), opt);
 }
 
 // Canonical (first) name used in :set/:get output.
@@ -153,6 +160,50 @@ std::string reprScalarValue(const ReprScalar& row, Representation* r) {
     double v = row.get(r);
     return row.isInt ? std::to_string(static_cast<int>(v))
                      : std::to_string(static_cast<float>(v));
+}
+
+// ── App-level int scalar :set/:get options ──────────────────────────────────
+// Same idea as ReprScalar, but the knob lives on Application as a public int
+// getter + setter and the value is range-CHECKED (reject out of bounds) rather
+// than clamped. One row is the single source for BOTH :set and :get plus the
+// usage / out-of-range / not-a-number messages, replacing a hand-written
+// parse+validate branch in each handler with a single table lookup.
+struct AppIntScalar {
+    std::vector<const char*> names;   // aliases; first is the canonical name
+    int lo, hi;
+    const char* unit;                 // message suffix ("" or " px")
+    int  (Application::*get)() const;
+    void (Application::*set)(int);
+};
+
+const std::vector<AppIntScalar>& appIntScalarTable() {
+    static const std::vector<AppIntScalar> kTable = {
+        {{"label_font_size", "lfs"}, 8, 72, " px",
+         &Application::labelFontSize, &Application::setLabelFontSize},
+        {{"transcript_lines"}, 1, 30, "",
+         &Application::transcriptHintLines, &Application::setTranscriptHintLines},
+        {{"annotation_font_size", "anf"}, 8, 72, " px",
+         &Application::annotationFontSize, &Application::setAnnotationFontSize},
+        {{"annotation_linewidth", "anlw"}, 1, 8, " px",
+         &Application::annotationLineWidth, &Application::setAnnotationLineWidth},
+        {{"reference_canvas_height"}, 240, 8192, " px",
+         &Application::referenceCanvasHeight, &Application::setReferenceCanvasHeight},
+        {{"live_dpi"}, 36, 600, "",
+         &Application::liveDpi, &Application::setLiveDpi},
+        {{"label_outline_thickness"}, 1, 6, "",
+         &Application::labelOutlineThickness, &Application::setLabelOutlineThickness},
+        {{"annotation_outline_thickness"}, 1, 6, "",
+         &Application::annotationOutlineThickness, &Application::setAnnotationOutlineThickness},
+        {{"arrow_thickness", "at"}, 1, 10, "",
+         &Application::arrowThickness, &Application::setArrowThickness},
+        {{"arrow_head_size", "ahs"}, 2, 32, "",
+         &Application::arrowHeadSize, &Application::setArrowHeadSize},
+    };
+    return kTable;
+}
+
+const AppIntScalar* findAppIntScalar(const std::string& opt) {
+    return findByAlias(appIntScalarTable(), opt);
 }
 
 }  // namespace
@@ -237,6 +288,19 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             row->set(r, v);
             return {true, name + " = " + reprScalarValue(*row, r)};
         }
+        if (const AppIntScalar* row = findAppIntScalar(opt)) {
+            const std::string name = row->names.front();
+            const std::string range = std::to_string(row->lo) + ".." +
+                                       std::to_string(row->hi);
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set " + name + " <" + range + ">"};
+            auto v = parseInt(cmd.args[1]);
+            if (!v) return {false, name + ": not a number: " + cmd.args[1]};
+            if (*v < row->lo || *v > row->hi)
+                return {false, name + " out of range (" + range + ")"};
+            (app.*(row->set))(*v);
+            return {true, name + " = " + std::to_string(*v) + row->unit};
+        }
         if (opt == "pan_speed" || opt == "ps") {
             if (cmd.args.size() < 2) return {false, "Usage: :set pan_speed <1-20>"};
             float val = std::stof(cmd.args[1]);
@@ -273,34 +337,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             app.setOutlineDarken(std::stof(cmd.args[1]));
             return {true, "Outline darken set to " + cmd.args[1]};
         }
-        if (opt == "label_font_size" || opt == "lfs") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set label_font_size <8..72>"};
-            int px = std::stoi(cmd.args[1]);
-            if (px < 8 || px > 72) return {false, "label_font_size out of range (8..72)"};
-            app.setLabelFontSize(px);
-            return {true, "label_font_size = " + std::to_string(px) + " px"};
-        }
-        if (opt == "transcript_lines") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set transcript_lines <1..30>"};
-            int n = std::stoi(cmd.args[1]);
-            if (n < 1 || n > 30) return {false, "transcript_lines out of range (1..30)"};
-            app.setTranscriptHintLines(n);
-            return {true, "transcript_lines = " + std::to_string(n)};
-        }
-        if (opt == "annotation_font_size" || opt == "anf") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set annotation_font_size <8..72>"};
-            int px = std::stoi(cmd.args[1]);
-            if (px < 8 || px > 72) return {false, "annotation_font_size out of range (8..72)"};
-            app.setAnnotationFontSize(px);
-            return {true, "annotation_font_size = " + std::to_string(px) + " px"};
-        }
-        if (opt == "annotation_linewidth" || opt == "anlw") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set annotation_linewidth <1..8>"};
-            int px = std::stoi(cmd.args[1]);
-            if (px < 1 || px > 8) return {false, "annotation_linewidth out of range (1..8)"};
-            app.setAnnotationLineWidth(px);
-            return {true, "annotation_linewidth = " + std::to_string(px) + " px"};
-        }
         if (opt == "overlay_scale" || opt == "scale") {
             if (cmd.args.size() < 2) return {false, "Usage: :set overlay_scale <0.5..4.0>"};
             float s = std::stof(cmd.args[1]);
@@ -317,24 +353,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             else if (v == "relative" || v == "rel") app.setOverlaySizeMode(Application::OverlaySizeMode::Relative);
             else return {false, "Usage: :set size_mode pixels|physical|relative"};
             return {true, "size_mode = " + v};
-        }
-        if (opt == "reference_canvas_height") {
-            if (cmd.args.size() < 2)
-                return {false, "Usage: :set reference_canvas_height <240..8192>"};
-            int h = std::stoi(cmd.args[1]);
-            if (h < 240 || h > 8192)
-                return {false, "reference_canvas_height out of range (240..8192)"};
-            app.setReferenceCanvasHeight(h);
-            return {true, "reference_canvas_height = " + std::to_string(h) + " px"};
-        }
-        if (opt == "live_dpi") {
-            if (cmd.args.size() < 2)
-                return {false, "Usage: :set live_dpi <36..600>"};
-            int d = std::stoi(cmd.args[1]);
-            if (d < 36 || d > 600)
-                return {false, "live_dpi out of range (36..600)"};
-            app.setLiveDpi(d);
-            return {true, "live_dpi = " + std::to_string(d)};
         }
         // ── Overlay color knobs (issues #30, #31) ──
         // Each takes a color spec (named, #hex, or rgb(R,G,B)). Setting
@@ -384,44 +402,12 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             app.setLabelOutline(*on);
             return {true, std::string("label_outline = ") + (*on ? "on" : "off")};
         }
-        if (opt == "label_outline_thickness") {
-            if (cmd.args.size() < 2)
-                return {false, "Usage: :set label_outline_thickness <1..6>"};
-            int t = std::stoi(cmd.args[1]);
-            if (t < 1 || t > 6)
-                return {false, "label_outline_thickness out of range (1..6)"};
-            app.setLabelOutlineThickness(t);
-            return {true, "label_outline_thickness = " + std::to_string(t)};
-        }
         if (opt == "annotation_outline") {
             if (cmd.args.size() < 2) return {false, "Usage: :set annotation_outline on|off"};
             auto on = parseBool(cmd.args[1]);
             if (!on) return {false, "Usage: :set annotation_outline on|off"};
             app.setAnnotationOutline(*on);
             return {true, std::string("annotation_outline = ") + (*on ? "on" : "off")};
-        }
-        if (opt == "annotation_outline_thickness") {
-            if (cmd.args.size() < 2)
-                return {false, "Usage: :set annotation_outline_thickness <1..6>"};
-            int t = std::stoi(cmd.args[1]);
-            if (t < 1 || t > 6)
-                return {false, "annotation_outline_thickness out of range (1..6)"};
-            app.setAnnotationOutlineThickness(t);
-            return {true, "annotation_outline_thickness = " + std::to_string(t)};
-        }
-        if (opt == "arrow_thickness" || opt == "at") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set arrow_thickness <1..10>"};
-            int t = std::stoi(cmd.args[1]);
-            if (t < 1 || t > 10) return {false, "arrow_thickness out of range (1..10)"};
-            app.setArrowThickness(t);
-            return {true, "arrow_thickness = " + std::to_string(t)};
-        }
-        if (opt == "arrow_head_size" || opt == "ahs") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set arrow_head_size <2..32>"};
-            int s = std::stoi(cmd.args[1]);
-            if (s < 2 || s > 32) return {false, "arrow_head_size out of range (2..32)"};
-            app.setArrowHeadSize(s);
-            return {true, "arrow_head_size = " + std::to_string(s)};
         }
         if (opt == "outline_mode") {
             if (cmd.args.size() < 2) return {false, "Usage: :set outline_mode edge|silhouette|both"};
@@ -455,21 +441,21 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             if (cmd.args.size() < 2) return {false, "Usage: :set focus_dim <0.0-1.0>"};
             float v = std::stof(cmd.args[1]);
             v = std::max(0.0f, std::min(1.0f, v));
-            app.focusDimStrength_ = v;
+            app.focus().dimStrength = v;
             return {true, "Focus dim strength: " + std::to_string(v)};
         }
         if (opt == "focus_radius" || opt == "fr") {
             if (cmd.args.size() < 2) return {false, "Usage: :set focus_radius <Å>"};
             float v = std::stof(cmd.args[1]);
             v = std::max(0.5f, std::min(50.0f, v));
-            app.focusRadius_ = v;
+            app.focus().radius = v;
             return {true, "Focus radius: " + std::to_string(v) + " Å"};
         }
         if (opt == "focus_zoom" || opt == "fz") {
             if (cmd.args.size() < 2) return {false, "Usage: :set focus_zoom <float>"};
             float v = std::stof(cmd.args[1]);
             v = std::max(0.1f, std::min(50.0f, v));
-            app.focusZoom_ = v;
+            app.focus().zoom = v;
             return {true, "Focus zoom (fallback): " + std::to_string(v) +
                           " (subject-size aware zoom is now used; tune via focus_fill)"};
         }
@@ -477,21 +463,21 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             if (cmd.args.size() < 2) return {false, "Usage: :set focus_fill <0.05-1.0>"};
             float v = std::stof(cmd.args[1]);
             v = std::max(0.05f, std::min(1.0f, v));
-            app.focusFillFraction_ = v;
+            app.focus().fillFraction = v;
             return {true, "Focus fill fraction: " + std::to_string(v)};
         }
         if (opt == "focus_extra" || opt == "fe") {
             if (cmd.args.size() < 2) return {false, "Usage: :set focus_extra <Å>"};
             float v = std::stof(cmd.args[1]);
             v = std::max(0.0f, std::min(50.0f, v));
-            app.focusExtraRadius_ = v;
+            app.focus().extraRadius = v;
             return {true, "Focus extra radius: " + std::to_string(v) + " Å"};
         }
         if (opt == "focus_min_radius" || opt == "fmr") {
             if (cmd.args.size() < 2) return {false, "Usage: :set focus_min_radius <Å>"};
             float v = std::stof(cmd.args[1]);
             v = std::max(0.1f, std::min(50.0f, v));
-            app.focusMinRadius_ = v;
+            app.focus().minRadius = v;
             return {true, "Focus min radius: " + std::to_string(v) + " Å"};
         }
         if (opt == "focus_granularity" || opt == "fg") {
@@ -499,11 +485,11 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
                 return {false, "Usage: :set focus_granularity <residue|chain|sidechain>"};
             const std::string& g = cmd.args[1];
             if (g == "residue" || g == "res") {
-                app.focusGranularity_ = FocusGranularity::Residue;
+                app.focus().granularity = FocusGranularity::Residue;
             } else if (g == "chain" || g == "c") {
-                app.focusGranularity_ = FocusGranularity::Chain;
+                app.focus().granularity = FocusGranularity::Chain;
             } else if (g == "sidechain" || g == "sc") {
-                app.focusGranularity_ = FocusGranularity::Sidechain;
+                app.focus().granularity = FocusGranularity::Sidechain;
             } else {
                 return {false, "Unknown granularity: " + g + " (use residue|chain|sidechain)"};
             }
@@ -828,14 +814,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             return {true, "outline_threshold = " + std::to_string(app.outlineThreshold())};
         if (opt == "outline_darken" || opt == "od")
             return {true, "outline_darken = " + std::to_string(app.outlineDarken())};
-        if (opt == "label_font_size" || opt == "lfs")
-            return {true, "label_font_size = " + std::to_string(app.labelFontSize()) + " px"};
-        if (opt == "transcript_lines")
-            return {true, "transcript_lines = " + std::to_string(app.transcriptHintLines())};
-        if (opt == "annotation_font_size" || opt == "anf")
-            return {true, "annotation_font_size = " + std::to_string(app.annotationFontSize()) + " px"};
-        if (opt == "annotation_linewidth" || opt == "anlw")
-            return {true, "annotation_linewidth = " + std::to_string(app.annotationLineWidth()) + " px"};
         if (opt == "overlay_scale" || opt == "scale")
             return {true, "overlay_scale = " + std::to_string(app.overlayScale()) + "x"};
         if (opt == "size_mode" || opt == "sm") {
@@ -844,10 +822,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             if (app.overlaySizeMode() == Application::OverlaySizeMode::Relative) m = "relative";
             return {true, std::string("size_mode = ") + m};
         }
-        if (opt == "reference_canvas_height")
-            return {true, "reference_canvas_height = " + std::to_string(app.referenceCanvasHeight()) + " px"};
-        if (opt == "live_dpi")
-            return {true, "live_dpi = " + std::to_string(app.liveDpi())};
         auto fmtColor = [](const std::optional<Application::ColorRGB>& c, const char* dflt) {
             if (!c) return std::string(dflt);
             char buf[16];
@@ -866,20 +840,12 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             return {true, "arrow_color = " + fmtColor(app.arrowColor(), "default (yellow)")};
         if (opt == "label_outline")
             return {true, std::string("label_outline = ") + (app.labelOutline() ? "on" : "off")};
-        if (opt == "label_outline_thickness")
-            return {true, "label_outline_thickness = " + std::to_string(app.labelOutlineThickness())};
         if (opt == "label_outline_color")
             return {true, "label_outline_color = " + fmtColor(app.labelOutlineColor(), "auto (contrast)")};
         if (opt == "annotation_outline")
             return {true, std::string("annotation_outline = ") + (app.annotationOutline() ? "on" : "off")};
-        if (opt == "annotation_outline_thickness")
-            return {true, "annotation_outline_thickness = " + std::to_string(app.annotationOutlineThickness())};
         if (opt == "annotation_outline_color")
             return {true, "annotation_outline_color = " + fmtColor(app.annotationOutlineColor(), "auto (contrast)")};
-        if (opt == "arrow_thickness" || opt == "at")
-            return {true, "arrow_thickness = " + std::to_string(app.arrowThickness())};
-        if (opt == "arrow_head_size" || opt == "ahs")
-            return {true, "arrow_head_size = " + std::to_string(app.arrowHeadSize())};
         if (opt == "outline_mode") {
             const char* m = "edge";
             if (app.outlineMode() == OutlineMode::Silhouette) m = "silhouette";
@@ -901,6 +867,9 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             if (!r) return {false, std::string(reprLabel(row->repr)) + " repr not found"};
             return {true, reprScalarName(*row) + " = " + reprScalarValue(*row, r)};
         }
+        if (const AppIntScalar* row = findAppIntScalar(opt))
+            return {true, std::string(row->names.front()) + " = " +
+                          std::to_string((app.*(row->get))()) + row->unit};
         if (opt == "cartoon_tubular_helix" || opt == "cth") {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
             if (!ct) return {false, "Cartoon repr not found"};

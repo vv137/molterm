@@ -96,6 +96,30 @@ early 9
 assert_has    "def: return before" "$out" "got 9"
 assert_absent "def: return stops"  "$out" "NEVER"
 
+# ── Regression: malformed input must not crash the session ───────────────────
+# A bad numeric :set value used to throw std::stof out of the handler and abort
+# the whole process; the command-dispatch backstop now turns it into a failed
+# command so later lines still run.
+out=$(run ':set fog abc
+:echo SURVIVED_SET
+')
+assert_has "set: bad numeric value does not crash" "$out" "SURVIVED_SET"
+
+# A ${reg:fmt} spec with a non-float conversion (%s/%n) used to be spliced into
+# snprintf against a double and segfault; the spec is now validated and falls
+# back to the default format.
+out=$(run ':let x = 1.5
+:echo got=${x:s}
+:echo SURVIVED_FMT
+')
+assert_has "fmt: hostile format spec does not crash" "$out" "SURVIVED_FMT"
+
+# A valid printf spec must still format normally.
+out=$(run ':let y = 3.14159
+:echo y=${y:.2f}
+')
+assert_has "fmt: valid spec still formats" "$out" "y=3.14"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL SCRIPT TESTS PASSED"; else echo "SCRIPT TESTS FAILED"; fi
 exit "$fail"

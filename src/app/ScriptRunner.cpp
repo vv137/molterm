@@ -1,5 +1,7 @@
 #include "molterm/app/ScriptRunner.h"
 
+#include "molterm/core/StringParse.h"
+
 #include "molterm/cmd/CommandHelpers.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/CommandRegistry.h"
@@ -411,16 +413,15 @@ ScriptRunner::ScriptFlow ScriptRunner::dispatch(
             // usable in pos()), ${var_chain}, ${var_resi}, ${var_resn}.
             auto dotPos = rangeExpr.find("..");
             if (dotPos != std::string::npos) {
-                int loVal = 0, hiVal = 0;
-                try {
-                    loVal = std::stoi(rangeExpr.substr(0, dotPos));
-                    hiVal = std::stoi(rangeExpr.substr(dotPos + 2));
-                } catch (const std::exception&) {
+                auto loOpt = parseInt(rangeExpr.substr(0, dotPos));
+                auto hiOpt = parseInt(rangeExpr.substr(dotPos + 2));
+                if (!loOpt || !hiOpt) {
                     recordFailure(i, srcLine, "bad :foreach numeric range: " + rangeExpr);
                     if (strict) { result.stopped = true; return Flow::Stopped; }
                     i = endIdx;
                     continue;
                 }
+                int loVal = *loOpt, hiVal = *hiOpt;
                 // Scope the loop variable: save any prior binding and restore
                 // it after the loop so `$var` doesn't leak into the enclosing
                 // scope.

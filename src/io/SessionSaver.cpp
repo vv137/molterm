@@ -2,8 +2,10 @@
 #include "molterm/app/Application.h"
 #include "molterm/cmd/Register.h"
 #include "molterm/core/Logger.h"
+#include "molterm/core/StringParse.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -77,6 +79,22 @@ static std::string encodeRanges(const std::vector<int>& idx) {
     return s;
 }
 
+// Default-on-failure numeric conversions for the autosave parser. A truncated
+// (process killed mid-write), partially-written, or hand-edited session file
+// can hold a non-numeric token; these keep the field at its default rather
+// than aborting the restore (fatal for `--resume`, which runs before the TUI
+// is even up). Thin adapters over the shared no-throw parsers in
+// core/StringParse.h — the default-and-continue policy is restore-specific.
+static int toIntOr(const std::string& s, int dflt) {
+    return parseInt(s).value_or(dflt);
+}
+static double toDoubleOr(const std::string& s, double dflt) {
+    return parseDouble(s).value_or(dflt);
+}
+static float toFloatOr(const std::string& s, float dflt) {
+    return parseFloat(s).value_or(dflt);
+}
+
 static std::vector<int> decodeRanges(const std::string& s) {
     std::vector<int> out;
     std::stringstream ss(s);
@@ -85,10 +103,15 @@ static std::vector<int> decodeRanges(const std::string& s) {
         if (tok.empty()) continue;
         auto dash = tok.find('-');
         if (dash == std::string::npos) {
-            out.push_back(std::stoi(tok));
+            int v = toIntOr(tok, INT_MIN);
+            if (v != INT_MIN) out.push_back(v);
         } else {
-            int a = std::stoi(tok.substr(0, dash));
-            int b = std::stoi(tok.substr(dash + 1));
+            int a = toIntOr(tok.substr(0, dash), INT_MIN);
+            int b = toIntOr(tok.substr(dash + 1), INT_MIN);
+            // Skip malformed or inverted ranges, and cap the span so a crafted
+            // "0-2000000000" can't OOM or overflow the loop counter.
+            if (a == INT_MIN || b == INT_MIN || b < a) continue;
+            if (static_cast<long long>(b) - a > 50'000'000) continue;
             for (int k = a; k <= b; ++k) out.push_back(k);
         }
     }
@@ -341,24 +364,25 @@ std::string SessionSaver::restoreSession(Application& app) {
             if      (key == "name")    curReg->name = val;
             else if (key == "kind")    curReg->kind = val;
             else if (key == "expr")    curReg->expr = val;
-            else if (key == "scalar")  curReg->scalar = std::stod(val);
+            else if (key == "scalar")  curReg->scalar = toDoubleOr(val, curReg->scalar);
             else if (key == "vec")     parseTriple(val, curReg->vec);
             else if (key == "center")  parseTriple(val, curReg->pca.center);
             else if (key == "axis1")   parseTriple(val, curReg->pca.axis1);
             else if (key == "axis2")   parseTriple(val, curReg->pca.axis2);
             else if (key == "axis3")   parseTriple(val, curReg->pca.axis3);
             else if (key == "eigvals") parseTriple(val, curReg->pca.eigvals);
-            else if (key == "angle")   curReg->pca.angle = std::stod(val);
-            else if (key == "rmsd")    curReg->pca.rmsd = std::stod(val);
+            else if (key == "angle")   curReg->pca.angle = toDoubleOr(val, curReg->pca.angle);
+            else if (key == "rmsd")    curReg->pca.rmsd = toDoubleOr(val, curReg->pca.rmsd);
             else if (key == "source")  curReg->pca.source =
-                static_cast<geom::PcaResult::Source>(std::stoi(val));
+                static_cast<geom::PcaResult::Source>(
+                    toIntOr(val, static_cast<int>(curReg->pca.source)));
             continue;
         }
 
         // Session-level keys
         if (!curTab) {
             if (key == "renderer") renderer = val;
-            else if (key == "fog") fog = std::stof(val);
+            else if (key == "fog") fog = toFloatOr(val, fog);
             continue;
         }
 
@@ -369,18 +393,20 @@ std::string SessionSaver::restoreSession(Application& app) {
             else if (key == "visible") curObj->visible = (val == "true");
             else if (key == "color_scheme") curObj->colorScheme = val;
             else if (key == "reprs") curObj->reprs = val;
-            else if (key == "atom_count") curObj->atomCount = std::stoi(val);
+            else if (key == "atom_count") curObj->atomCount = toIntOr(val, curObj->atomCount);
             else if (key.rfind(kReprMaskPrefix, 0) == 0)
                 curObj->reprMasks[key.substr(sizeof(kReprMaskPrefix) - 1)] = val;
-            else if (key.rfind(kColorOvrPrefix, 0) == 0)
-                curObj->colorOverrides[std::stoi(key.substr(sizeof(kColorOvrPrefix) - 1))] = val;
-            else if (key == "active_state") curObj->activeState = std::stoi(val);
+            else if (key.rfind(kColorOvrPrefix, 0) == 0) {
+                int oi = toIntOr(key.substr(sizeof(kColorOvrPrefix) - 1), -1);
+                if (oi >= 0) curObj->colorOverrides[oi] = val;
+            }
+            else if (key == "active_state") curObj->activeState = toIntOr(val, curObj->activeState);
             continue;
         }
 
         // Tab-level keys
         if (key == "name") curTab->name = val;
-        else if (key == "camera_zoom") curTab->zoom = std::stof(val);
+        else if (key == "camera_zoom") curTab->zoom = toFloatOr(val, curTab->zoom);
         else if (key == "camera_rot") {
             // Parse [f, f, f, ...]
             std::string inner = val;

@@ -77,6 +77,7 @@ set(MOLTERM_CORE_SOURCES
     src/core/MolObject.cpp
     src/core/ObjectStore.cpp
     src/core/Selection.cpp
+    src/core/StringParse.cpp
     src/core/Logger.cpp
     src/core/BondTable.cpp
     src/core/DSSP.cpp

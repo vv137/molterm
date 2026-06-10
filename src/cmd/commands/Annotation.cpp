@@ -2,6 +2,7 @@
 
 
 #include "molterm/app/Application.h"
+#include "molterm/core/StringParse.h"
 #include "molterm/cmd/CommandParser.h"
 #include "molterm/cmd/CommandRegistry.h"
 #include "molterm/cmd/CommandHelpers.h"
@@ -78,17 +79,19 @@ void Application::registerAnnotationCommands(CommandRegistry& reg) {
                 if (anchorArgs.size() < 3)
                     return {false, "Usage: :label screen <fx> <fy> = \"text\""};
                 fl.anchor = FreeLabelAnchor::Screen;
-                try { fl.fx = std::stof(anchorArgs[1]); fl.fy = std::stof(anchorArgs[2]); }
-                catch (...) { return {false, "Bad screen coords"}; }
+                auto fx = parseFloat(anchorArgs[1]);
+                auto fy = parseFloat(anchorArgs[2]);
+                if (!fx || !fy) return {false, "Bad screen coords"};
+                fl.fx = *fx; fl.fy = *fy;
             } else {  // world
                 if (anchorArgs.size() < 4)
                     return {false, "Usage: :label world <x> <y> <z> = \"text\""};
                 fl.anchor = FreeLabelAnchor::World;
-                try {
-                    fl.wx = std::stof(anchorArgs[1]);
-                    fl.wy = std::stof(anchorArgs[2]);
-                    fl.wz = std::stof(anchorArgs[3]);
-                } catch (...) { return {false, "Bad world coords"}; }
+                auto wx = parseFloat(anchorArgs[1]);
+                auto wy = parseFloat(anchorArgs[2]);
+                auto wz = parseFloat(anchorArgs[3]);
+                if (!wx || !wy || !wz) return {false, "Bad world coords"};
+                fl.wx = *wx; fl.wy = *wy; fl.wz = *wz;
             }
             app.freeLabels().push_back(std::move(fl));
             return {true, "Added free-position label"};
