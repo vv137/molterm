@@ -17,8 +17,146 @@
 #include "molterm/repr/WireframeRepr.h"
 #include "molterm/repr/BallStickRepr.h"
 #include "molterm/repr/BackboneRepr.h"
+#include <algorithm>
+#include <functional>
+#include <type_traits>
+#include <vector>
 
 namespace molterm {
+
+namespace {
+
+// ── Repr-backed scalar :set/:get options ─────────────────────────────────────
+// A "scalar knob on a representation" — a float/int with one getter + setter and
+// an optional clamp — always has the same shape: resolve the repr, parse + clamp
+// the value, apply it, and confirm with the canonical `<name> = <value>` form.
+// This table is the single source for BOTH :set and :get, so the two can't drift
+// and a new knob is one row instead of a parse/validate branch plus a get branch.
+struct ReprScalar {
+    std::vector<const char*> names;   // aliases; first is the canonical name
+    ReprType    repr;
+    bool        isInt;       // int vs float value
+    bool        clamp;       // pre-clamp the parsed value into [lo, hi]
+    float       lo, hi;
+    const char* usage;       // range hint shown when the value arg is missing
+    std::function<double(Representation*)> get;
+    std::function<void(Representation*, double)> set;
+};
+
+// Human-readable repr name for the "<X> repr not found" message (the label is
+// just the PascalCase ReprType, so derive it rather than storing it per row).
+const char* reprLabel(ReprType t) {
+    switch (t) {
+        case ReprType::Backbone:  return "Backbone";
+        case ReprType::Wireframe: return "Wireframe";
+        case ReprType::BallStick: return "BallStick";
+        case ReprType::Cartoon:   return "Cartoon";
+        case ReprType::Spacefill: return "Spacefill";
+        case ReprType::Surface:   return "Surface";
+        default:                  return "Repr";
+    }
+}
+
+// Build a row from member-function pointers; the value type V (float|int) is
+// deduced, so the downcast + conversion are generated once per option.
+template <class R, class V>
+ReprScalar reprScalar(std::vector<const char*> names, ReprType rt,
+                      const char* usage, V (R::*getter)() const, void (R::*setter)(V),
+                      bool clamp = false, float lo = 0.0f, float hi = 0.0f) {
+    return ReprScalar{
+        std::move(names), rt, std::is_same<V, int>::value, clamp, lo, hi, usage,
+        [getter](Representation* rep) {
+            return static_cast<double>((static_cast<R*>(rep)->*getter)());
+        },
+        [setter](Representation* rep, double v) {
+            (static_cast<R*>(rep)->*setter)(static_cast<V>(v));
+        },
+    };
+}
+
+const std::vector<ReprScalar>& reprScalarTable() {
+    static const std::vector<ReprScalar> kTable = {
+        reprScalar({"backbone_thickness", "bt"}, ReprType::Backbone, "<0.5-10>",
+                   &BackboneRepr::thickness, &BackboneRepr::setThickness),
+        reprScalar({"wireframe_thickness", "wt", "wf_thickness", "wft"}, ReprType::Wireframe,
+                   "<0.01-1.0>", &WireframeRepr::thickness, &WireframeRepr::setThickness),
+        reprScalar({"ball_radius", "br"}, ReprType::BallStick, "<1-10>",
+                   &BallStickRepr::ballRadius, &BallStickRepr::setBallRadius),
+        reprScalar({"cartoon_helix", "ch"}, ReprType::Cartoon, "<0.1-3.0>",
+                   &CartoonRepr::helixRadius, &CartoonRepr::setHelixRadius),
+        reprScalar({"cartoon_sheet", "csh"}, ReprType::Cartoon, "<0.1-3.0>",
+                   &CartoonRepr::sheetRadius, &CartoonRepr::setSheetRadius),
+        reprScalar({"cartoon_loop", "cl"}, ReprType::Cartoon, "<0.05-1.0>",
+                   &CartoonRepr::loopRadius, &CartoonRepr::setLoopRadius),
+        reprScalar({"cartoon_subdiv", "csd"}, ReprType::Cartoon, "<2-16>",
+                   &CartoonRepr::subdivisions, &CartoonRepr::setSubdivisions),
+        reprScalar({"cartoon_aspect", "csa"}, ReprType::Cartoon, "<1.0-12.0>",
+                   &CartoonRepr::helixAspect, &CartoonRepr::setHelixAspect, true, 1.0f, 12.0f),
+        reprScalar({"cartoon_helix_radial", "chr"}, ReprType::Cartoon, "<4-64>",
+                   &CartoonRepr::helixRadialSegments, &CartoonRepr::setHelixRadialSegments),
+        reprScalar({"cartoon_tubular_radius", "ctr"}, ReprType::Cartoon, "<0.1-3.0>",
+                   &CartoonRepr::tubularRadius, &CartoonRepr::setTubularRadius, true, 0.1f, 3.0f),
+        reprScalar({"cartoon_sheet_smooth", "css"}, ReprType::Cartoon, "<0-10>",
+                   &CartoonRepr::sheetSmooth, &CartoonRepr::setSheetSmooth),
+        reprScalar({"cartoon_sheet_height", "cshh"}, ReprType::Cartoon, "<0.01-2.0>",
+                   &CartoonRepr::sheetHeight, &CartoonRepr::setSheetHeight),
+        reprScalar({"cartoon_tension", "cstn"}, ReprType::Cartoon, "<0.0-1.0>",
+                   &CartoonRepr::tension, &CartoonRepr::setTension),
+        reprScalar({"cartoon_helix_tension", "chtn"}, ReprType::Cartoon, "<0.0-1.0>",
+                   &CartoonRepr::helixTension, &CartoonRepr::setHelixTension),
+        reprScalar({"cartoon_sheet_flat", "csf"}, ReprType::Cartoon, "<0.0-1.0>",
+                   &CartoonRepr::sheetFlat, &CartoonRepr::setSheetFlat),
+        reprScalar({"cartoon_arrow_width", "caw"}, ReprType::Cartoon, "<1.0-4.0>",
+                   &CartoonRepr::arrowWidth, &CartoonRepr::setArrowWidth),
+        reprScalar({"cartoon_frame_smooth", "cfs"}, ReprType::Cartoon, "<0-10>",
+                   &CartoonRepr::frameSmooth, &CartoonRepr::setFrameSmooth),
+        reprScalar({"cartoon_width_smooth", "cws"}, ReprType::Cartoon, "<0-10>",
+                   &CartoonRepr::widthSmooth, &CartoonRepr::setWidthSmooth),
+        reprScalar({"cartoon_nucleic_width", "cnw"}, ReprType::Cartoon, "<0.05-2.0>",
+                   &CartoonRepr::nucleicWidth, &CartoonRepr::setNucleicWidth),
+        reprScalar({"cartoon_nucleic_height", "cnh"}, ReprType::Cartoon, "<0.05-2.0>",
+                   &CartoonRepr::nucleicHeight, &CartoonRepr::setNucleicHeight),
+        reprScalar({"bs_factor", "bsf"}, ReprType::BallStick, "<0.05-1.0>",
+                   &BallStickRepr::sizeFactor, &BallStickRepr::setSizeFactor, true, 0.05f, 1.0f),
+        reprScalar({"spacefill_scale", "ss_scale", "sfs"}, ReprType::Spacefill, "<0.1-2.0>",
+                   &SpacefillRepr::scale, &SpacefillRepr::setScale, true, 0.1f, 2.0f),
+        reprScalar({"surface_probe", "surf_probe"}, ReprType::Surface, "<0.0-3.0>",
+                   &SurfaceRepr::probe, &SurfaceRepr::setProbe),
+        reprScalar({"surface_resolution", "surf_res"}, ReprType::Surface, "<0.2-3.0>",
+                   &SurfaceRepr::resolution, &SurfaceRepr::setResolution),
+        reprScalar({"surface_scale", "surf_scale"}, ReprType::Surface, "<0.2-3.0>",
+                   &SurfaceRepr::scale, &SurfaceRepr::setScale),
+        reprScalar({"surface_smoothness", "surf_smooth"}, ReprType::Surface, "<0.5-8.0>",
+                   &SurfaceRepr::smoothness, &SurfaceRepr::setSmoothness),
+        reprScalar({"surface_iso", "surf_iso"}, ReprType::Surface, "<0.05-5.0>",
+                   &SurfaceRepr::isoValue, &SurfaceRepr::setIsoValue),
+    };
+    return kTable;
+}
+
+// Look up a row by any of its alias names.
+const ReprScalar* findReprScalar(const std::string& opt) {
+    for (const auto& row : reprScalarTable())
+        for (const char* n : row.names)
+            if (opt == n) return &row;
+    return nullptr;
+}
+
+// Canonical (first) name used in :set/:get output.
+std::string reprScalarName(const ReprScalar& row) {
+    return row.names.front();
+}
+
+// Format the current value the way :get historically did (int -> no decimals,
+// float -> std::to_string's 6 decimals).
+std::string reprScalarValue(const ReprScalar& row, Representation* r) {
+    double v = row.get(r);
+    return row.isInt ? std::to_string(static_cast<int>(v))
+                     : std::to_string(static_cast<float>(v));
+}
+
+}  // namespace
+
 
 void Application::registerSettingsCommands(CommandRegistry& reg) {
     // :set <option> [value]
@@ -85,35 +223,19 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             clearScreenAndRepaint();
             return {true, "Renderer set to " + val};
         }
-        if (opt == "backbone_thickness" || opt == "bt") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set backbone_thickness <0.5-10>"};
-            float val = std::stof(cmd.args[1]);
-            auto* bb = dynamic_cast<BackboneRepr*>(app.getRepr(ReprType::Backbone));
-            if (bb) {
-                bb->setThickness(val);
-                return {true, "Backbone thickness set to " + std::to_string(bb->thickness())};
-            }
-            return {false, "Backbone repr not found"};
-        }
-        if (opt == "wireframe_thickness" || opt == "wt") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set wireframe_thickness <0.01-1.0>"};
-            float val = std::stof(cmd.args[1]);
-            auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe));
-            if (wf) {
-                wf->setThickness(val);
-                return {true, "Wireframe thickness set to " + std::to_string(wf->thickness())};
-            }
-            return {false, "Wireframe repr not found"};
-        }
-        if (opt == "ball_radius" || opt == "br") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set ball_radius <1-10>"};
-            int val = std::stoi(cmd.args[1]);
-            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
-            if (bs) {
-                bs->setBallRadius(val);
-                return {true, "Ball radius set to " + std::to_string(val)};
-            }
-            return {false, "BallStick repr not found"};
+        if (const ReprScalar* row = findReprScalar(opt)) {
+            const std::string name = reprScalarName(*row);
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set " + name + " " + row->usage};
+            auto* r = app.getRepr(row->repr);
+            if (!r) return {false, std::string(reprLabel(row->repr)) + " repr not found"};
+            double v = row->isInt ? static_cast<double>(std::stoi(cmd.args[1]))
+                                  : static_cast<double>(std::stof(cmd.args[1]));
+            if (row->clamp)
+                v = std::max(static_cast<double>(row->lo),
+                             std::min(static_cast<double>(row->hi), v));
+            row->set(r, v);
+            return {true, name + " = " + reprScalarValue(*row, r)};
         }
         if (opt == "pan_speed" || opt == "ps") {
             if (cmd.args.size() < 2) return {false, "Usage: :set pan_speed <1-20>"};
@@ -387,15 +509,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             }
             return {true, "Focus granularity: " + g};
         }
-        if (opt == "wf_thickness" || opt == "wft") {
-            if (cmd.args.size() < 2)
-                return {false, "Usage: :set wf_thickness <0.01-1.0>"};
-            auto* wf = dynamic_cast<WireframeRepr*>(
-                app.getRepr(ReprType::Wireframe));
-            if (!wf) return {false, "Wireframe repr not found"};
-            wf->setThickness(std::stof(cmd.args[1]));
-            return {true, "Wireframe thickness: " + std::to_string(wf->thickness())};
-        }
         if (opt == "interface_zoom" || opt == "iz") {
             if (cmd.args.size() < 2) {
                 app.interfaceZoomGate_.setEnabled(false);
@@ -431,48 +544,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             app.interfaceRepr_.setLineThickness(std::max(1, t - 1));
             return {true, "Interface thickness: " + std::to_string(t)};
         }
-        if (opt == "cartoon_helix" || opt == "ch") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_helix <0.1-3.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setHelixRadius(std::stof(cmd.args[1])); return {true, "Cartoon helix radius: " + cmd.args[1]}; }
-            return {false, "Cartoon repr not found"};
-        }
-        if (opt == "cartoon_sheet" || opt == "csh") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet <0.1-3.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setSheetRadius(std::stof(cmd.args[1])); return {true, "Cartoon sheet radius: " + cmd.args[1]}; }
-            return {false, "Cartoon repr not found"};
-        }
-        if (opt == "cartoon_loop" || opt == "cl") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_loop <0.05-1.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setLoopRadius(std::stof(cmd.args[1])); return {true, "Cartoon loop radius: " + cmd.args[1]}; }
-            return {false, "Cartoon repr not found"};
-        }
-        if (opt == "cartoon_subdiv" || opt == "csd") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_subdiv <2-16>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (ct) { ct->setSubdivisions(std::stoi(cmd.args[1])); return {true, "Cartoon subdivisions: " + cmd.args[1]}; }
-            return {false, "Cartoon repr not found"};
-        }
-        if (opt == "cartoon_aspect" || opt == "csa") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_aspect <1.0-12.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            float v = std::stof(cmd.args[1]);
-            v = std::max(1.0f, std::min(12.0f, v));
-            ct->setHelixAspect(v);
-            return {true, "Cartoon helix aspect (W:H): " + std::to_string(v)};
-        }
-        if (opt == "cartoon_helix_radial" || opt == "chr") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_helix_radial <4-64>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            int v = std::stoi(cmd.args[1]);
-            ct->setHelixRadialSegments(v);
-            return {true, "Cartoon helix radial vertices: " +
-                          std::to_string(ct->helixRadialSegments())};
-        }
         if (opt == "cartoon_tubular_helix" || opt == "cth") {
             if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_tubular_helix on|off"};
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
@@ -482,95 +553,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             ct->setTubularHelix(*on);
             return {true, std::string("Cartoon tubular helix: ") +
                           (*on ? "on (circular tube)" : "off (elliptical ribbon)")};
-        }
-        if (opt == "cartoon_tubular_radius" || opt == "ctr") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_tubular_radius <0.1-3.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            float v = std::stof(cmd.args[1]);
-            v = std::max(0.1f, std::min(3.0f, v));
-            ct->setTubularRadius(v);
-            return {true, "Cartoon tubular helix radius: " + std::to_string(v) + " Å"};
-        }
-        if (opt == "cartoon_sheet_smooth" || opt == "css") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet_smooth <0-10>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setSheetSmooth(std::stoi(cmd.args[1]));
-            return {true, "Cartoon sheet smoothing passes: " +
-                          std::to_string(ct->sheetSmooth())};
-        }
-        if (opt == "cartoon_sheet_height" || opt == "cshh") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet_height <0.01-2.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setSheetHeight(std::stof(cmd.args[1]));
-            return {true, "Cartoon sheet half-height: " +
-                          std::to_string(ct->sheetHeight()) + " Å"};
-        }
-        if (opt == "cartoon_tension" || opt == "cstn") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_tension <0.0-1.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setTension(std::stof(cmd.args[1]));
-            return {true, "Cartoon loop/sheet tension: " +
-                          std::to_string(ct->tension())};
-        }
-        if (opt == "cartoon_helix_tension" || opt == "chtn") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_helix_tension <0.0-1.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setHelixTension(std::stof(cmd.args[1]));
-            return {true, "Cartoon helix tension: " +
-                          std::to_string(ct->helixTension())};
-        }
-        if (opt == "cartoon_sheet_flat" || opt == "csf") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_sheet_flat <0.0-1.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setSheetFlat(std::stof(cmd.args[1]));
-            return {true, "Cartoon sheet flatten (C→O blend): " +
-                          std::to_string(ct->sheetFlat())};
-        }
-        if (opt == "cartoon_arrow_width" || opt == "caw") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_arrow_width <1.0-4.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setArrowWidth(std::stof(cmd.args[1]));
-            return {true, "Cartoon arrowhead width scale: " +
-                          std::to_string(ct->arrowWidth()) + "×"};
-        }
-        if (opt == "cartoon_frame_smooth" || opt == "cfs") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_frame_smooth <0-10>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setFrameSmooth(std::stoi(cmd.args[1]));
-            return {true, "Cartoon frame smoothing passes: " +
-                          std::to_string(ct->frameSmooth())};
-        }
-        if (opt == "cartoon_width_smooth" || opt == "cws") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_width_smooth <0-10>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setWidthSmooth(std::stoi(cmd.args[1]));
-            return {true, "Cartoon width smoothing passes: " +
-                          std::to_string(ct->widthSmooth())};
-        }
-        if (opt == "cartoon_nucleic_width" || opt == "cnw") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_nucleic_width <0.05-2.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setNucleicWidth(std::stof(cmd.args[1]));
-            return {true, "Cartoon nucleic ribbon half-width: " +
-                          std::to_string(ct->nucleicWidth()) + " Å"};
-        }
-        if (opt == "cartoon_nucleic_height" || opt == "cnh") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set cartoon_nucleic_height <0.05-2.0>"};
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            ct->setNucleicHeight(std::stof(cmd.args[1]));
-            return {true, "Cartoon nucleic ribbon half-height: " +
-                          std::to_string(ct->nucleicHeight()) + " Å"};
         }
         if (opt == "bs_units") {
             if (cmd.args.size() < 2) return {false, "Usage: :set bs_units vdw|cell"};
@@ -587,24 +569,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             }
             return {false, "Unknown bs_units: " + v + " (use vdw|cell)"};
         }
-        if (opt == "bs_factor" || opt == "bsf") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set bs_factor <0.05-1.0>"};
-            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
-            if (!bs) return {false, "BallStick repr not found"};
-            float v = std::stof(cmd.args[1]);
-            v = std::max(0.05f, std::min(1.0f, v));
-            bs->setSizeFactor(v);
-            return {true, "BallStick size factor (×vdW): " + std::to_string(v)};
-        }
-        if (opt == "spacefill_scale" || opt == "ss_scale" || opt == "sfs") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set spacefill_scale <0.1-2.0>"};
-            auto* sf = dynamic_cast<SpacefillRepr*>(app.getRepr(ReprType::Spacefill));
-            if (!sf) return {false, "Spacefill repr not found"};
-            float v = std::stof(cmd.args[1]);
-            v = std::max(0.1f, std::min(2.0f, v));
-            sf->setScale(v);
-            return {true, "Spacefill scale (×vdW): " + std::to_string(v)};
-        }
         if (opt == "surface_mode" || opt == "surf_mode") {
             if (cmd.args.size() < 2) return {false, "Usage: :set surface_mode ses|sas|vdw|gaussian"};
             auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
@@ -617,41 +581,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
                                       sr->setMode(SurfaceRepr::Mode::Gaussian);
             else return {false, "surface_mode: ses|sas|vdw|gaussian"};
             return {true, "Surface mode: " + m};
-        }
-        if (opt == "surface_probe" || opt == "surf_probe") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set surface_probe <0.0-3.0>"};
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            sr->setProbe(std::stof(cmd.args[1]));
-            return {true, "Surface probe radius: " + std::to_string(sr->probe()) + " Å"};
-        }
-        if (opt == "surface_resolution" || opt == "surf_res") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set surface_resolution <0.2-3.0>"};
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            sr->setResolution(std::stof(cmd.args[1]));
-            return {true, "Surface grid spacing: " + std::to_string(sr->resolution()) + " Å"};
-        }
-        if (opt == "surface_scale" || opt == "surf_scale") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set surface_scale <0.2-3.0>"};
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            sr->setScale(std::stof(cmd.args[1]));
-            return {true, "Surface blob radius (×vdW): " + std::to_string(sr->scale())};
-        }
-        if (opt == "surface_smoothness" || opt == "surf_smooth") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set surface_smoothness <0.5-8.0>"};
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            sr->setSmoothness(std::stof(cmd.args[1]));
-            return {true, "Surface smoothness (kernel k): " + std::to_string(sr->smoothness())};
-        }
-        if (opt == "surface_iso" || opt == "surf_iso") {
-            if (cmd.args.size() < 2) return {false, "Usage: :set surface_iso <0.05-5.0>"};
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            sr->setIsoValue(std::stof(cmd.args[1]));
-            return {true, "Surface iso-level: " + std::to_string(sr->isoValue())};
         }
         if (opt == "nucleic_backbone" || opt == "nb") {
             if (cmd.args.size() < 2)
@@ -967,51 +896,10 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             return {true, "stereo_angle = " + std::to_string(app.stereoAngle())};
         if (opt == "pan_speed" || opt == "ps")
             return {true, "pan_speed = " + std::to_string(app.tabs().currentTab().camera().panSpeed())};
-        if (opt == "backbone_thickness" || opt == "bt") {
-            auto* bb = dynamic_cast<BackboneRepr*>(app.getRepr(ReprType::Backbone));
-            if (!bb) return {false, "Backbone repr not found"};
-            return {true, "backbone_thickness = " + std::to_string(bb->thickness())};
-        }
-        if (opt == "wireframe_thickness" || opt == "wt") {
-            auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe));
-            if (!wf) return {false, "Wireframe repr not found"};
-            return {true, "wireframe_thickness = " + std::to_string(wf->thickness())};
-        }
-        if (opt == "ball_radius" || opt == "br") {
-            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
-            if (!bs) return {false, "BallStick repr not found"};
-            return {true, "ball_radius = " + std::to_string(bs->ballRadius())};
-        }
-        if (opt == "cartoon_helix" || opt == "ch") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_helix = " + std::to_string(ct->helixRadius())};
-        }
-        if (opt == "cartoon_sheet" || opt == "csh") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_sheet = " + std::to_string(ct->sheetRadius())};
-        }
-        if (opt == "cartoon_loop" || opt == "cl") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_loop = " + std::to_string(ct->loopRadius())};
-        }
-        if (opt == "cartoon_subdiv" || opt == "csd") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_subdiv = " + std::to_string(ct->subdivisions())};
-        }
-        if (opt == "cartoon_aspect" || opt == "csa") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_aspect = " + std::to_string(ct->helixAspect())};
-        }
-        if (opt == "cartoon_helix_radial" || opt == "chr") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_helix_radial = " +
-                          std::to_string(ct->helixRadialSegments())};
+        if (const ReprScalar* row = findReprScalar(opt)) {
+            auto* r = app.getRepr(row->repr);
+            if (!r) return {false, std::string(reprLabel(row->repr)) + " repr not found"};
+            return {true, reprScalarName(*row) + " = " + reprScalarValue(*row, r)};
         }
         if (opt == "cartoon_tubular_helix" || opt == "cth") {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
@@ -1019,76 +907,10 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             return {true, std::string("cartoon_tubular_helix = ") +
                           (ct->tubularHelix() ? "on" : "off")};
         }
-        if (opt == "cartoon_tubular_radius" || opt == "ctr") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_tubular_radius = " +
-                          std::to_string(ct->tubularRadius())};
-        }
-        if (opt == "cartoon_sheet_smooth" || opt == "css") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_sheet_smooth = " + std::to_string(ct->sheetSmooth())};
-        }
-        if (opt == "cartoon_sheet_height" || opt == "cshh") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_sheet_height = " + std::to_string(ct->sheetHeight())};
-        }
-        if (opt == "cartoon_tension" || opt == "cstn") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_tension = " + std::to_string(ct->tension())};
-        }
-        if (opt == "cartoon_helix_tension" || opt == "chtn") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_helix_tension = " + std::to_string(ct->helixTension())};
-        }
-        if (opt == "cartoon_sheet_flat" || opt == "csf") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_sheet_flat = " + std::to_string(ct->sheetFlat())};
-        }
-        if (opt == "cartoon_arrow_width" || opt == "caw") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_arrow_width = " + std::to_string(ct->arrowWidth())};
-        }
-        if (opt == "cartoon_frame_smooth" || opt == "cfs") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_frame_smooth = " + std::to_string(ct->frameSmooth())};
-        }
-        if (opt == "cartoon_width_smooth" || opt == "cws") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_width_smooth = " + std::to_string(ct->widthSmooth())};
-        }
-        if (opt == "cartoon_nucleic_width" || opt == "cnw") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_nucleic_width = " + std::to_string(ct->nucleicWidth())};
-        }
-        if (opt == "cartoon_nucleic_height" || opt == "cnh") {
-            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
-            if (!ct) return {false, "Cartoon repr not found"};
-            return {true, "cartoon_nucleic_height = " + std::to_string(ct->nucleicHeight())};
-        }
         if (opt == "bs_units") {
             auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
             if (!bs) return {false, "BallStick repr not found"};
             return {true, std::string("bs_units = ") + (bs->useVdwSize() ? "vdw" : "cell")};
-        }
-        if (opt == "bs_factor" || opt == "bsf") {
-            auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
-            if (!bs) return {false, "BallStick repr not found"};
-            return {true, "bs_factor = " + std::to_string(bs->sizeFactor())};
-        }
-        if (opt == "spacefill_scale" || opt == "ss_scale" || opt == "sfs") {
-            auto* sf = dynamic_cast<SpacefillRepr*>(app.getRepr(ReprType::Spacefill));
-            if (!sf) return {false, "Spacefill repr not found"};
-            return {true, "spacefill_scale = " + std::to_string(sf->scale())};
         }
         if (opt == "surface_mode" || opt == "surf_mode") {
             auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
@@ -1101,31 +923,6 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
                 case SurfaceRepr::Mode::Gaussian: m = "gaussian"; break;
             }
             return {true, std::string("surface_mode = ") + m};
-        }
-        if (opt == "surface_probe" || opt == "surf_probe") {
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            return {true, "surface_probe = " + std::to_string(sr->probe())};
-        }
-        if (opt == "surface_resolution" || opt == "surf_res") {
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            return {true, "surface_resolution = " + std::to_string(sr->resolution())};
-        }
-        if (opt == "surface_scale" || opt == "surf_scale") {
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            return {true, "surface_scale = " + std::to_string(sr->scale())};
-        }
-        if (opt == "surface_smoothness" || opt == "surf_smooth") {
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            return {true, "surface_smoothness = " + std::to_string(sr->smoothness())};
-        }
-        if (opt == "surface_iso" || opt == "surf_iso") {
-            auto* sr = dynamic_cast<SurfaceRepr*>(app.getRepr(ReprType::Surface));
-            if (!sr) return {false, "Surface repr not found"};
-            return {true, "surface_iso = " + std::to_string(sr->isoValue())};
         }
         if (opt == "nucleic_backbone" || opt == "nb") {
             auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
