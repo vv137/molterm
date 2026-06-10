@@ -201,7 +201,7 @@ private:
     std::optional<ColorRGB> outlineColor_;
     std::optional<ColorRGB> labelOutlineColor_;
     std::optional<ColorRGB> annotationOutlineColor_;
-    bool labelOutline_ = false;
+    bool labelOutline_ = true;   // halo on atom labels by default (readability)
     int  labelOutlineThickness_ = 2;
     bool annotationOutline_ = false;
     int  annotationOutlineThickness_ = 2;

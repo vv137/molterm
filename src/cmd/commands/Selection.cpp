@@ -118,8 +118,15 @@ void Application::registerSelectionCommands(CommandRegistry& reg) {
         if (cmd.args.empty()) return {false, "Usage: :count <expression>"};
         std::string expr = joinArgs(cmd.args, 0, cmd.args.size());
         auto scoped = collectInScope(app, expr);
-        if (scoped.perObject.empty())
-            return {false, "No object selected"};
+        if (scoped.perObject.empty()) {
+            // collectInScope omits objects with no matches, so an empty result
+            // means either nothing is loaded or the selection matched zero
+            // atoms — distinguish them: a zero count is a valid answer, not an
+            // error ("No object selected").
+            if (!app.tabs().currentTab().currentObject())
+                return {false, "No object selected"};
+            return {true, "0 atoms match: " + expr};
+        }
         std::string msg = std::to_string(scoped.totalAtoms) + " atoms match: " + expr;
         if (scoped.perObject.size() > 1) {
             msg += " (";
