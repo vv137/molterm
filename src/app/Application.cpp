@@ -704,17 +704,27 @@ int Application::run() {
         }
 
         if (needsRedraw_) {
-            if (framesToSkip_ > 0) {
+            // The frame-skip throttle is only meant for continuous camera
+            // motion (a held rotate/zoom key on a heavy structure): drop a few
+            // frames to stay responsive. A *discrete* redraw — hide/show, a
+            // command, a panel toggle — must paint immediately; otherwise a
+            // leftover skip count from a prior rotation defers it and the
+            // screen appears to "stick" until the next keypress (so the user
+            // has to hit Ctrl+L). Gate the skip on the camera actually being
+            // dirty, so discrete redraws are never throttled.
+            const bool cameraMoving = tabMgr_.currentTab().camera().isDirty();
+            if (framesToSkip_ > 0 && cameraMoving) {
                 --framesToSkip_;
                 // Don't clear needsRedraw_ — the skipped frame must still render
             } else {
+                framesToSkip_ = 0;  // drop any leftover skip from a prior rotation
                 auto t0 = std::chrono::steady_clock::now();
                 renderFrame();
                 auto t1 = std::chrono::steady_clock::now();
                 lastFrameMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-                // Only skip continuous camera motion frames, not discrete commands
-                if (lastFrameMs_ > 100) {
+                // Only throttle continuous camera motion, not discrete commands.
+                if (lastFrameMs_ > 100 && cameraMoving) {
                     framesToSkip_ = std::min(3, static_cast<int>(lastFrameMs_ / 50));
                 }
                 needsRedraw_ = false;
