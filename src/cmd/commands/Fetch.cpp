@@ -245,7 +245,7 @@ void Application::registerFetchCommands(CommandRegistry& reg) {
                              offscreen.aspectYX());
 
         if (auto* wf = dynamic_cast<WireframeRepr*>(app.getRepr(ReprType::Wireframe))) {
-            wf->setHeteroatomCarbonScheme(app.interfaceOverlay_ || app.focus().snapshot.active);
+            wf->setHeteroatomCarbonScheme(app.interface().active || app.focus().snapshot.active);
         }
 
         // Render reprs once per stereoscopic eye (single-pass when
@@ -281,21 +281,21 @@ void Application::registerFetchCommands(CommandRegistry& reg) {
         // Mirror the live render pipeline: focus-dim (mask-driven) +
         // interface overlay so the captured PNG matches what's on screen.
         const std::vector<bool>* dimMask = nullptr;
-        if (app.interfaceOverlay_ && !app.interfaceAtomMask_.empty()) {
-            dimMask = &app.interfaceAtomMask_;
+        if (app.interface().active && !app.interface().atomMask.empty()) {
+            dimMask = &app.interface().atomMask;
         } else if (!app.focus().atomMask.empty()) {
             dimMask = &app.focus().atomMask;
         }
         if (dimMask) offscreen.applyFocusDim(*dimMask, app.focus().dimStrength);
 
-        if ((app.interfaceOverlay_ || app.focus().snapshot.active) &&
-            app.interfaceRepr_.hasData()) {
+        if ((app.interface().active || app.focus().snapshot.active) &&
+            app.interface().repr.hasData()) {
             if (auto obj = tab.currentObject()) {
                 for (int eye = 0; eye < app.stereoEyeCount(); ++eye) {
                     savedScreenshotRot = app.setupStereoEye(
                         eye, offscreen.subW(), offscreen.subH(),
                         offscreen.aspectYX());
-                    app.interfaceRepr_.render(*obj, tab.camera(), offscreen);
+                    app.interface().repr.render(*obj, tab.camera(), offscreen);
                 }
                 app.restoreStereoCamera(savedScreenshotRot);
             }

@@ -769,7 +769,7 @@ void Application::handleAction(Action action) {
         // Sends explicit on/off rather than implicit toggle so the
         // command itself stays declarative (matches :set on|off style).
         case Action::ToggleInterface: {
-            const char* arg = interfaceOverlay_ ? "interface off" : "interface on";
+            const char* arg = interface_.active ? "interface off" : "interface on";
             ExecResult result = cmdRegistry_.execute(*this, arg);
             if (!result.msg.empty()) cmdLine_.setMessage(result.msg);
             layout_.markAllDirty(); needsRedraw_ = true;

@@ -15,6 +15,7 @@
 
 #include "molterm/app/CommandScope.h"
 #include "molterm/app/FocusState.h"
+#include "molterm/app/InterfaceOverlay.h"
 #include "molterm/app/TabManager.h"
 #include "molterm/app/TabViewState.h"
 #include "molterm/app/ViewSettings.h"
@@ -305,6 +306,11 @@ public:
     FocusState& focus() { return focus_; }
     const FocusState& focus() const { return focus_; }
 
+    // Inter-chain interface overlay cluster (`:interface`, `:set interface_*`).
+    // recomputeInterface() recomputes it against the current object.
+    InterfaceOverlay& interface() { return interface_; }
+    const InterfaceOverlay& interface() const { return interface_; }
+
     float fogStrength() const { return view_.fogStrength(); }
     void setFogStrength(float s) { view_.setFogStrength(s); }
     bool outlineEnabled() const { return view_.outlineEnabled(); }
@@ -517,22 +523,14 @@ private:
     // Max rows the transcript hint renders (`:set transcript_lines`).
     int transcriptHintLines_ = 8;
 
-    // Contact map + interface overlay state
+    // Contact map panel (`:contactmap`) — shared with the interface overlay's
+    // computation, so it stays on Application rather than inside interface_.
     ContactMapPanel contactMapPanel_;
-    bool interfaceOverlay_ = false;
-    // Cached classified inter-chain contacts; one entry per residue
-    // pair, color-coded at render time by interaction type.
-    std::vector<InterfaceContact> interfaceContacts_;
-    // Per-atom mask: true for atoms in interface residues. Built from
-    // `interfaceContacts_` by expanding to whole residues.
-    std::vector<bool> interfaceAtomMask_;
-    // Overlay renderer (sidechain bonds + dashed interaction lines).
-    InterfaceRepr interfaceRepr_;
-    // Auto-engage gate: when zoom > threshold, simulate :interface on.
-    ZoomGate interfaceZoomGate_;
-    // True iff the overlay is currently engaged via the zoom gate
-    // (so we can auto-disengage cleanly without clobbering a manual toggle).
-    bool interfaceFromZoom_ = false;
+    // Inter-chain interface overlay state cluster (`:interface`): cached
+    // contacts/mask, the overlay renderer + zoom gate, and the `:set interface_*`
+    // tunables (InterfaceOverlay.h). recomputeInterface() drives it; reached
+    // publicly via interface().
+    InterfaceOverlay interface_;
     // Focus mode (Mol*-style click-to-focus): the saved view + visibility
     // state plus the user tunables, as one cohesive cluster (FocusState.h).
     // enterFocus/exitFocus below snapshot into / restore from focus_; the
@@ -547,25 +545,6 @@ private:
         float minExtent = 1.0f;         // Å floor (avoids over-zoom on a point)
     };
     ViewFit           viewFit_;
-    // Fallback color used when classification is disabled
-    // (`:set interface_classify off`).
-    int interfaceColor_ = kColorYellow;
-    int interfaceThickness_ = 4; // pixel-mode line thickness (1-6) —
-                                  // bumped from 2 so dashed contact lines
-                                  // read against cartoon at 1080p+. Tunable
-                                  // live via :set interface_thickness.
-    bool interfaceClassify_ = true;
-    // Toggle: draw element-colored sidechain bonds for interface residues.
-    bool interfaceSidechains_ = true;
-    // Last cutoff (Å) used by `:interface on`. Persisted so that switching
-    // the current object via `:object` / NextObject / PrevObject can
-    // recompute the overlay against the new mol with the same setting.
-    float interfaceCutoff_ = 4.5f;
-    // Bitmask of InteractionType bits — only contacts with their bit set
-    // get a dashed line drawn. Default hides Hydrophobic + Other (the
-    // dense, low-information categories) so a typical complex is
-    // readable without losing the legend's full per-type breakdown.
-    std::uint8_t interfaceShowMask_ = kInterfaceShowSpecific;
 
     // Inspect / pick state (mouse-only)
     InspectLevel inspectLevel_ = InspectLevel::Atom;

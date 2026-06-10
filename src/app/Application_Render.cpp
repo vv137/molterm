@@ -128,7 +128,7 @@ void Application::renderViewport() {
     // the scheme color whenever the user is looking at an interface
     // (overlay or focus) — N/O/S/P need to pop as donors/acceptors there.
     if (auto* wf = dynamic_cast<WireframeRepr*>(getRepr(ReprType::Wireframe))) {
-        wf->setHeteroatomCarbonScheme(interfaceOverlay_ || focus_.active());
+        wf->setHeteroatomCarbonScheme(interface_.active || focus_.active());
     }
 
     // Render reprs once per stereoscopic eye. setupStereoEye() handles the
@@ -162,16 +162,16 @@ void Application::renderViewport() {
     // threshold simulates a :interface toggle. Manual `:interface on`
     // is preserved (gate falling does not disable a manually-engaged
     // overlay; only auto-engaged ones are auto-disengaged).
-    if (interfaceZoomGate_.enabled()) {
-        const bool wasActive = interfaceZoomGate_.active();
-        const bool flipped   = interfaceZoomGate_.update(tab.camera().zoom());
-        const bool isActive  = interfaceZoomGate_.active();
+    if (interface_.zoomGate.enabled()) {
+        const bool wasActive = interface_.zoomGate.active();
+        const bool flipped   = interface_.zoomGate.update(tab.camera().zoom());
+        const bool isActive  = interface_.zoomGate.active();
         if (flipped) {
-            if (isActive && !interfaceOverlay_) {
-                interfaceFromZoom_ = true;
+            if (isActive && !interface_.active) {
+                interface_.fromZoom = true;
                 cmdRegistry_.execute(*this, "interface on");
-            } else if (!isActive && interfaceFromZoom_ && interfaceOverlay_) {
-                interfaceFromZoom_ = false;
+            } else if (!isActive && interface_.fromZoom && interface_.active) {
+                interface_.fromZoom = false;
                 cmdRegistry_.execute(*this, "interface off");
             }
         }
@@ -197,8 +197,8 @@ void Application::renderViewport() {
             // independent, so a non-focus atom in the foreground still
             // dims while the focus subject stays vivid.
             const std::vector<bool>* dimMask = nullptr;
-            if (interfaceOverlay_ && !interfaceAtomMask_.empty()) {
-                dimMask = &interfaceAtomMask_;
+            if (interface_.active && !interface_.atomMask.empty()) {
+                dimMask = &interface_.atomMask;
             } else if (!focus_.atomMask.empty()) {
                 dimMask = &focus_.atomMask;
             }
@@ -212,15 +212,15 @@ void Application::renderViewport() {
     //   • global :interface overlay (full structure)
     //   • focus mode (filtered to the focus neighborhood)
     // Per-eye in stereo mode so each half gets its own vivid overlay.
-    if ((interfaceOverlay_ || focus_.active()) &&
-        interfaceRepr_.hasData()) {
+    if ((interface_.active || focus_.active()) &&
+        interface_.repr.hasData()) {
         if (auto obj = tab.currentObject(); obj && obj->visible()) {
             std::array<float, 9> savedIfaceRot{};
             for (int eye = 0; eye < stereoEyeCount(); ++eye) {
                 savedIfaceRot = setupStereoEye(eye, canvas_->subW(),
                                                 canvas_->subH(),
                                                 canvas_->aspectYX());
-                interfaceRepr_.render(*obj, tab.camera(), *canvas_);
+                interface_.repr.render(*obj, tab.camera(), *canvas_);
             }
             restoreStereoCamera(savedIfaceRot);
         }

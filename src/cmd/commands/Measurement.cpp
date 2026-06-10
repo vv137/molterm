@@ -777,16 +777,16 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
             if (!c) return {false, "Cutoff must be a number"};
             cutoff = *c;
         }
-        app.interfaceOverlay_ = wantOn;
-        if (app.interfaceOverlay_) {
+        app.interface().active = wantOn;
+        if (app.interface().active) {
             auto obj = app.tabs().currentTab().currentObject();
             if (!obj) {
-                app.interfaceOverlay_ = false;
+                app.interface().active = false;
                 return {false, "No object loaded"};
             }
-            app.interfaceCutoff_ = cutoff;
+            app.interface().cutoff = cutoff;
             if (!app.recomputeInterface()) {
-                app.interfaceOverlay_ = false;
+                app.interface().active = false;
                 char buf[80];
                 std::snprintf(buf, sizeof(buf),
                               "No inter-chain contacts found (cutoff=%.1fA)",
@@ -795,7 +795,7 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
             }
 
             int nHB = 0, nSalt = 0, nHyd = 0, nOther = 0;
-            for (const auto& c : app.interfaceContacts_) {
+            for (const auto& c : app.interface().contacts) {
                 switch (c.type) {
                     case InteractionType::HBond:       ++nHB;    break;
                     case InteractionType::SaltBridge:  ++nSalt;  break;
@@ -804,7 +804,7 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
                 }
             }
             auto tag = [&](InteractionType t) {
-                return (app.interfaceShowMask_ & interactionBit(t))
+                return (app.interface().showMask & interactionBit(t))
                        ? "" : "*";
             };
             char buf[200];
@@ -812,19 +812,19 @@ void Application::registerMeasurementCommands(CommandRegistry& reg) {
                 "Interface: %zu residue pairs (cutoff=%.1fA) — "
                 "salt %d%s, H-bond %d%s, hydrophobic %d%s, other %d%s"
                 "%s",
-                app.interfaceContacts_.size(), cutoff,
+                app.interface().contacts.size(), cutoff,
                 nSalt,  tag(InteractionType::SaltBridge),
                 nHB,    tag(InteractionType::HBond),
                 nHyd,   tag(InteractionType::Hydrophobic),
                 nOther, tag(InteractionType::Other),
-                app.interfaceShowMask_ == kInterfaceShowAll
+                app.interface().showMask == kInterfaceShowAll
                     ? "" : "  [* hidden — :set interface_show all]");
             return {true, buf};
         }
-        app.interfaceContacts_.clear();
-        app.interfaceAtomMask_.clear();
-        app.interfaceRepr_.clear();
-        app.interfaceFromZoom_ = false;
+        app.interface().contacts.clear();
+        app.interface().atomMask.clear();
+        app.interface().repr.clear();
+        app.interface().fromZoom = false;
         return {true, "Interface overlay hidden"};
     }, ":interface on|off|legend [cutoff]",
        "Show/hide classified inter-chain contact overlay; 'legend' opens a color/stats overlay (default cutoff: 4.5 \xC3\x85)",

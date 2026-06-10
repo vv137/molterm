@@ -497,17 +497,17 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
         }
         if (opt == "interface_zoom" || opt == "iz") {
             if (cmd.args.size() < 2) {
-                app.interfaceZoomGate_.setEnabled(false);
+                app.interface().zoomGate.setEnabled(false);
                 return {true, "interface_zoom disabled"};
             }
             const std::string& v = cmd.args[1];
             if (v == "off" || v == "none") {
-                app.interfaceZoomGate_.setEnabled(false);
+                app.interface().zoomGate.setEnabled(false);
                 return {true, "interface_zoom disabled"};
             }
             float thresh = std::stof(v);
-            app.interfaceZoomGate_.setThreshold(thresh);
-            app.interfaceZoomGate_.setEnabled(true);
+            app.interface().zoomGate.setThreshold(thresh);
+            app.interface().zoomGate.setEnabled(true);
             return {true, "interface_zoom threshold: " + v};
         }
         if (opt == "interface_sidechains" || opt == "isc") {
@@ -515,8 +515,8 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
                 return {false, "Usage: :set interface_sidechains on|off"};
             auto vb = parseBool(cmd.args[1]);
             if (!vb) return {false, "Usage: :set interface_sidechains on|off"};
-            app.interfaceSidechains_ = *vb;
-            app.interfaceRepr_.setDrawSidechains(*vb);
+            app.interface().sidechains = *vb;
+            app.interface().repr.setDrawSidechains(*vb);
             return {true, std::string("Interface sidechains: ") +
                           (*vb ? "on" : "off")};
         }
@@ -525,9 +525,9 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
                 return {false, "Usage: :set interface_thickness <1-6>"};
             int t = std::stoi(cmd.args[1]);
             t = std::max(1, std::min(6, t));
-            app.interfaceThickness_ = t;
-            app.interfaceRepr_.setInteractionThickness(t);
-            app.interfaceRepr_.setLineThickness(std::max(1, t - 1));
+            app.interface().thickness = t;
+            app.interface().repr.setInteractionThickness(t);
+            app.interface().repr.setLineThickness(std::max(1, t - 1));
             return {true, "Interface thickness: " + std::to_string(t)};
         }
         if (opt == "cartoon_tubular_helix" || opt == "cth") {
@@ -633,21 +633,21 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             if (cmd.args.size() < 2) return {false, "Usage: :set interface_color <color_name>"};
             int c = ColorMapper::colorByName(cmd.args[1]);
             if (c < 0) return {false, "Unknown color: " + cmd.args[1] + " (" + ColorMapper::availableColors() + ")"};
-            app.interfaceColor_ = c;
+            app.interface().color = c;
             return {true, "Interface color: " + cmd.args[1]};
         }
         if (opt == "interface_thickness" || opt == "it") {
             if (cmd.args.size() < 2) return {false, "Usage: :set interface_thickness <1-4>"};
             int val = std::stoi(cmd.args[1]);
-            app.interfaceThickness_ = std::max(1, std::min(4, val));
-            return {true, "Interface thickness: " + std::to_string(app.interfaceThickness_)};
+            app.interface().thickness = std::max(1, std::min(4, val));
+            return {true, "Interface thickness: " + std::to_string(app.interface().thickness)};
         }
         if (opt == "interface_classify" || opt == "iclass") {
             if (cmd.args.size() < 2)
                 return {false, "Usage: :set interface_classify on|off"};
             auto v = parseBool(cmd.args[1]);
             if (!v) return {false, "Usage: :set interface_classify on|off"};
-            app.interfaceClassify_ = *v;
+            app.interface().classify = *v;
             return {true, *v ? "Interface classification: on (cyan H-bond, "
                                "red salt, yellow hydrophobic, gray other)"
                              : "Interface classification: off (single color)"};
@@ -664,9 +664,9 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             int parsed = parseInterfaceShowSpec(spec);
             if (parsed < 0)
                 return {false, "Usage: :set interface_show all|specific|none|<list of hbond,salt,hydrophobic,other>"};
-            app.interfaceShowMask_ = static_cast<std::uint8_t>(parsed);
-            app.interfaceRepr_.setShowMask(app.interfaceShowMask_);
-            return {true, "Interface show: " + formatInterfaceShowSpec(app.interfaceShowMask_)};
+            app.interface().showMask = static_cast<std::uint8_t>(parsed);
+            app.interface().repr.setShowMask(app.interface().showMask);
+            return {true, "Interface show: " + formatInterfaceShowSpec(app.interface().showMask)};
         }
         if (opt == "label_format" || opt == "lf") {
             if (cmd.args.size() < 2) {
@@ -767,12 +767,12 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
         if (opt == "seqbar")       return {true, "seqbar = " + onoff(app.layout().seqBarVisible())};
         if (opt == "seqwrap")      return {true, "seqwrap = " + onoff(app.layout().seqBarWrap())};
         if (opt == "interface_classify" || opt == "iclass")
-            return {true, "interface_classify = " + onoff(app.interfaceClassify_)};
+            return {true, "interface_classify = " + onoff(app.interface().classify)};
         if (opt == "interface_sidechains" || opt == "isc")
-            return {true, "interface_sidechains = " + onoff(app.interfaceSidechains_)};
+            return {true, "interface_sidechains = " + onoff(app.interface().sidechains)};
         if (opt == "interface_show" || opt == "is")
             return {true, "interface_show = " +
-                          formatInterfaceShowSpec(app.interfaceShowMask_)};
+                          formatInterfaceShowSpec(app.interface().showMask)};
         if (opt == "label_format" || opt == "lf")
             return {true, "label_format = " +
                           (app.labelFormat().empty() ? std::string("(default)")
@@ -906,9 +906,9 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
         if (opt == "backbone_cutoff")
             return {true, "backbone_cutoff = " + std::to_string(Representation::backboneCutoff)};
         if (opt == "interface_color" || opt == "ic")
-            return {true, "interface_color = " + std::to_string(app.interfaceColor_)};
+            return {true, "interface_color = " + std::to_string(app.interface().color)};
         if (opt == "interface_thickness" || opt == "it")
-            return {true, "interface_thickness = " + std::to_string(app.interfaceThickness_)};
+            return {true, "interface_thickness = " + std::to_string(app.interface().thickness)};
 
         return {false, "Unknown option: " + opt};
     }, ":get <option>", "Print the current value of a :set option (handy for scripting)",

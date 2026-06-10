@@ -1011,7 +1011,7 @@ void Application::showInterfaceLegend() {
         interactionColor(InteractionType::Other));
     add("");
 
-    if (interfaceContacts_.empty()) {
+    if (interface_.contacts.empty()) {
         add("Statistics:");
         add("  No interface overlay active.");
         add("  Run :interface on  to compute and display contacts.");
@@ -1036,7 +1036,7 @@ void Application::showInterfaceLegend() {
         auto obj = tabMgr_.currentTab().currentObject();
         const std::vector<AtomData> empty;
         const std::vector<AtomData>& atoms = obj ? obj->atoms() : empty;
-        for (const auto& c : interfaceContacts_) {
+        for (const auto& c : interface_.contacts) {
             if (focusFiltered && !inFocus(c.atom1) && !inFocus(c.atom2)) continue;
             int idx = static_cast<int>(c.type);
             if (idx >= 0 && idx < 4) {
@@ -1082,7 +1082,7 @@ void Application::showInterfaceLegend() {
         };
         for (const auto& r : rows) {
             const auto& s = ts[static_cast<int>(r.type)];
-            const bool drawn = interfaceShowMask_ & interactionBit(r.type);
+            const bool drawn = interface_.showMask & interactionBit(r.type);
             const char* hidden = drawn ? "" : "  [hidden]";
             if (s.n == 0) {
                 std::snprintf(buf, sizeof(buf),
@@ -1096,7 +1096,7 @@ void Application::showInterfaceLegend() {
             }
             add(buf, interactionColor(r.type));
         }
-        if (interfaceShowMask_ != kInterfaceShowAll) {
+        if (interface_.showMask != kInterfaceShowAll) {
             add("");
             add("  :set interface_show all  to draw every type");
         }

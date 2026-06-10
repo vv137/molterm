@@ -91,25 +91,25 @@ std::string Application::atomInfoString(const MolObject& mol, int atomIdx) const
 bool Application::recomputeInterface() {
     auto obj = tabMgr_.currentTab().currentObject();
     if (!obj) {
-        interfaceContacts_.clear();
-        interfaceAtomMask_.clear();
-        interfaceRepr_.clear();
+        interface_.contacts.clear();
+        interface_.atomMask.clear();
+        interface_.repr.clear();
         return false;
     }
 
     contactMapPanel_.update(*obj);
-    contactMapPanel_.contactMap().computeInterface(*obj, interfaceCutoff_);
-    interfaceContacts_ = contactMapPanel_.contactMap().interfaceContacts();
-    if (interfaceContacts_.empty()) {
-        interfaceAtomMask_.clear();
-        interfaceRepr_.clear();
+    contactMapPanel_.contactMap().computeInterface(*obj, interface_.cutoff);
+    interface_.contacts = contactMapPanel_.contactMap().interfaceContacts();
+    if (interface_.contacts.empty()) {
+        interface_.atomMask.clear();
+        interface_.repr.clear();
         return false;
     }
 
     const auto& atoms = obj->atoms();
-    interfaceAtomMask_.assign(atoms.size(), false);
+    interface_.atomMask.assign(atoms.size(), false);
     std::set<std::tuple<std::string,int,char>> interfaceResidues;
-    for (const auto& c : interfaceContacts_) {
+    for (const auto& c : interface_.contacts) {
         if (c.atom1 >= 0 && c.atom1 < (int)atoms.size()) {
             const auto& a = atoms[c.atom1];
             interfaceResidues.emplace(a.chainId, a.resSeq, a.insCode);
@@ -122,13 +122,13 @@ bool Application::recomputeInterface() {
     for (size_t i = 0; i < atoms.size(); ++i) {
         const auto& a = atoms[i];
         if (interfaceResidues.count({a.chainId, a.resSeq, a.insCode}))
-            interfaceAtomMask_[i] = true;
+            interface_.atomMask[i] = true;
     }
-    interfaceRepr_.setData(interfaceAtomMask_, interfaceContacts_);
-    interfaceRepr_.setDrawSidechains(interfaceSidechains_);
-    interfaceRepr_.setInteractionThickness(interfaceThickness_);
-    interfaceRepr_.setLineThickness(std::max(1, interfaceThickness_ - 1));
-    interfaceRepr_.setShowMask(interfaceShowMask_);
+    interface_.repr.setData(interface_.atomMask, interface_.contacts);
+    interface_.repr.setDrawSidechains(interface_.sidechains);
+    interface_.repr.setInteractionThickness(interface_.thickness);
+    interface_.repr.setLineThickness(std::max(1, interface_.thickness - 1));
+    interface_.repr.setShowMask(interface_.showMask);
     return true;
 }
 
@@ -137,12 +137,12 @@ void Application::onCurrentObjectChanged() {
     // built against the prior mol's atom indices (interface mask /
     // contacts) no longer corresponds to what's being rendered. Refresh
     // it so dashes + sidechain hairs match the new current object.
-    if (interfaceOverlay_) {
+    if (interface_.active) {
         if (!recomputeInterface()) {
             // New object has no inter-chain contacts — turn the overlay
             // off rather than leave a dangling on-state with empty data.
-            interfaceOverlay_ = false;
-            interfaceFromZoom_ = false;
+            interface_.active = false;
+            interface_.fromZoom = false;
         }
     }
     // searchMatches_ holds atom indices valid only for the object that was
@@ -376,10 +376,10 @@ void Application::enterFocus(MolObject& mol,
     // Ensure interface contacts are cached. We need them before building
     // nbhdIndices so the partner-residue expansion below can promote
     // whole interacting residues into the neighborhood.
-    if (interfaceContacts_.empty()) {
+    if (interface_.contacts.empty()) {
         contactMapPanel_.update(mol);
         contactMapPanel_.contactMap().computeInterface(mol, 4.5f);
-        interfaceContacts_ = contactMapPanel_.contactMap().interfaceContacts();
+        interface_.contacts = contactMapPanel_.contactMap().interfaceContacts();
         focus_.computedInterface = true;
     }
 
@@ -389,7 +389,7 @@ void Application::enterFocus(MolObject& mol,
     // partner is identified by (chainId, resSeq, insCode), then every
     // atom sharing that key is added to the neighborhood mask.
     std::set<std::tuple<std::string, int, char>> partnerResidues;
-    for (const auto& c : interfaceContacts_) {
+    for (const auto& c : interface_.contacts) {
         if (c.atom1 < 0 || c.atom2 < 0) continue;
         if (c.atom1 >= (int)atoms.size() || c.atom2 >= (int)atoms.size()) continue;
         bool s1 = focus_.atomMask[c.atom1];
@@ -435,17 +435,17 @@ void Application::enterFocus(MolObject& mol,
     // residue-expanded) neighborhood, so the dashed lines render only
     // for what's visible in the pocket.
     std::vector<InterfaceContact> filtered;
-    filtered.reserve(interfaceContacts_.size());
-    for (const auto& c : interfaceContacts_) {
+    filtered.reserve(interface_.contacts.size());
+    for (const auto& c : interface_.contacts) {
         if (c.atom1 < 0 || c.atom2 < 0) continue;
         if (c.atom1 >= (int)atoms.size() || c.atom2 >= (int)atoms.size()) continue;
         if (focus_.nbhdMask[c.atom1] && focus_.nbhdMask[c.atom2])
             filtered.push_back(c);
     }
-    interfaceRepr_.setData(focus_.nbhdMask, std::move(filtered));
-    interfaceRepr_.setDrawSidechains(false);   // wireframe already covers it
-    interfaceRepr_.setInteractionThickness(interfaceThickness_);
-    interfaceRepr_.setShowMask(interfaceShowMask_);
+    interface_.repr.setData(focus_.nbhdMask, std::move(filtered));
+    interface_.repr.setDrawSidechains(false);   // wireframe already covers it
+    interface_.repr.setInteractionThickness(interface_.thickness);
+    interface_.repr.setShowMask(interface_.showMask);
 
     focus_.expr = exprDesc.empty() ? std::string("focus") : exprDesc;
     char msg[160];
@@ -512,16 +512,16 @@ void Application::exitFocus() {
     // overlay was on. If focus computed interactions on demand (no
     // pre-existing :interface), drop them entirely on exit.
     if (focus_.computedInterface) {
-        interfaceContacts_.clear();
-        interfaceAtomMask_.clear();
-        interfaceRepr_.clear();
+        interface_.contacts.clear();
+        interface_.atomMask.clear();
+        interface_.repr.clear();
         focus_.computedInterface = false;
-    } else if (interfaceOverlay_ && !interfaceContacts_.empty()) {
-        interfaceRepr_.setData(interfaceAtomMask_, interfaceContacts_);
-        interfaceRepr_.setDrawSidechains(interfaceSidechains_);
-        interfaceRepr_.setShowMask(interfaceShowMask_);
+    } else if (interface_.active && !interface_.contacts.empty()) {
+        interface_.repr.setData(interface_.atomMask, interface_.contacts);
+        interface_.repr.setDrawSidechains(interface_.sidechains);
+        interface_.repr.setShowMask(interface_.showMask);
     } else {
-        interfaceRepr_.clear();
+        interface_.repr.clear();
     }
 
     focus_.snapshot.active = false;
