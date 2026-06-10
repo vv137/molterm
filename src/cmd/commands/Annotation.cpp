@@ -182,7 +182,7 @@ void Application::registerAnnotationCommands(CommandRegistry& reg) {
         }
         auto v = parseBool(cmd.args[0]);
         if (!v) return {false, "Usage: :overlay on|off | :overlay clear"};
-        app.overlayVisible_ = *v;
+        app.annotations().overlayVisible = *v;
         return {true, *v ? "Overlays visible" : "Overlays hidden"};
     }, ":overlay on|off | clear", "Toggle overlay visibility (labels, measurements, $sele) or clear them",
        {":overlay on", ":overlay off", ":overlay clear"}, "Display");

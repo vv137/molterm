@@ -980,12 +980,12 @@ void Application::handleAction(Action action) {
             break;
 
         case Action::ShowOverlay:
-            overlayVisible_ = true;
+            annotations_.overlayVisible = true;
             cmdLine_.setMessage("Overlays visible");
             dirty({C::Viewport, C::CommandLine});
             break;
         case Action::HideOverlay:
-            overlayVisible_ = false;
+            annotations_.overlayVisible = false;
             cmdLine_.setMessage("Overlays hidden");
             dirty({C::Viewport, C::CommandLine});
             break;

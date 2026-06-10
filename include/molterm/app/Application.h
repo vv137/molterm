@@ -16,6 +16,7 @@
 #include "molterm/app/CommandScope.h"
 #include "molterm/app/FocusState.h"
 #include "molterm/app/InterfaceOverlay.h"
+#include "molterm/app/OverlayAnnotations.h"
 #include "molterm/app/TabManager.h"
 #include "molterm/app/TabViewState.h"
 #include "molterm/app/ViewSettings.h"
@@ -564,79 +565,23 @@ private:
     bool verbose_ = false;
 
 public:
-    // Atom labels, scoped per object. Atom indices are per-MolObject, so a
-    // flat list silently aliases atom #idx across objects — labels would
-    // bleed onto the wrong atoms after an object swap and `:label
-    // <obj>/(...)` could not target a non-current object. Keying by object
-    // name fixes both and lets every object's labels render in a multi-
-    // object overlay (issue #101).
-    struct ObjectLabels {
-        std::vector<int> atoms;                       // atom indices in that object
-        std::unordered_map<int, std::string> text;    // per-atom override text
-    };
+    // Overlay-annotation types (atom labels, measurements, free labels, arrows)
+    // now live in OverlayAnnotations (the cluster owned by annotations_). These
+    // aliases keep the historic Application::Foo spellings working for the
+    // command handlers and the free functions below.
+    using ObjectLabels    = OverlayAnnotations::ObjectLabels;
+    using Measurement     = OverlayAnnotations::Measurement;
+    using FreeLabelAnchor = OverlayAnnotations::FreeLabelAnchor;
+    using FreeLabelCorner = OverlayAnnotations::FreeLabelCorner;
+    using FreeLabel       = OverlayAnnotations::FreeLabel;
+    using ArrowOverlay    = OverlayAnnotations::ArrowOverlay;
 private:
-    std::map<std::string, ObjectLabels> labelsByObject_;  // MolObject::name() → labels
-    // Template applied when no per-atom override exists. Empty = built-in
-    // default ("{resname}{resseq}"). Tokens: {resname}, {resseq}/{seqid},
-    // {chain}, {name}, {element}, {restype} (1-letter AA code).
-    std::string labelFormat_;
-
-    // Persistent measurements: pairs/triples/quads of atom indices + label.
-    // `label` is the auto-formatted value ("5.85A" / "127.3°"); `caption` is
-    // the optional user string from `:measure ... = "..."` for figure prep.
-    // `obj` names the owning object — atom indices are per-object, so the
-    // measurement renders against and computes from that object's atoms,
-    // even when it isn't the current one (issue #101).
-    struct Measurement {
-        std::vector<int> atoms;
-        std::string label;
-        std::string caption;
-        std::string obj;
-        std::string displayLabel() const {
-            return caption.empty() ? label : label + " " + caption;
-        }
-    };
-    std::vector<Measurement> measurements_;
-
-    // Free-position labels — text not anchored to an atom (issue #34).
-    // Three anchor modes:
-    //   Corner : pinned to a viewport corner with a small inset.
-    //   Screen : normalised viewport coords (fx, fy) ∈ [0, 1].
-    //   World  : explicit 3D position projected through the camera each
-    //            frame so the label tracks rotation/zoom.
-public:
-    enum class FreeLabelAnchor { Corner, Screen, World };
-    enum class FreeLabelCorner { TopLeft, TopRight, BottomLeft, BottomRight };
-    struct FreeLabel {
-        FreeLabelAnchor anchor = FreeLabelAnchor::Corner;
-        FreeLabelCorner corner = FreeLabelCorner::TopLeft;
-        float fx = 0.0f, fy = 0.0f;
-        float wx = 0.0f, wy = 0.0f, wz = 0.0f;
-        std::string text;
-    };
-private:
-    std::vector<FreeLabel> freeLabels_;
-
-    // Persistent solid arrows / axes (issue #38). Distinct from :measure
-    // (dashed line + numeric distance caption) — solid arrow with a
-    // triangular head at endpoint B is the "this is an axis" primitive.
-    // Endpoints stored in world coordinates: atom-anchored creates resolve
-    // once at :arrow time and don't re-track if atoms move (re-issue if
-    // you re-align). Two construction paths today:
-    //   :arrow <serial1> <serial2> [= "label"]
-    //   :arrow $regA $regB [= "label"]      (vec3 / point registers)
-    //   :axis  $pcaReg [= "label"]          (centered, axis1, ±2σ)
-public:
-    struct ArrowOverlay {
-        std::array<float, 3> a{};
-        std::array<float, 3> b{};
-        std::string caption;
-        // Per-arrow color override (issue #104). Falls back to the global
-        // arrowColor_ (`:set arrow_color`), then the default yellow, when unset.
-        std::optional<std::array<uint8_t, 3>> color;
-    };
-private:
-    std::vector<ArrowOverlay> arrows_;
+    // Persistent overlay annotations: per-object atom labels + format template,
+    // measurements, free-position labels, arrows, and the master visibility
+    // toggle (OverlayAnnotations.h). Reached publicly via annotations(); the
+    // labelsByObject()/measurements()/freeLabels()/arrows() accessors below
+    // return references into here.
+    OverlayAnnotations annotations_;
 
 public:
     int pickReg(int n) const { return (n >= 0 && n < 4) ? pickRegs_[n] : -1; }
@@ -648,35 +593,37 @@ public:
         for (int p = 0; p < 4; ++p) if (pickRegs_[p] >= 0) return true;
         return false;
     }
-    std::map<std::string, ObjectLabels>& labelsByObject() { return labelsByObject_; }
-    const std::map<std::string, ObjectLabels>& labelsByObject() const { return labelsByObject_; }
+    // Whole overlay-annotation cluster (atom labels, measurements, free labels,
+    // arrows, visibility). The typed accessors below return references into it.
+    OverlayAnnotations& annotations() { return annotations_; }
+    const OverlayAnnotations& annotations() const { return annotations_; }
+
+    std::map<std::string, ObjectLabels>& labelsByObject() { return annotations_.labelsByObject; }
+    const std::map<std::string, ObjectLabels>& labelsByObject() const { return annotations_.labelsByObject; }
     // Total labeled atoms across every object — for status messages.
     size_t labelCount() const {
         size_t n = 0;
-        for (const auto& [name, ls] : labelsByObject_) n += ls.atoms.size();
+        for (const auto& [name, ls] : annotations_.labelsByObject) n += ls.atoms.size();
         return n;
     }
-    void clearAtomLabels() { labelsByObject_.clear(); }
+    void clearAtomLabels() { annotations_.labelsByObject.clear(); }
     // Add `idx` to object `objName`'s label set (deduped). When `text` is
     // non-null it sets the per-atom override; when null it drops any prior
-    // override so the atom falls back to labelFormat_/default.
+    // override so the atom falls back to labelFormat/default.
     void addAtomLabel(const std::string& objName, int idx, const std::string* text);
     // Remove `idxs` from object `objName`'s labels. Returns the count removed.
     size_t removeAtomLabels(const std::string& objName, const std::set<int>& idxs);
-    const std::string& labelFormat() const { return labelFormat_; }
-    void setLabelFormat(std::string fmt) { labelFormat_ = std::move(fmt); }
+    const std::string& labelFormat() const { return annotations_.labelFormat; }
+    void setLabelFormat(std::string fmt) { annotations_.labelFormat = std::move(fmt); }
     // Resolve the displayed text for atom `idx` of `obj`: per-atom override
-    // (from `labels`) → labelFormat_ → default ("{resname}{resseq}").
+    // (from `labels`) → labelFormat → default ("{resname}{resseq}").
     std::string resolveLabel(const MolObject& obj, const ObjectLabels& labels,
                              int idx) const;
-    std::vector<Measurement>& measurements() { return measurements_; }
-    // Free-label storage — type defined above near `freeLabels_` so the
-    // member declaration order satisfies "use after declaration" inside
-    // the class body.
-    std::vector<FreeLabel>& freeLabels() { return freeLabels_; }
-    const std::vector<FreeLabel>& freeLabels() const { return freeLabels_; }
-    std::vector<ArrowOverlay>& arrows() { return arrows_; }
-    const std::vector<ArrowOverlay>& arrows() const { return arrows_; }
+    std::vector<Measurement>& measurements() { return annotations_.measurements; }
+    std::vector<FreeLabel>& freeLabels() { return annotations_.freeLabels; }
+    const std::vector<FreeLabel>& freeLabels() const { return annotations_.freeLabels; }
+    std::vector<ArrowOverlay>& arrows() { return annotations_.arrows; }
+    const std::vector<ArrowOverlay>& arrows() const { return annotations_.arrows; }
     const std::optional<ColorRGB>& arrowColor() const { return view_.arrowColor(); }
     void setArrowColor(std::optional<ColorRGB> c) { view_.setArrowColor(c); }
     int arrowThickness() const { return view_.arrowThickness(); }
@@ -688,12 +635,11 @@ public:
     // here means a future overlay-list addition (e.g. arrows, axes) is wired
     // into both call sites by editing one method instead of two.
     void clearOverlayAnnotations() {
-        measurements_.clear();
-        labelsByObject_.clear();
-        freeLabels_.clear();
-        arrows_.clear();
+        annotations_.measurements.clear();
+        annotations_.labelsByObject.clear();
+        annotations_.freeLabels.clear();
+        annotations_.arrows.clear();
     }
-    bool overlayVisible_ = true;
 
     // Wipe both transient selection overlays at once: `$sele` and the
     // pk1-pk4 pick registers. Both render as yellow rings; clearing

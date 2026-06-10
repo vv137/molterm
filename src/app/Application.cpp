@@ -618,13 +618,13 @@ std::string Application::resolveLabel(const MolObject& obj,
         auto it = labels.text.find(idx);
         if (it != labels.text.end()) return it->second;
     }
-    if (!labelFormat_.empty()) return expandLabelTemplate(labelFormat_, a);
+    if (!annotations_.labelFormat.empty()) return expandLabelTemplate(annotations_.labelFormat, a);
     return a.resName + std::to_string(a.resSeq);
 }
 
 void Application::addAtomLabel(const std::string& objName, int idx,
                                const std::string* text) {
-    auto& ls = labelsByObject_[objName];
+    auto& ls = annotations_.labelsByObject[objName];
     if (std::find(ls.atoms.begin(), ls.atoms.end(), idx) == ls.atoms.end())
         ls.atoms.push_back(idx);
     // A per-atom override replaces any prior one; the no-`=` path clears it
@@ -635,15 +635,15 @@ void Application::addAtomLabel(const std::string& objName, int idx,
 
 size_t Application::removeAtomLabels(const std::string& objName,
                                      const std::set<int>& idxs) {
-    auto it = labelsByObject_.find(objName);
-    if (it == labelsByObject_.end()) return 0;
+    auto it = annotations_.labelsByObject.find(objName);
+    if (it == annotations_.labelsByObject.end()) return 0;
     auto& ls = it->second;
     size_t before = ls.atoms.size();
     ls.atoms.erase(std::remove_if(ls.atoms.begin(), ls.atoms.end(),
                    [&](int i) { return idxs.count(i) > 0; }), ls.atoms.end());
     for (int i : idxs) ls.text.erase(i);
     size_t removed = before - ls.atoms.size();
-    if (ls.atoms.empty()) labelsByObject_.erase(it);
+    if (ls.atoms.empty()) annotations_.labelsByObject.erase(it);
     return removed;
 }
 

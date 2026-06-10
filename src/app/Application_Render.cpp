@@ -387,7 +387,7 @@ void Application::renderViewport() {
     transcriptHintScroll_ = cmdLine_.renderHistoryHint(
         win, cmdTranscript_, transcriptHintScroll_, transcriptHintLines_);
 
-  if (overlayVisible_) {
+  if (annotations_.overlayVisible) {
     bool isPixel = (rendererType_ == RendererType::Pixel);
     // Auto-scale overlay sizes for the live canvas (issue #48). Pixels
     // mode = no-op; relative/physical adjust effective*() for this pass.
@@ -424,7 +424,7 @@ void Application::renderViewport() {
         int scaleY = canvas_ ? canvas_->scaleY() : 1;
         auto& cam = tabMgr_.currentTab().camera();
         auto* pc = isPixel ? dynamic_cast<PixelCanvas*>(canvas_.get()) : nullptr;
-        for (const auto& [objName, labels] : labelsByObject_) {
+        for (const auto& [objName, labels] : annotations_.labelsByObject) {
             auto o = findObjectByName(*this, objName);
             if (!o || !o->visible()) continue;
             const auto& atoms = o->atoms();
@@ -513,10 +513,10 @@ void Application::renderViewport() {
     // owning object name; project against that object's atoms so a distance
     // pinned on a non-current overlay member still renders (issue #101). A
     // measurement with no object (legacy) falls back to the current object.
-    if (!measurements_.empty()) {
+    if (!annotations_.measurements.empty()) {
         auto& cam = tabMgr_.currentTab().camera();
         auto cur = tabMgr_.currentTab().currentObject();
-        for (const auto& m : measurements_) {
+        for (const auto& m : annotations_.measurements) {
             if (m.atoms.size() < 2) continue;
             auto obj = m.obj.empty() ? cur : findObjectByName(*this, m.obj);
             if (!obj || !obj->visible()) continue;
@@ -611,7 +611,7 @@ void Application::renderViewport() {
     // rendered by InterfaceRepr earlier in the frame so depth-fog and
     // focus-dim post-passes see it. The legacy inline drawer was removed
     // when InterfaceRepr was introduced.
-  } // overlayVisible_
+  } // annotations_.overlayVisible
 
     win.refresh();
 }
@@ -724,7 +724,7 @@ void Application::restoreStereoCamera(const std::array<float, 9>& savedRot) {
 
 void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
                                    Camera& cam) {
-    if (arrows_.empty()) return;
+    if (annotations_.arrows.empty()) return;
     int thickness = effectiveArrowThickness();
     int headSize  = effectiveArrowHeadSize();
     // Base color: global :set arrow_color override, else default yellow. Each
@@ -748,7 +748,7 @@ void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
         }
     };
 
-    for (const auto& arr : arrows_) {
+    for (const auto& arr : annotations_.arrows) {
         r = baseR; g = baseG; b = baseB;
         if (arr.color) { r = (*arr.color)[0]; g = (*arr.color)[1]; b = (*arr.color)[2]; }
         float fxa, fya, fda, fxb, fyb, fdb;
@@ -808,14 +808,14 @@ void Application::drawArrowsPixel(PixelCanvas& pc, int subW, int subH,
 
 void Application::drawFreeLabelsPixel(PixelCanvas& pc, int subW, int subH,
                                        Camera& cam) {
-    if (freeLabels_.empty()) return;
+    if (annotations_.freeLabels.empty()) return;
     int fsize = effectiveLabelFontSize();
     // Inset corner labels by one font-height so they don't kiss the edge.
     int inset = std::max(4, fsize / 2);
     auto paint = [&](int sx, int sy, float depth, const std::string& text) {
         paintLabelText(pc, sx, sy, depth, text);
     };
-    for (const auto& fl : freeLabels_) {
+    for (const auto& fl : annotations_.freeLabels) {
         int sx = 0, sy = 0;
         // Depth = 0 places free labels in front of all geometry (smaller
         // depth wins under reverse-z; matches how atom labels are layered
@@ -882,7 +882,7 @@ void Application::paintAnnotationText(PixelCanvas& pc, int sx, int sy, float dep
 }
 
 void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) {
-    if (!overlayVisible_) return;
+    if (!annotations_.overlayVisible) return;
     auto& tab = tabMgr_.currentTab();
     int subW = pc.subW();
     int subH = pc.subH();
@@ -902,7 +902,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) 
 
     // Residue labels — text rendered in white next to each labeled atom.
     // Text comes from resolveLabel(): per-atom override > label_format > default.
-    for (const auto& [objName, labels] : labelsByObject_) {
+    for (const auto& [objName, labels] : annotations_.labelsByObject) {
         auto o = findObjectByName(*this, objName);
         if (!o || !o->visible()) continue;
         const auto& oatoms = o->atoms();
@@ -919,7 +919,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) 
     }
 
     // Measurement dashed lines + midpoint distance/angle/dihedral labels.
-    if (!measurements_.empty()) {
+    if (!annotations_.measurements.empty()) {
         const auto& mlc = measurementLineColor();
         auto drawDash = [&](float sx1, float sy1, float d1,
                             float sx2, float sy2, float d2,
@@ -950,7 +950,7 @@ void Application::drawPixelOverlay(PixelCanvas& pc, bool includeSeleHighlights) 
         };
 
         auto cur = tab.currentObject();
-        for (const auto& m : measurements_) {
+        for (const auto& m : annotations_.measurements) {
             if (m.atoms.size() < 2) continue;
             auto o = m.obj.empty() ? cur : findObjectByName(*this, m.obj);
             if (!o || !o->visible()) continue;
