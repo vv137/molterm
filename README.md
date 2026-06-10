@@ -902,12 +902,13 @@ All C++ dependencies are fetched automatically by CMake. Only ncurses and zlib n
                                 "   `darken` happens to converge to). Honored by
                                 "   silhouette + both modes; ignored by edge mode.
 :set label_outline on|off        " Halo (text outline) for :label glyphs (issue #49,
-                                "   default off). When on, drawTextOutlinedRGB
+                                "   default ON). When on, drawTextOutlinedRGB
                                 "   paints a contrasting rim around each glyph
                                 "   before the body color, so labels stay legible
                                 "   against any local pixel — coloured atoms,
                                 "   ribbon interior, dark/light bg. Pixel mode
-                                "   only — ncurses fallback ignores it.
+                                "   only — ncurses fallback ignores it. Turn it
+                                "   off with `:set label_outline off`.
 :set label_outline_color <c>    " Halo color. Same spec as label_color (named,
                                 "   #RRGGBB, rgb(R,G,B), or `default` to clear).
                                 "   When unset (default), molterm picks
@@ -1407,20 +1408,28 @@ max = 100.0
 molterm/
 ├── CMakeLists.txt
 ├── include/molterm/
-│   ├── app/         Application, TabManager, Tab
+│   ├── app/         Application, TabManager, Tab, ScriptRunner, ViewSettings;
+│   │                owned state clusters: FocusState, InterfaceOverlay, OverlayAnnotations
 │   ├── analysis/    ContactMap (interface detection, distance matrix)
-│   ├── core/        MolObject, AtomData, BondData, Selection, ObjectStore, SpatialHash, Logger
-│   ├── io/          CifLoader, Aligner, SessionExporter
+│   ├── core/        MolObject, AtomData, BondData, Selection, ObjectStore, SpatialHash,
+│   │                StringParse (no-throw numeric parsing), Logger
+│   ├── io/          CifLoader, PdbWriter, Aligner, SessionExporter, SessionSaver, CcdCache
 │   ├── render/      Canvas (Braille/Block/Ascii/Pixel), Camera, ColorMapper, DepthBuffer
 │   │                GraphicsEncoder (Sixel/Kitty/iTerm2), ProtocolPicker
 │   ├── repr/        Representation (Wireframe/BallStick/Backbone/Spacefill/Cartoon/Ribbon)
 │   ├── tui/         Screen, Window, Layout, StatusBar, CommandLine, TabBar, ObjectPanel,
 │   │                SeqBar, DensityMap, ContactMapPanel
 │   ├── input/       InputHandler, Keymap (trie), KeymapManager, Action, Mode
-│   ├── cmd/         CommandParser, CommandRegistry, UndoStack
+│   ├── cmd/         CommandParser, CommandRegistry, UndoStack, commands/ (per-area handlers)
 │   └── config/      ConfigParser (TOML)
 └── src/             .cpp implementations mirror include/ structure
 ```
+
+> **Application decomposition.** `Application` owns the app-wide subsystems but
+> delegates cohesive state to small owned clusters reached via accessors —
+> `view()` (ViewSettings), `focus()` (FocusState), `interface()` (InterfaceOverlay),
+> and `annotations()` (OverlayAnnotations) — so the central header stays lean and
+> each concern lives in one place.
 
 ### Rendering Pipeline
 
@@ -1433,6 +1442,9 @@ MolObject → Representation → Canvas → Window (ncurses)
 ### Coding Conventions
 
 - **C++17** strict — no exceptions in hot paths
+- Parse user/file/script numbers with `core/StringParse.h` (`parseInt`/`parseFloat`,
+  no-throw `std::optional`), never raw `std::stoi`/`std::stof`; the command
+  dispatcher also has a try/catch backstop so a stray throw can't kill the session
 - `std::unique_ptr` / `std::shared_ptr` with clear ownership
 - `enum class` over raw enums
 - `#pragma once` for header guards
