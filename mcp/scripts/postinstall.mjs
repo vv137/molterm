@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import https from "node:https";
 
-const DEFAULT_VERSION = "v0.50.0"; // bump alongside the MCP package version
+const DEFAULT_VERSION = "v0.50.1"; // bump alongside the MCP package version
 const REPO = process.env.MOLTERM_REPO || "vv137/molterm";
 const VERSION = process.env.MOLTERM_BINARY_VERSION || DEFAULT_VERSION;
 
