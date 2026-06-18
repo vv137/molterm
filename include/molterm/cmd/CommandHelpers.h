@@ -110,6 +110,7 @@ inline constexpr const char* kSetOptionsLong[] = {
     "wireframe_thickness",
     "ball_radius",
     "pan_speed",
+    "cartoon_mode",
     "cartoon_helix",
     "cartoon_sheet",
     "cartoon_loop",
@@ -158,7 +159,7 @@ inline constexpr const char* kSetOptionsLong[] = {
 inline constexpr const char* kSetOptionsShort[] = {
     "bt", "wt", "br", "ps", "ot", "od",
     "lfs", "anf", "anlw", "scale", "sm",
-    "ch", "csh", "cl", "csd", "csa", "chr", "cth", "ctr", "nb",
+    "cm", "ch", "csh", "cl", "csd", "csa", "chr", "cth", "ctr", "nb",
     "bsf", "sfs",
     "ic", "it", "iclass", "isc", "is",
     "sa", "v", "lf", "transp",

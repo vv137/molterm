@@ -540,6 +540,22 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             return {true, std::string("Cartoon tubular helix: ") +
                           (*on ? "on (circular tube)" : "off (elliptical ribbon)")};
         }
+        if (opt == "cartoon_mode" || opt == "cm") {
+            if (cmd.args.size() < 2)
+                return {false, "Usage: :set cartoon_mode default|pymol"};
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            const std::string& v = cmd.args[1];
+            if (v == "default" || v == "d") {
+                ct->setCartoonStyle(CartoonRepr::CartoonStyle::Default);
+                return {true, "Cartoon mode: default (molterm ribbon)"};
+            }
+            if (v == "pymol" || v == "p") {
+                ct->setCartoonStyle(CartoonRepr::CartoonStyle::PyMOL);
+                return {true, "Cartoon mode: pymol (oval helix, barbed-arrow strand)"};
+            }
+            return {false, "Unknown cartoon mode: " + v + " (use default or pymol)"};
+        }
         if (opt == "bs_units") {
             if (cmd.args.size() < 2) return {false, "Usage: :set bs_units vdw|cell"};
             auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));
@@ -875,6 +891,14 @@ void Application::registerSettingsCommands(CommandRegistry& reg) {
             if (!ct) return {false, "Cartoon repr not found"};
             return {true, std::string("cartoon_tubular_helix = ") +
                           (ct->tubularHelix() ? "on" : "off")};
+        }
+        if (opt == "cartoon_mode" || opt == "cm") {
+            auto* ct = dynamic_cast<CartoonRepr*>(app.getRepr(ReprType::Cartoon));
+            if (!ct) return {false, "Cartoon repr not found"};
+            const char* n =
+                (ct->cartoonStyle() == CartoonRepr::CartoonStyle::PyMOL) ? "pymol"
+                                                                         : "default";
+            return {true, std::string("cartoon_mode = ") + n};
         }
         if (opt == "bs_units") {
             auto* bs = dynamic_cast<BallStickRepr*>(app.getRepr(ReprType::BallStick));

@@ -21,6 +21,16 @@ public:
         P,
     };
 
+    // Cartoon look. Default is molterm's own ribbon proportions; PyMOL
+    // matches PyMOL's default cartoon cross-sections (oval helix, flat
+    // arrow strand, round loop) so the same structure reads the way it
+    // would in PyMOL. Selects a complete profile, not a single knob —
+    // see the kPyMol* constants in CartoonRepr.cpp.
+    enum class CartoonStyle : std::uint8_t {
+        Default = 0,
+        PyMOL,
+    };
+
     ReprType type() const override { return ReprType::Cartoon; }
 
     void render(const MolObject& mol, const Camera& cam,
@@ -46,6 +56,8 @@ public:
     void  setTubularRadius(float r) { tubularRadius_ = (r < 0.05f) ? 0.05f : r; }
     NucleicBackbone nucleicBackbone() const { return nucleicBackbone_; }
     void setNucleicBackbone(NucleicBackbone b) { nucleicBackbone_ = b; }
+    CartoonStyle cartoonStyle() const { return cartoonStyle_; }
+    void setCartoonStyle(CartoonStyle s) { cartoonStyle_ = s; }
 
     // ── Smoothness / shape tuning (was hardcoded; now :set-controllable) ──
     int   sheetSmooth() const { return sheetSmooth_; }
@@ -176,6 +188,11 @@ private:
     bool  tubularHelix_ = false;
     float tubularRadius_ = 0.7f;     // Å — Mol* default
     NucleicBackbone nucleicBackbone_ = NucleicBackbone::C4;
+    // Cross-section profile preset. PyMOL swaps the helix/sheet/loop
+    // half-extents for PyMOL's defaults in drawChainCached(); it only
+    // affects the per-frame rings, not the cached spline, so toggling it
+    // doesn't invalidate the geometry cache.
+    CartoonStyle cartoonStyle_ = CartoonStyle::Default;
 
     // ── Smoothness / shape tuning ────────────────────────────────────────
     // β-strand flattening: number of neighbour-averaging passes over the
@@ -187,7 +204,7 @@ private:
     float sheetHeight_   = 0.20f;          // sheet slab half-height, Å
     float stdTension_    = 0.5f;           // Catmull-Rom tension, loop/sheet
     float helixTension_  = 0.9f;           // Catmull-Rom tension, helix
-    float sheetFlat_     = 0.65f;          // C→O hint vs binormal blend [0,1]
+    float sheetFlat_     = 0.65f;          // low-passed C→O hint vs PT binormal blend [0,1]
     float arrowWidth_    = 2.20f / 1.50f;  // arrowhead tip width scale
     int   frameSmooth_   = 2;              // normal-frame smoothing passes (orientation)
     int   widthSmooth_   = 3;              // cross-section W/H smoothing passes (clean edges)

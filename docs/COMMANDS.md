@@ -216,6 +216,7 @@
 :set outline on|off             " Silhouette outlines
 :set ot|outline_threshold <n>   " Outline depth sensitivity (default: 0.3)
 :set od|outline_darken <n>      " Outline darkness (default: 0.15, 0=black)
+:set cm|cartoon_mode default|pymol " Cartoon style preset: default (molterm ribbon, tuned by the cartoon_* sizes below) or pymol (fixed PyMOL proportions: oval helix, barbed-arrow strand, round loop)
 :set ch|cartoon_helix <n>       " Cartoon helix half-width Å (default: 1.30)
 :set csh|cartoon_sheet <n>      " Cartoon sheet half-width Å (default: 1.50)
 :set cl|cartoon_loop <n>        " Cartoon loop radius Å (default: 0.20)

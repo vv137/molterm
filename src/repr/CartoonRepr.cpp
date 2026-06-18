@@ -21,6 +21,28 @@ static bool isNucleotide(const std::string& rn) {
 static constexpr std::size_t kLodLarge  = 10000;
 static constexpr std::size_t kLodMedium = 5000;
 
+// ─── PyMOL cartoon profile constants (CartoonStyle::PyMOL) ───────────────────
+// PyMOL builds each cartoon segment by extruding a fixed cross-section along
+// the spline (layer1/Extrude.cpp). Its default half-extents come from
+// layer1/SettingInfo.h. The wide axis rides the binormal, the thin axis the
+// normal — the same frame convention molterm uses — so reproducing the look is
+// just a matter of matching the half-extents:
+//   helix  oval : cartoon_oval_length 1.35 (wide) × cartoon_oval_width 0.25 (thin)
+//   sheet  rect : cartoon_rect_length 1.40 × cartoon_rect_width 0.40, but the
+//                 ExtrudeRectangle corners sit at cos(45°)·param, so the actual
+//                 half-extents are 1.40·0.7071 = 0.99 (wide) × 0.40·0.7071 = 0.283 (thin)
+//   loop   tube : cartoon_loop_radius 0.20
+static constexpr float kPyMolHelixHalfW = 1.35f;   // oval_length
+static constexpr float kPyMolHelixHalfH = 0.25f;   // oval_width
+static constexpr float kPyMolSheetHalfW = 0.99f;   // rect_length · cos45
+static constexpr float kPyMolSheetHalfH = 0.283f;  // rect_width  · cos45
+static constexpr float kPyMolLoopRadius = 0.20f;   // loop_radius
+// Barbed β-arrow. ExtrudeCGOSurfaceStrand flares the strand half-width to
+// 1.5× at the arrowhead base then tapers it linearly to a point at the tip;
+// the step up from the body width to the barb is what reads as the arrow's
+// barbs (layer1/Extrude.cpp ExtrudeCGOSurfaceStrand).
+static constexpr float kPyMolArrowBarb = 1.5f;
+
 bool CartoonRepr::CacheKey::operator==(const CacheKey& o) const {
     return mol == o.mol &&
            activeState == o.activeState &&
@@ -327,7 +349,18 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
             normalize3(bx[j], by[j], bz[j]);
         }
 
-        // Step 3b: sheet hint blend (carbonyl C→O guides parallel strands)
+        // Step 3b: sheet ribbon orientation — carbonyl-guided, low-pass smoothed.
+        //
+        // The carbonyl C→O hint defines which way a strand's flat face points,
+        // but it's piecewise-constant per residue and flips ±180° with the
+        // β-pleat. Blending it into the frame per residue (the old approach)
+        // makes the flat face jump at every residue boundary — the ribbon
+        // visibly twists/stair-steps edge-on. Instead we treat the hint as a
+        // low-frequency signal: derive a per-residue sheet "up" normal,
+        // low-pass it over a ~1-residue window (which melts the per-residue
+        // steps while preserving the strand's gradual natural twist), then
+        // rebuild a smooth frame from the smoothed up. sheetFlat_ still blends
+        // the result toward the parallel-transport frame (0 = raw PT).
         {
             int k = 0;
             while (k < nPts) {
@@ -335,35 +368,72 @@ void CartoonRepr::rebuildCache(const MolObject& mol, const RenderContext& ctx,
                 int rs2 = k;
                 while (k < nPts && spine[k].ss == SSType::Sheet) ++k;
                 int re2 = k;
+                int len = re2 - rs2;
 
-                float prevPx = 0.0f, prevPy = 0.0f, prevPz = 0.0f;
+                // (1) Per-point sheet normal "up" = tangent × in-plane(C→O),
+                //     sign-corrected so consecutive ups don't flip with the
+                //     pleat. Points missing C/O leave a gap, filled below.
+                // Gap residues (missing C/O) stay zero-length; since every
+                // real up is a unit vector, a zero entry unambiguously marks a
+                // gap to fill below.
+                std::vector<float> ux(len, 0), uy(len, 0), uz(len, 0);
+                float pux = 0, puy = 0, puz = 0;
                 bool hasPrev = false;
                 for (int j = rs2; j < re2; ++j) {
                     if (!spine[j].hasHint) continue;
                     float hxh = spine[j].hintX, hyh = spine[j].hintY, hzh = spine[j].hintZ;
-
                     float d = hxh * tx[j] + hyh * ty[j] + hzh * tz[j];
-                    float px = hxh - d * tx[j];
-                    float py = hyh - d * ty[j];
-                    float pz = hzh - d * tz[j];
+                    float px = hxh - d * tx[j], py = hyh - d * ty[j], pz = hzh - d * tz[j];
                     if (normalize3(px, py, pz) < 1e-6f) continue;
-
-                    if (hasPrev && (px * prevPx + py * prevPy + pz * prevPz) < 0.0f) {
-                        px = -px; py = -py; pz = -pz;
+                    float vx, vy, vz;
+                    cross3(tx[j], ty[j], tz[j], px, py, pz, vx, vy, vz);
+                    if (normalize3(vx, vy, vz) < 1e-6f) continue;
+                    if (hasPrev && (vx * pux + vy * puy + vz * puz) < 0.0f) {
+                        vx = -vx; vy = -vy; vz = -vz;
                     }
-                    prevPx = px; prevPy = py; prevPz = pz;
-                    hasPrev = true;
+                    pux = vx; puy = vy; puz = vz; hasPrev = true;
+                    int o = j - rs2;
+                    ux[o] = vx; uy[o] = vy; uz[o] = vz;
+                }
+                if (!hasPrev) continue;   // no carbonyls in this strand → keep PT
 
+                // Carry the nearest real up across gap residues (forward then
+                // backward) so the low-pass sees a continuous signal.
+                auto gap = [&](int o) { return ux[o]==0.0f && uy[o]==0.0f && uz[o]==0.0f; };
+                for (int o = 1; o < len; ++o)
+                    if (gap(o)) { ux[o]=ux[o-1]; uy[o]=uy[o-1]; uz[o]=uz[o-1]; }
+                for (int o = len - 2; o >= 0; --o)
+                    if (gap(o)) { ux[o]=ux[o+1]; uy[o]=uy[o+1]; uz[o]=uz[o+1]; }
+
+                // (2) Low-pass the up vectors over a ±half-residue window so
+                //     residue-boundary steps average out into a smooth twist.
+                int half = std::max(1, subdiv / 2);
+                std::vector<float> sx(len), sy(len), sz(len);
+                for (int o = 0; o < len; ++o) {
+                    float ax = 0, ay = 0, az = 0;
+                    int lo = std::max(0, o - half), hi = std::min(len - 1, o + half);
+                    for (int m = lo; m <= hi; ++m) { ax += ux[m]; ay += uy[m]; az += uz[m]; }
+                    if (normalize3(ax, ay, az) < 1e-6f) { ax = ux[o]; ay = uy[o]; az = uz[o]; }
+                    sx[o] = ax; sy[o] = ay; sz[o] = az;
+                }
+
+                // (3) Rebuild each frame from the smoothed up, blended with the
+                //     parallel-transport binormal by sheetFlat_. Both inputs are
+                //     now smooth along the strand, so the blend is too.
+                for (int j = rs2; j < re2; ++j) {
+                    int o = j - rs2;
+                    float cbx, cby, cbz;   // wide axis = up × tangent (in-plane)
+                    cross3(sx[o], sy[o], sz[o], tx[j], ty[j], tz[j], cbx, cby, cbz);
+                    if (normalize3(cbx, cby, cbz) < 1e-6f) continue;
+                    float sgn = (bx[j]*cbx + by[j]*cby + bz[j]*cbz) < 0.0f ? -1.0f : 1.0f;
                     float f = sheetFlat_, g = 1.0f - sheetFlat_;
-                    float bbx = f * px + g * bx[j];
-                    float bby = f * py + g * by[j];
-                    float bbz = f * pz + g * bz[j];
-                    if (normalize3(bbx, bby, bbz) < 1e-6f) continue;
-
+                    float bbx = f*cbx + g*sgn*bx[j];
+                    float bby = f*cby + g*sgn*by[j];
+                    float bbz = f*cbz + g*sgn*bz[j];
+                    if (normalize3(bbx, bby, bbz) < 1e-6f) { bbx=cbx; bby=cby; bbz=cbz; }
                     float newNx, newNy, newNz;
                     cross3(bbx, bby, bbz, tx[j], ty[j], tz[j], newNx, newNy, newNz);
                     if (normalize3(newNx, newNy, newNz) < 1e-6f) continue;
-
                     bx[j] = bbx; by[j] = bby; bz[j] = bbz;
                     nx[j] = newNx; ny[j] = newNy; nz[j] = newNz;
                 }
@@ -438,13 +508,19 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
     const float kNucleicHalfW = nucleicWidth_;     // Å (:set cartoon_nucleic_width)
     const float kNucleicHalfH = nucleicHeight_;    // Å (:set cartoon_nucleic_height)
 
+    // PyMOL style swaps protein helix/sheet/loop half-extents for PyMOL's
+    // own defaults; tubular helices and nucleic ribbons keep their dedicated
+    // profiles in either style.
+    const bool pymol = (cartoonStyle_ == CartoonStyle::PyMOL);
+
     auto ssHalfW = [&](SSType ss, bool nucleic) -> float {
         if (nucleic) return kNucleicHalfW;
         switch (ss) {
             case SSType::Helix:
-                return tubularHelix_ ? tubularRadius_ : helixRadius_;
-            case SSType::Sheet: return sheetRadius_;
-            default:            return loopRadius_;
+                return tubularHelix_ ? tubularRadius_
+                                     : (pymol ? kPyMolHelixHalfW : helixRadius_);
+            case SSType::Sheet: return pymol ? kPyMolSheetHalfW : sheetRadius_;
+            default:            return pymol ? kPyMolLoopRadius : loopRadius_;
         }
     };
     auto ssHalfH = [&](SSType ss, bool nucleic) -> float {
@@ -453,10 +529,12 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
             case SSType::Helix:
                 // Tubular: same as half-width → circle.
                 // Elliptical: half-width / aspect → flat ribbon.
-                return tubularHelix_ ? tubularRadius_
-                                     : helixRadius_ / helixAspect_;
-            case SSType::Sheet: return sheetHeight_;  // :set cartoon_sheet_height
-            default:            return loopRadius_;
+                return tubularHelix_
+                           ? tubularRadius_
+                           : (pymol ? kPyMolHelixHalfH : helixRadius_ / helixAspect_);
+            case SSType::Sheet:
+                return pymol ? kPyMolSheetHalfH : sheetHeight_;  // :set cartoon_sheet_height
+            default:            return pymol ? kPyMolLoopRadius : loopRadius_;
         }
     };
 
@@ -505,10 +583,18 @@ void CartoonRepr::drawChainCached(int chainStart, int chainEnd,
             const bool isHelix = !isNuc && (C.ss[gi] == SSType::Helix);
 
             if (C.arrowFrac[gi] >= 0.0f) {
-                // Arrowhead base flares to arrowWidth_× the strand half-width
-                // at the tip (af=1). :set cartoon_arrow_width.
                 float af = C.arrowFrac[gi];
-                hw *= 1.0f + (arrowWidth_ - 1.0f) * af;
+                if (pymol) {
+                    // PyMOL barbed arrowhead: widest at the base (af→0) and
+                    // tapering to a point at the tip (af→1). Anchored to the
+                    // canonical sheet width (not the boundary-smoothed halfW)
+                    // so the barb stays crisp where the strand meets the loop.
+                    hw = kPyMolSheetHalfW * kPyMolArrowBarb * (1.0f - af);
+                } else {
+                    // Arrowhead base flares to arrowWidth_× the strand
+                    // half-width at the tip (af=1). :set cartoon_arrow_width.
+                    hw *= 1.0f + (arrowWidth_ - 1.0f) * af;
+                }
             }
 
             std::vector<Vert> ring;
