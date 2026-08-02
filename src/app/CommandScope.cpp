@@ -5,23 +5,6 @@
 
 namespace molterm {
 
-namespace {
-
-// Build a name-resolver closure that looks up `$name` selections in the
-// app-level table. Mirrors what Application::parseSelection does, but
-// without the `sele` auto-save side effect — the auto-save is harmful
-// when we re-parse the same expression once per object (we'd overwrite
-// `$sele` with whichever object happened to be visited last).
-Selection::NameResolver makeResolver(Application& app) {
-    return [&app](const std::string& name) -> const Selection* {
-        auto& table = app.namedSelections();
-        auto it = table.find(name);
-        return (it != table.end()) ? &it->second : nullptr;
-    };
-}
-
-}  // namespace
-
 int forEachInScope(Application& app, const std::string& expr,
                    const std::function<bool(ScopedTarget&)>& fn) {
     return forEachInScope(app, app.effectiveCommandScope(), expr, fn);
@@ -30,7 +13,11 @@ int forEachInScope(Application& app, const std::string& expr,
 int forEachInScope(Application& app, ScopeMode mode, const std::string& expr,
                    const std::function<bool(ScopedTarget&)>& fn) {
     auto& tab = app.tabs().currentTab();
-    auto resolver = makeResolver(app);
+    // app.selectionParseEnv() rather than app.parseSelection(): the latter
+    // auto-saves `$sele`, which is wrong when we re-parse the same expression
+    // once per object — `$sele` would end up holding whichever object was
+    // visited last.
+    const auto env = app.selectionParseEnv();
     int count = 0;
 
     auto visit = [&](std::shared_ptr<MolObject> obj) -> bool {
@@ -42,7 +29,7 @@ int forEachInScope(Application& app, ScopeMode mode, const std::string& expr,
             t.wholeObject = true;
         } else {
             std::string err;
-            t.sel = Selection::parse(expr, *obj, resolver, &err);
+            t.sel = Selection::parse(expr, *obj, env, &err);
             // Skip before fn() runs, not after: fn is the mutation (colour,
             // extract, transform), so a malformed expression has to stop short
             // of it rather than be reported once the damage is done (#121).
@@ -72,7 +59,7 @@ int forEachInScope(Application& app, ScopeMode mode, const std::string& expr,
             if (!obj) continue;
             // Same expression, already parsed (and any error already noted)
             // by visit() above — diagnostics off here would only duplicate it.
-            auto sel = Selection::parse(expr, *obj, resolver);
+            auto sel = Selection::parse(expr, *obj, env);
             if (!sel.empty()) {
                 app.namedSelections()[kSele] = std::move(sel);
                 break;

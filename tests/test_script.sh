@@ -17,7 +17,8 @@ run_err() { printf '%s' "$1" | "$MOLTERM" --script - --no-tui 2>&1; }
 # without depending on a downloaded fixture.
 TESTPDB="$(mktemp -t molterm_test_XXXXXX).pdb"
 NESTED="$(mktemp -t molterm_nested_XXXXXX).mt"
-trap 'rm -f "$TESTPDB" "$NESTED"' EXIT
+SECOND="$(mktemp -t molterm_second_XXXXXX).pdb"
+trap 'rm -f "$TESTPDB" "$NESTED" "$SECOND"' EXIT
 cat > "$TESTPDB" <<'PDB'
 ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 20.00           N
 ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00 20.00           C
@@ -256,6 +257,40 @@ assert_eq "foreach: bad header exits 1" \
   :echo x
 :end
 ")" 1
+# ── Unknown selectors (issue #124) ───────────────────────────────────────────
+# A typo'd selector selected nothing, and under `not` that inverted to
+# everything — `:color red not heliix` painted the whole structure at exit 0.
+out=$(run_err ":load $TESTPDB
+:color red not heliix
+:color blue not helix
+")
+assert_has    "unknown selector: typo reported"   "$out" "unknown selector"
+assert_absent "unknown selector: nothing painted" "$out" "8 atom(s) red"
+assert_has    "unknown selector: real keyword works" "$out" "atom(s) blue"
+assert_eq "unknown selector: exits 1" \
+          "$(rc ":load $TESTPDB
+:color red not heliix
+")" 1
+
+# A name that belongs to another loaded object is a cross-object reference, not
+# a typo — it must stay silent so the caller's loop can reach that object. The
+# assertion has to name the object as a BAREWORD: an expression like
+# `chain B` contains no bareword and would pass even with the check deleted.
+sed 's/ A   1 / B   1 /' "$TESTPDB" > "$SECOND"
+FIRST_OBJ="$(basename "$TESTPDB" .pdb)"
+SECOND_OBJ="$(basename "$SECOND" .pdb)"
+out=$(run_err ":load $TESTPDB
+:load $SECOND
+:count $FIRST_OBJ
+:count $SECOND_OBJ
+:count definitelynotanobject
+")
+assert_absent "cross-object: known name is not a typo" "$out" "unknown selector '$FIRST_OBJ'"
+assert_absent "cross-object: other object not a typo"  "$out" "unknown selector '$SECOND_OBJ'"
+assert_has    "cross-object: both objects resolve"     "$out" "8 atoms match: $SECOND_OBJ"
+# ...while a name nothing answers to is still caught.
+assert_has "cross-object: real typo still caught" "$out" "unknown selector 'definitelynotanobject'"
+
 # A well-formed header still iterates.
 out=$(run_err ":load $TESTPDB
 :foreach r in chain A and resi 1

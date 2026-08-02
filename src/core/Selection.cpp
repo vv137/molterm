@@ -224,6 +224,13 @@ public:
     Pos savePos() const { return {pos_, lastStart_}; }
     void rewind(Pos p) { pos_ = p.pos; lastStart_ = p.lastStart; }
 
+    // Re-read from a saved token start under object-name rules ('-' and '.'
+    // included), for names that readWord would have split.
+    std::string rereadObjNameFrom(Pos p) {
+        pos_ = p.lastStart;
+        return readWhile(isObjChar);
+    }
+
     // True iff the current bareword (digit-led names like "1ubq" included)
     // is immediately followed by "/(". Used by the obj/(...) form because
     // "1ubq" splits into Number+Word and a token-level peek would only
@@ -383,19 +390,26 @@ static bool isNaSugarAtom(const std::string& name) {
 class SelectionParser {
 public:
     SelectionParser(const std::string& expr, const MolObject& mol,
-                    Selection::NameResolver resolver = nullptr)
-        : tokenizer_(expr), mol_(mol), resolver_(std::move(resolver)),
+                    const Selection::ParseEnv& env)
+        : tokenizer_(expr), mol_(mol), env_(env),
           totalAtoms_(static_cast<int>(mol.atoms().size())) {
         advance();
     }
 
-    // `error` (optional) reports an expression the grammar could not fully
-    // consume. Every silent-truncation bug in this parser reached the user
-    // through the missing check here (issue #121).
+    // `error` (optional) reports an expression the parser could not make sense
+    // of. Every silent-truncation bug in here reached the user through the
+    // absence of these checks (issues #121, #124).
     Selection parse(std::string* error) {
         auto sel = parseOr();
         if (error) {
-            if (unclosedParen_)
+            // An unknown selector first: it is a definite fact about a word
+            // the user typed, whereas an unbalanced paren is often the
+            // downstream symptom of it. `(chain A and heliix` should name the
+            // typo rather than send the reader hunting for a missing ')'.
+            if (!unknownWord_.empty())
+                *error = "unknown selector '" + unknownWord_ +
+                         "' (not a keyword or a loaded object)";
+            else if (unclosedParen_)
                 *error = "unclosed '(' in selection";
             else if (current_.type != Token::End)
                 *error = "unexpected '" +
@@ -409,9 +423,10 @@ public:
 private:
     Tokenizer tokenizer_;
     const MolObject& mol_;
-    Selection::NameResolver resolver_;
+    const Selection::ParseEnv& env_;
     int totalAtoms_;
     Token current_;
+    std::string unknownWord_;      // first bareword that named nothing
     bool unclosedParen_ = false;   // a ')' never arrived
 
     void advance() { current_ = tokenizer_.next(); }
@@ -719,8 +734,8 @@ private:
         if (current_.type == Token::AtRef) {
             std::string name = current_.value;
             advance();
-            if (resolver_) {
-                const Selection* sel = resolver_(name);
+            if (env_.resolver) {
+                const Selection* sel = env_.resolver(name);
                 if (sel) {
                     // Honor a stored object scope: a named selection built
                     // from `<obj>/(...)` must not re-resolve against a
@@ -739,6 +754,9 @@ private:
             return Selection({}, "");
 
         std::string kw = current_.value;
+        // Where `kw` began, so the bare-object branch below can re-read it
+        // under the wider object-name rules if the narrow word matches nothing.
+        const auto kwPos = tokenizer_.savePos();
         // Convert to lowercase for case-insensitive matching
         std::string kwLower = kw;
         std::transform(kwLower.begin(), kwLower.end(), kwLower.begin(), ::tolower);
@@ -942,6 +960,10 @@ private:
             advance();
             if (mol_.name() == objName)
                 return Selection::all(totalAtoms_);
+            // Same rule as the bare `<obj>` form below: only a name no loaded
+            // object answers to is a typo (issue #124). Leaving this silent
+            // while bare `nosuch` errored was the odd half of the pair.
+            noteUnknown(objName);
             return Selection({}, "obj " + objName);  // empty if no match
         }
         if (kwLower == "imgt") {
@@ -1105,6 +1127,7 @@ private:
                 if (kw == "all" || kw == "*" || mol_.name() == kw)
                     return Selection::all(totalAtoms_);
             }
+            if (!isObjGlob(kw)) noteUnknown(kw);
             return Selection({}, kw + "/" + suffix);
         }
 
@@ -1114,8 +1137,49 @@ private:
         if (mol_.name() == kw)
             return Selection::all(totalAtoms_);
 
-        // Unknown keyword — treat as empty selection
+        // Object names taken from a filename often carry '-' or '.', which
+        // readWord splits on ("my-model" → "my"). The digit-led path already
+        // re-reads under bareword rules; do the same here so `my-model`
+        // resolves, and so a typo of one is reported as the whole thing the
+        // user typed rather than as its first fragment.
+        std::string typed = kw;
+        if (env_.knownObject) {
+            const auto here = tokenizer_.savePos();
+            std::string wide = tokenizer_.rereadObjNameFrom(kwPos);
+            if (wide.size() > kw.size()) {
+                if (env_.knownObject(wide)) {
+                    advance();                   // consume the widened name
+                    if (mol_.name() == wide) return Selection::all(totalAtoms_);
+                    return Selection({}, wide);  // another object's — empty here
+                }
+                typed = wide;                    // for the diagnostic only
+            }
+            tokenizer_.rewind(here);
+        }
+
+        // Neither a keyword nor this object's name. It is still a legitimate
+        // cross-object reference when some *other* loaded object answers to
+        // it — `1crn` parsed against `1ubq` must yield empty and let the
+        // caller's loop reach `1crn`. Only when nothing anywhere claims the
+        // word is it a typo, and `not heliix` inverting an empty match into
+        // "everything" is exactly the figure-shaped failure worth catching
+        // (issue #124).
+        noteUnknown(typed);
         return Selection({}, kw);
+    }
+
+    // Record `word` as a typo unless something could still claim it. Requires
+    // knownObject: without the caller's object list we cannot tell a typo from
+    // a cross-object name, and guessing would reject valid selections.
+    void noteUnknown(const std::string& word) {
+        if (!env_.knownObject) return;
+        // Punctuation swept up by the tokenizer's catch-all isn't a selector
+        // name; let the trailing-token check describe it instead.
+        if (word.empty() || !(std::isalnum(static_cast<unsigned char>(word[0])) ||
+                              word[0] == '_'))
+            return;
+        if (env_.knownObject(word)) return;
+        if (unknownWord_.empty()) unknownWord_ = word;   // leftmost wins
     }
 
     // Build a Selection of atoms within `dist` Å of any atom in `sub`.
@@ -1322,12 +1386,19 @@ std::string normalizeColonSpecs(const std::string& expr) {
 }  // namespace
 
 Selection Selection::parse(const std::string& exprIn, const MolObject& mol,
-                           NameResolver resolver, std::string* error) {
+                           const ParseEnv& env, std::string* error) {
     if (error) error->clear();
     if (exprIn.empty()) return Selection();
     std::string expr = normalizeColonSpecs(exprIn);
-    SelectionParser parser(expr, mol, std::move(resolver));
+    SelectionParser parser(expr, mol, env);
     return parser.parse(error);
+}
+
+Selection Selection::parse(const std::string& exprIn, const MolObject& mol,
+                           NameResolver resolver, std::string* error) {
+    ParseEnv env;
+    env.resolver = std::move(resolver);
+    return parse(exprIn, mol, env, error);
 }
 
 } // namespace molterm

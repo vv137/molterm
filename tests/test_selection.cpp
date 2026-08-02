@@ -770,6 +770,62 @@ static void testTrailingTokensReported(const MolObject& mol) {
           "a rejected expression still returns its prefix to nullptr callers");
 }
 
+// ── Unknown selectors (issue #124) ───────────────────────────────────────────
+
+// A bare word that names neither a keyword nor a loaded object is a typo. It
+// used to select nothing, which under `not` inverts to everything — a wrong
+// figure that looks deliberate. The parser sees one object at a time, so it
+// takes the caller's object-name lookup to tell a typo from a cross-object
+// reference; without one, every unmatched word is treated as a typo.
+static void testUnknownSelectorReported(const MolObject& mol) {
+    auto parseWith = [&](const char* expr, Selection::ObjectNameCheck known,
+                         std::string& err) {
+        Selection::ParseEnv env;
+        env.knownObject = std::move(known);
+        return Selection::parse(expr, mol, env, &err);
+    };
+    auto onlyTestAndCrn = [](const std::string& n) {
+        return n == "test" || n == "1crn";
+    };
+
+    std::string err;
+    parseWith("heliix", onlyTestAndCrn, err);
+    CHECK(err.find("heliix") != std::string::npos, "typo names the bad word");
+    CHECK(err.find("unknown selector") != std::string::npos,
+          "typo reported as an unknown selector");
+
+    // The reported shape: `not <typo>` must not quietly become everything.
+    auto inverted = parseWith("not heliix", onlyTestAndCrn, err);
+    CHECK(!err.empty(), "not <typo> is reported");
+    CHECK(inverted.size() == mol.atoms().size(),
+          "the prefix result is still the (wrong) complement — callers fail closed");
+
+    // A name belonging to some other loaded object is a legitimate
+    // cross-object reference: empty here, and NOT an error, so the caller's
+    // loop can go on to reach that object.
+    auto other = parseWith("1crn", onlyTestAndCrn, err);
+    CHECK(err.empty(), "a name owned by another object is not a typo");
+    CHECK(other.empty(), "...and matches nothing against this object");
+
+    // This object's own name still means all of it.
+    auto self = parseWith("test", onlyTestAndCrn, err);
+    CHECK(err.empty() && self.size() == mol.atoms().size(),
+          "the object's own name still selects all of it");
+
+    // `obj <name>` is the explicit spelling of the same reference and follows
+    // the same rule — it used to stay silent while the bare form errored.
+    parseWith("obj heliix", onlyTestAndCrn, err);
+    CHECK(err.find("heliix") != std::string::npos, "obj <typo> is reported too");
+    parseWith("obj 1crn", onlyTestAndCrn, err);
+    CHECK(err.empty(), "obj <other object> stays silent");
+
+    // No lookup supplied means the caller cannot tell a typo from a
+    // cross-object name, so the parser must not guess. Silence here is what
+    // keeps the convenience overload from inventing false positives.
+    Selection::parse("1crn", mol, nullptr, &err);
+    CHECK(err.empty(), "without a lookup, an unknown word is left alone");
+}
+
 // ── pepseq wildcards (issue #121) ────────────────────────────────────────────
 
 // `.` / `?` are documented single-residue wildcards, and matchPepSeq has always
@@ -882,6 +938,9 @@ int main() {
     // Parse diagnostics + pepseq wildcards (issue #121)
     testTrailingTokensReported(mol);
     testPepSeqWildcards(mol);
+
+    // Unknown selectors vs cross-object references (issue #124)
+    testUnknownSelectorReported(mol);
 
     // Comma / whitespace list separators (issue #116)
     testListSeparatorsEquivalent(mol);

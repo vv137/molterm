@@ -155,13 +155,23 @@ void Application::onCurrentObjectChanged() {
     if (canvas_) canvas_->invalidate();
 }
 
-Selection Application::parseSelection(const std::string& expr, const MolObject& mol) {
-    auto resolver = [this](const std::string& name) -> const Selection* {
+Selection::ParseEnv Application::selectionParseEnv() const {
+    Selection::ParseEnv env;
+    env.resolver = [this](const std::string& name) -> const Selection* {
         auto it = namedSelections_.find(name);
         return (it != namedSelections_.end()) ? &it->second : nullptr;
     };
+    // The whole store, not just the current tab: a name that belongs to any
+    // loaded object is a cross-object reference, not a typo.
+    env.knownObject = [this](const std::string& name) {
+        return store_.get(name) != nullptr;
+    };
+    return env;
+}
+
+Selection Application::parseSelection(const std::string& expr, const MolObject& mol) {
     std::string err;
-    auto sel = Selection::parse(expr, mol, resolver, &err);
+    auto sel = Selection::parse(expr, mol, selectionParseEnv(), &err);
     if (!err.empty()) {
         noteSelectionError(err);
         // Fail closed. Handing back the prefix would let the caller act on a

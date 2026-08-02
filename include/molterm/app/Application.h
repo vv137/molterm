@@ -263,6 +263,15 @@ public:
     // endpoints) can resolve selections outside Application's own members.
     Selection parseSelection(const std::string& expr, const MolObject& mol);
 
+    // The lookups the selection grammar needs from the session: `$name`
+    // selections, and whether a bare word names a loaded object (so a
+    // cross-object reference isn't mistaken for a typo — issue #124).
+    // One builder so every parse site sees the same environment. Reads the
+    // whole store rather than the current tab, so a name loaded in another
+    // tab is still recognised — the permissive direction, which costs a
+    // missed typo rather than a rejected valid selection.
+    Selection::ParseEnv selectionParseEnv() const;
+
     // Selection-parse diagnostics for the command currently dispatching.
     // Recorded centrally rather than per-command: a malformed expression used
     // to narrow silently to whatever prefix parsed, and CommandRegistry turns
