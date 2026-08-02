@@ -160,7 +160,17 @@ Selection Application::parseSelection(const std::string& expr, const MolObject& 
         auto it = namedSelections_.find(name);
         return (it != namedSelections_.end()) ? &it->second : nullptr;
     };
-    auto sel = Selection::parse(expr, mol, resolver);
+    std::string err;
+    auto sel = Selection::parse(expr, mol, resolver, &err);
+    if (!err.empty()) {
+        noteSelectionError(err);
+        // Fail closed. Handing back the prefix would let the caller act on a
+        // truncated selection and only fail afterwards — the command would
+        // still have coloured, extracted or moved the wrong atoms. Every
+        // consumer already guards on an empty result, so this turns the
+        // diagnostic into a refusal instead of a report (issue #121).
+        sel = Selection();
+    }
     // Auto-save latest result under kSele so `$sele` references it.
     namedSelections_[kSele] = sel;
     return sel;

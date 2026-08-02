@@ -263,6 +263,22 @@ public:
     // endpoints) can resolve selections outside Application's own members.
     Selection parseSelection(const std::string& expr, const MolObject& mol);
 
+    // Selection-parse diagnostics for the command currently dispatching.
+    // Recorded centrally rather than per-command: a malformed expression used
+    // to narrow silently to whatever prefix parsed, and CommandRegistry turns
+    // a recorded error into a failed command so no handler can forget to check
+    // (issue #121). Cleared at the start of every dispatch.
+    void noteSelectionError(const std::string& err) {
+        if (selectionError_.empty()) selectionError_ = err;
+    }
+    // Return-and-clear, so a dispatch can take its own error and hand the slot
+    // back to whatever nested it without a separate clear step.
+    std::string takeSelectionError() {
+        std::string e = std::move(selectionError_);
+        selectionError_.clear();
+        return e;
+    }
+
     // Representation access
     Representation* getRepr(ReprType type);
     const std::unordered_map<ReprType, std::unique_ptr<Representation>>& representations() const { return representations_; }
@@ -452,6 +468,7 @@ private:
 
     // Named selections
     std::unordered_map<std::string, Selection> namedSelections_;
+    std::string selectionError_;   // first bad selection of this dispatch
     // Typed registers populated by `:let <name> = <expr>` (#32, #33, #35).
     // Stack of frames — frame[0] is the interactive/top-level frame and
     // is always present. `:run` with `#!molterm scope=local` pushes a
