@@ -43,9 +43,10 @@ ParsedCommand CommandParser::parse(const std::string& input) {
 
     if (!rest.empty()) {
         // Split by whitespace/comma, but respect quotes for paths with spaces
-        // :load "my file.cif"  → ["my file.cif"]
-        // :set bt 2            → ["bt", "2"]
-        // :rename old, new     → ["old", "new"]
+        // :load "my file.cif"       → ["my file.cif"]
+        // :set bt 2                 → ["bt", "2"]
+        // :rename old, new          → ["old", "new"]
+        // :align m to r chain=A,B   → [..., "chain=A,B"]  (comma kept in a value)
         std::string token;
         bool inQuote = false;
         char quoteChar = '\0';
@@ -68,6 +69,14 @@ ParsedCommand CommandParser::parse(const std::string& input) {
                 // Start quoted string
                 inQuote = true;
                 quoteChar = ch;
+            } else if (ch == ',' && token.find('=') != std::string::npos) {
+                // A comma inside a KEY=VALUE argument belongs to the value, not
+                // to the argument list: `chain=A,B` is one chain filter, and
+                // splitting it left `chain=A` + an orphaned `B` that no caller
+                // could reassemble (issue #120). Bare commas keep separating,
+                // so `:rename old, new` and `:color red, obj 1ubq` are
+                // unaffected.
+                token += ch;
             } else if (ch == ' ' || ch == '\t' || ch == ',' || ch == '\0') {
                 if (!token.empty()) {
                     cmd.args.push_back(token);
