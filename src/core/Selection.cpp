@@ -133,6 +133,37 @@ Selection Selection::all(int totalAtoms) {
     return Selection(std::move(indices), "all");
 }
 
+namespace {
+// ASCII case-insensitive match of `word` against a keyword table. Shared by
+// isPrimaryKeyword and isOperatorWord so the two can't drift in how they
+// compare — user args reach both unnormalized.
+bool matchesAny(std::string_view word, const std::string_view* kws, size_t n) {
+    for (size_t k = 0; k < n; ++k) {
+        std::string_view kw = kws[k];
+        if (word.size() != kw.size()) continue;
+        bool match = true;
+        for (size_t i = 0; i < kw.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(word[i])) != kw[i]) {
+                match = false; break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+// Words that join or qualify terms rather than name a value. Kept next to
+// isPrimaryKeyword because the two together define "a word that cannot be a
+// chain id / resname / atom name", which is what ends a value list.
+bool isOperatorWord(std::string_view word) {
+    static constexpr std::string_view kOperators[] = {
+        "and", "or", "not", "minus", "xor",   // boolean algebra (#52)
+        "of", "as",                           // `within N of`, `same KW as`
+    };
+    return matchesAny(word, kOperators, std::size(kOperators));
+}
+}  // namespace
+
 bool Selection::isPrimaryKeyword(std::string_view word) {
     // Mirrors the kwLower branches in parsePrimary() below. Any keyword
     // that introduces a primary selector belongs here. Operators (and,
@@ -154,17 +185,7 @@ bool Selection::isPrimaryKeyword(std::string_view word) {
         "imgt",                      // IMGT region / position selector
         "not",  // unary operator can lead an expression
     };
-    for (auto kw : kKeywords) {
-        if (word.size() != kw.size()) continue;
-        bool match = true;
-        for (size_t i = 0; i < kw.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(word[i])) != kw[i]) {
-                match = false; break;
-            }
-        }
-        if (match) return true;
-    }
-    return false;
+    return matchesAny(word, kKeywords, std::size(kKeywords));
 }
 
 Selection Selection::fromPredicate(const MolObject& mol,
@@ -225,6 +246,41 @@ public:
         return tok;
     }
 
+    Token peek() {
+        size_t saved = pos_;
+        size_t savedLast = lastStart_;
+        auto tok = next();
+        pos_ = saved;
+        lastStart_ = savedLast;
+        return tok;
+    }
+
+    // Re-read the most recent token under bareword rules (digit-led
+    // identifiers count as a single Word). Used by the `obj <name>`
+    // handler so PDB-style names like "1ubq" parse as one token rather
+    // than splitting into Number "1" + Word "ubq".
+    std::string readObjName() {
+        pos_ = lastStart_;
+        size_t start = pos_;
+        while (pos_ < input_.size() &&
+               (std::isalnum(static_cast<unsigned char>(input_[pos_])) ||
+                input_[pos_] == '_' || input_[pos_] == '*' ||
+                input_[pos_] == '-' || input_[pos_] == '.'))
+            ++pos_;
+        return input_.substr(start, pos_ - start);
+    }
+
+private:
+    std::string input_;
+    size_t pos_;
+    size_t lastStart_ = 0;
+
+    void skipWhitespace() {
+        while (pos_ < input_.size() && std::isspace(input_[pos_])) ++pos_;
+    }
+
+    // Token body, whitespace already consumed. Private because it leaves
+    // `spaced` unset — everything outside goes through next()/peek().
     Token scan() {
         lastStart_ = pos_;
         if (pos_ >= input_.size()) return {Token::End, ""};
@@ -261,39 +317,6 @@ public:
 
         ++pos_;
         return {Token::Word, std::string(1, ch)};
-    }
-
-    Token peek() {
-        size_t saved = pos_;
-        size_t savedLast = lastStart_;
-        auto tok = next();
-        pos_ = saved;
-        lastStart_ = savedLast;
-        return tok;
-    }
-
-    // Re-read the most recent token under bareword rules (digit-led
-    // identifiers count as a single Word). Used by the `obj <name>`
-    // handler so PDB-style names like "1ubq" parse as one token rather
-    // than splitting into Number "1" + Word "ubq".
-    std::string readObjName() {
-        pos_ = lastStart_;
-        size_t start = pos_;
-        while (pos_ < input_.size() &&
-               (std::isalnum(static_cast<unsigned char>(input_[pos_])) ||
-                input_[pos_] == '_' || input_[pos_] == '*' ||
-                input_[pos_] == '-' || input_[pos_] == '.'))
-            ++pos_;
-        return input_.substr(start, pos_ - start);
-    }
-
-private:
-    std::string input_;
-    size_t pos_;
-    size_t lastStart_ = 0;
-
-    void skipWhitespace() {
-        while (pos_ < input_.size() && std::isspace(input_[pos_])) ++pos_;
     }
 
     Token readNumber() {
@@ -388,13 +411,53 @@ private:
     bool atListValue() const {
         if (current_.type == Token::Number) return true;
         if (current_.type != Token::Word) return false;
-        static constexpr std::string_view kOperators[] = {
-            "and", "or", "not", "minus", "xor", "of", "as",
+        return !isOperatorWord(current_.value) &&
+               !Selection::isPrimaryKeyword(current_.value);
+    }
+
+    // Same rule for numeric lists (`resi`, `imgt`), where the only valid
+    // continuation is another number. Dash is excluded on purpose: the
+    // tokenizer ignores spacing, so `resi 10 - 11` is already the range
+    // 10-11 and must not become the pair {10, -11}.
+    bool atListNumber() const { return current_.type == Token::Number; }
+
+    // How a keyword normalizes its values before comparing them to AtomData,
+    // which stores chain ids verbatim, resn/name upper, element capitalized.
+    enum class Case { Keep, Upper, Element };
+
+    static std::string normalizeValue(std::string v, Case mode) {
+        auto up = [](char c) {
+            return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         };
-        std::string lower = current_.value;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        for (auto op : kOperators) if (lower == op) return false;
-        return !Selection::isPrimaryKeyword(lower);
+        if (mode == Case::Upper) {
+            for (char& c : v) c = up(c);
+        } else if (mode == Case::Element && !v.empty()) {
+            v[0] = up(v[0]);
+            for (size_t i = 1; i < v.size(); ++i)
+                v[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(v[i])));
+        }
+        return v;
+    }
+
+    // `<kw> V1[+,| ]V2...` — the shared shape behind chain / resn / name /
+    // element. One home for the list rule so a future separator change can't
+    // reach three of the four keywords and miss the fourth (issue #116).
+    Selection parseValueList(std::string AtomData::* field,
+                             const char* kw, Case mode) {
+        std::vector<std::string> vals;
+        do {
+            vals.push_back(normalizeValue(current_.value, mode));
+            advance();
+        } while (match(Token::Plus) || atListValue());
+        std::string label = kw;
+        for (size_t i = 0; i < vals.size(); ++i)
+            label += (i ? "+" : " ") + vals[i];
+        return Selection::fromPredicate(mol_,
+            [vals, field](int, const AtomData& a) {
+                for (const auto& v : vals) if (a.*field == v) return true;
+                return false;
+            },
+            label);
     }
 
     // or: and (("or") and)*
@@ -672,38 +735,10 @@ private:
                 },
                 "vis");
         }
-        if (kwLower == "chain") {
-            std::vector<std::string> ids;
-            ids.push_back(current_.value);
-            advance();
-            while (match(Token::Plus) || atListValue()) {
-                ids.push_back(current_.value);
-                advance();
-            }
-            return Selection::fromPredicate(mol_,
-                [ids](int, const AtomData& a) {
-                    for (const auto& id : ids) if (a.chainId == id) return true;
-                    return false;
-                },
-                "chain " + ids[0]);
-        }
-        if (kwLower == "resn" || kwLower == "resname") {
-            std::vector<std::string> resNames;
-            auto take = [&]() {
-                std::string n = current_.value;
-                std::transform(n.begin(), n.end(), n.begin(), ::toupper);
-                resNames.push_back(n);
-                advance();
-            };
-            take();
-            while (match(Token::Plus) || atListValue()) take();
-            return Selection::fromPredicate(mol_,
-                [resNames](int, const AtomData& a) {
-                    for (const auto& n : resNames) if (a.resName == n) return true;
-                    return false;
-                },
-                "resn " + resNames[0]);
-        }
+        if (kwLower == "chain")
+            return parseValueList(&AtomData::chainId, "chain", Case::Keep);
+        if (kwLower == "resn" || kwLower == "resname")
+            return parseValueList(&AtomData::resName, "resn", Case::Upper);
         if (kwLower == "resi") {
             // Parse: resi 10, resi 10-20, resi 10+20+30, resi 10-20+30-40
             // Negative numbers (signal-peptide-trimmed PDBs etc., issue #63)
@@ -740,11 +775,7 @@ private:
                 ranges.push_back({*start, isRange ? *stop : *start});
             };
             parseOneResi();
-            // Number continues the list; Dash does not — `resi 10 - 11` is
-            // already the range 10-11, since the tokenizer ignores spacing.
-            while (match(Token::Plus) || current_.type == Token::Number) {
-                parseOneResi();
-            }
+            while (match(Token::Plus) || atListNumber()) parseOneResi();
             return Selection::fromPredicate(mol_,
                 [ranges](int, const AtomData& a) {
                     for (const auto& r : ranges)
@@ -753,45 +784,10 @@ private:
                 },
                 "resi");
         }
-        if (kwLower == "name") {
-            std::vector<std::string> names;
-            auto take = [&]() {
-                std::string n = current_.value;
-                std::transform(n.begin(), n.end(), n.begin(), ::toupper);
-                names.push_back(n);
-                advance();
-            };
-            take();
-            while (match(Token::Plus) || atListValue()) take();
-            return Selection::fromPredicate(mol_,
-                [names](int, const AtomData& a) {
-                    for (const auto& nm : names) if (a.name == nm) return true;
-                    return false;
-                },
-                "name");
-        }
-        if (kwLower == "element" || kwLower == "elem") {
-            std::vector<std::string> elems;
-            auto take = [&]() {
-                std::string e = current_.value;
-                // Capitalize first letter
-                if (!e.empty()) {
-                    e[0] = static_cast<char>(std::toupper(e[0]));
-                    for (size_t i = 1; i < e.size(); ++i)
-                        e[i] = static_cast<char>(std::tolower(e[i]));
-                }
-                elems.push_back(e);
-                advance();
-            };
-            take();
-            while (match(Token::Plus) || atListValue()) take();
-            return Selection::fromPredicate(mol_,
-                [elems](int, const AtomData& a) {
-                    for (const auto& e : elems) if (a.element == e) return true;
-                    return false;
-                },
-                "element " + elems[0]);
-        }
+        if (kwLower == "name")
+            return parseValueList(&AtomData::name, "name", Case::Upper);
+        if (kwLower == "element" || kwLower == "elem")
+            return parseValueList(&AtomData::element, "element", Case::Element);
         if (kwLower == "helix") {
             return Selection::fromPredicate(mol_,
                 [](int, const AtomData& a) { return a.ssType == SSType::Helix; },
@@ -958,31 +954,40 @@ private:
                     ranges.push_back({n, m});
                     label += " " + std::to_string(n);
                     if (m != n) label += "-" + std::to_string(m);
-                    // Same list rule as `resi`: '+', ',' (tokenized as Plus)
-                    // or bare adjacency continues the set. Issue #116.
-                    if (!match(Token::Plus) && current_.type != Token::Number) break;
+                    if (!match(Token::Plus) && !atListNumber()) break;
                 }
             } else {
-                std::string region;
-                if (current_.type == Token::Word) {
-                    region = current_.value;
-                    std::transform(region.begin(), region.end(), region.begin(), ::tolower);
-                    advance();
-                }
-                int lo = 0, hi = 0;
-                if      (region == "fr1")            { lo = 1;   hi = 26;  }
-                else if (region == "cdr1")           { lo = 27;  hi = 38;  }
-                else if (region == "cdr1_anchored")  { lo = 26;  hi = 39;  }
-                else if (region == "fr2")            { lo = 39;  hi = 55;  }
-                else if (region == "cdr2")           { lo = 56;  hi = 65;  }
-                else if (region == "cdr2_anchored")  { lo = 55;  hi = 66;  }
-                else if (region == "fr3")            { lo = 66;  hi = 104; }
-                else if (region == "cdr3")           { lo = 105; hi = 117; }
-                else if (region == "cdr3_anchored")  { lo = 104; hi = 118; }
-                else if (region == "fr4")            { lo = 118; hi = 128; }
-                else return Selection({}, "imgt " + region);  // unknown region → empty
-                ranges.push_back({lo, hi});
-                label = "imgt " + region;
+                // Region names list the same way the numeric form does, so
+                // `imgt cdr1,cdr2` is the union rather than cdr1 (issue #116).
+                // An unknown name still voids the whole term — a typo'd region
+                // must not quietly narrow to the ones that did parse.
+                auto regionRange = [](const std::string& r)
+                        -> std::optional<std::pair<int,int>> {
+                    if (r == "fr1")            return {{1,   26 }};
+                    if (r == "cdr1")           return {{27,  38 }};
+                    if (r == "cdr1_anchored")  return {{26,  39 }};
+                    if (r == "fr2")            return {{39,  55 }};
+                    if (r == "cdr2")           return {{56,  65 }};
+                    if (r == "cdr2_anchored")  return {{55,  66 }};
+                    if (r == "fr3")            return {{66,  104}};
+                    if (r == "cdr3")           return {{105, 117}};
+                    if (r == "cdr3_anchored")  return {{104, 118}};
+                    if (r == "fr4")            return {{118, 128}};
+                    return std::nullopt;
+                };
+                do {
+                    std::string region;
+                    if (current_.type == Token::Word) {
+                        region = current_.value;
+                        std::transform(region.begin(), region.end(),
+                                       region.begin(), ::tolower);
+                        advance();
+                    }
+                    auto range = regionRange(region);
+                    if (!range) return Selection({}, "imgt " + region);
+                    ranges.push_back(*range);
+                    label += " " + region;
+                } while (match(Token::Plus) || atListValue());
             }
             if (ranges.empty()) return Selection({}, label);
             return Selection::fromPredicate(mol_,

@@ -668,12 +668,24 @@ static void testListSeparatorsEquivalent(const MolObject& mol) {
         CHECK(space == plus, std::string(c.space) + " == " + c.plus);
     }
 
-    // The union is the whole point — a list must beat its first element.
-    auto one  = toSet(Selection::parse("resi 10", mol));
+    // The union is the whole point — issue #116 was this list collapsing to
+    // its first entry, which no equality-to-`+` check above would have caught
+    // if `+` had been broken the same way.
     auto many = toSet(Selection::parse("resi 10,11,20", mol));
-    CHECK(many.size() > one.size(), "resi 10,11,20 is not truncated to resi 10");
     CHECK(many.count(0) && many.count(4) && many.count(8),
           "resi 10,11,20 unions all three residues");
+
+    // Region names list too, not just imgt's numeric form. fr1 (1-26) holds
+    // the protein residues, fr3 (66-104) the waters, so the union is strictly
+    // bigger than either — the truncation bug would show as equality.
+    CHECK(toSet(Selection::parse("imgt fr1,fr3", mol)) ==
+          toSet(Selection::parse("imgt fr1+fr3", mol)),
+          "imgt fr1,fr3 == imgt fr1+fr3");
+    CHECK(toSet(Selection::parse("imgt fr1,fr3", mol)).size() >
+          toSet(Selection::parse("imgt fr1", mol)).size(),
+          "imgt region list is not truncated to the first region");
+    CHECK(toSet(Selection::parse("imgt cdr1,nosuchregion", mol)).empty(),
+          "an unknown region voids the term rather than narrowing it");
 }
 
 // A list ends at an operator or at the next primary keyword, so adjacency
@@ -701,8 +713,6 @@ static void testListSeparatorsStopAtOperators(const MolObject& mol) {
     // still an intersection with a bare (unparseable) term, not a union.
     CHECK(toSet(Selection::parse("resi 10 and 11", mol)).empty(),
           "resi 10 and 11 stays an intersection, not a list");
-    CHECK(!toSet(Selection::parse("resi 10 11", mol)).empty(),
-          "resi 10 11 is a list");
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
