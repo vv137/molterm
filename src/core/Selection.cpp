@@ -151,6 +151,7 @@ bool Selection::isPrimaryKeyword(std::string_view word) {
         "obj", "within", "exwithin", "same",
         "byres", "bychain",          // sugar for `same residue|chain as` (#52)
         "pepseq", "seq", "sequence",
+        "imgt",                      // IMGT region / position selector
         "not",  // unary operator can lead an expression
     };
     for (auto kw : kKeywords) {
@@ -185,6 +186,10 @@ struct Token {
     enum Type { Word, Number, Dash, LParen, RParen, AtRef, Slash, Plus, End };
     Type type;
     std::string value;
+    // Whitespace ran ahead of this token. The grammar is otherwise
+    // space-insensitive; only parseSlash needs this, to tell the component
+    // `10 11` (a two-entry list) from `1011` (one residue number).
+    bool spaced = false;
 };
 
 class Tokenizer {
@@ -212,7 +217,15 @@ public:
     }
 
     Token next() {
+        size_t before = pos_;
         skipWhitespace();
+        bool spaced = (pos_ != before);
+        Token tok = scan();
+        tok.spaced = spaced;
+        return tok;
+    }
+
+    Token scan() {
         lastStart_ = pos_;
         if (pos_ >= input_.size()) return {Token::End, ""};
 
@@ -220,7 +233,10 @@ public:
         if (ch == '(') { ++pos_; return {Token::LParen, "("}; }
         if (ch == ')') { ++pos_; return {Token::RParen, ")"}; }
         if (ch == '/') { ++pos_; return {Token::Slash, "/"}; }
-        if (ch == '+') { ++pos_; return {Token::Plus, "+"}; }
+        // ',' is a synonym for '+' in value lists (PyMOL accepts both), and
+        // normalizing the value to "+" means parseSlash's char-level splits
+        // need no comma case of their own. Issue #116.
+        if (ch == '+' || ch == ',') { ++pos_; return {Token::Plus, "+"}; }
         if (ch == '-' && pos_ + 1 < input_.size() && std::isdigit(input_[pos_+1])) {
             // Could be negative number or range dash
             // Check if previous token was a number — then it's a range dash
@@ -362,6 +378,25 @@ private:
         return false;
     }
 
+    // True when the current token continues a value list (`chain A B`,
+    // `resi 2 3 6`) rather than starting a new term. Bare adjacency has to
+    // mean union because CommandParser splits argv on commas before the
+    // expression reaches us: `:color red resi 2,3,6` arrives as the string
+    // "resi 2 3 6", and dropping everything past the first value is exactly
+    // the silent truncation of issue #116. Operators and primary keywords
+    // end the list; nothing else in the grammar can follow a value.
+    bool atListValue() const {
+        if (current_.type == Token::Number) return true;
+        if (current_.type != Token::Word) return false;
+        static constexpr std::string_view kOperators[] = {
+            "and", "or", "not", "minus", "xor", "of", "as",
+        };
+        std::string lower = current_.value;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        for (auto op : kOperators) if (lower == op) return false;
+        return !Selection::isPrimaryKeyword(lower);
+    }
+
     // or: and (("or") and)*
     // Left-associative parse of {or, minus, xor} at the same precedence
     // (issue #52). `A and B minus C` reads as (A and B) minus C since
@@ -422,6 +457,12 @@ private:
                 parts.push_back(part);
                 break;
             } else {
+                // A gap inside a component separates list entries, so
+                // `/1brs/A/10 11/` (what `/1brs/A/10,11/` becomes once
+                // CommandParser eats the comma) is 10+11, not resi 1011.
+                if (current_.spaced && !part.empty() &&
+                    part.back() != '+' && current_.type != Token::Plus)
+                    part += '+';
                 part += current_.value;
                 advance();
             }
@@ -635,8 +676,7 @@ private:
             std::vector<std::string> ids;
             ids.push_back(current_.value);
             advance();
-            while (current_.type == Token::Plus) {
-                advance();
+            while (match(Token::Plus) || atListValue()) {
                 ids.push_back(current_.value);
                 advance();
             }
@@ -648,13 +688,21 @@ private:
                 "chain " + ids[0]);
         }
         if (kwLower == "resn" || kwLower == "resname") {
-            std::string resName = current_.value;
-            // Convert to uppercase for matching
-            std::transform(resName.begin(), resName.end(), resName.begin(), ::toupper);
-            advance();
+            std::vector<std::string> resNames;
+            auto take = [&]() {
+                std::string n = current_.value;
+                std::transform(n.begin(), n.end(), n.begin(), ::toupper);
+                resNames.push_back(n);
+                advance();
+            };
+            take();
+            while (match(Token::Plus) || atListValue()) take();
             return Selection::fromPredicate(mol_,
-                [resName](int, const AtomData& a) { return a.resName == resName; },
-                "resn " + resName);
+                [resNames](int, const AtomData& a) {
+                    for (const auto& n : resNames) if (a.resName == n) return true;
+                    return false;
+                },
+                "resn " + resNames[0]);
         }
         if (kwLower == "resi") {
             // Parse: resi 10, resi 10-20, resi 10+20+30, resi 10-20+30-40
@@ -692,8 +740,9 @@ private:
                 ranges.push_back({*start, isRange ? *stop : *start});
             };
             parseOneResi();
-            while (current_.type == Token::Plus) {
-                advance();
+            // Number continues the list; Dash does not — `resi 10 - 11` is
+            // already the range 10-11, since the tokenizer ignores spacing.
+            while (match(Token::Plus) || current_.type == Token::Number) {
                 parseOneResi();
             }
             return Selection::fromPredicate(mol_,
@@ -706,17 +755,14 @@ private:
         }
         if (kwLower == "name") {
             std::vector<std::string> names;
-            std::string n = current_.value;
-            std::transform(n.begin(), n.end(), n.begin(), ::toupper);
-            names.push_back(n);
-            advance();
-            while (current_.type == Token::Plus) {
-                advance();
-                n = current_.value;
+            auto take = [&]() {
+                std::string n = current_.value;
                 std::transform(n.begin(), n.end(), n.begin(), ::toupper);
                 names.push_back(n);
                 advance();
-            }
+            };
+            take();
+            while (match(Token::Plus) || atListValue()) take();
             return Selection::fromPredicate(mol_,
                 [names](int, const AtomData& a) {
                     for (const auto& nm : names) if (a.name == nm) return true;
@@ -725,17 +771,26 @@ private:
                 "name");
         }
         if (kwLower == "element" || kwLower == "elem") {
-            std::string elem = current_.value;
-            // Capitalize first letter
-            if (!elem.empty()) {
-                elem[0] = static_cast<char>(std::toupper(elem[0]));
-                for (size_t i = 1; i < elem.size(); ++i)
-                    elem[i] = static_cast<char>(std::tolower(elem[i]));
-            }
-            advance();
+            std::vector<std::string> elems;
+            auto take = [&]() {
+                std::string e = current_.value;
+                // Capitalize first letter
+                if (!e.empty()) {
+                    e[0] = static_cast<char>(std::toupper(e[0]));
+                    for (size_t i = 1; i < e.size(); ++i)
+                        e[i] = static_cast<char>(std::tolower(e[i]));
+                }
+                elems.push_back(e);
+                advance();
+            };
+            take();
+            while (match(Token::Plus) || atListValue()) take();
             return Selection::fromPredicate(mol_,
-                [elem](int, const AtomData& a) { return a.element == elem; },
-                "element " + elem);
+                [elems](int, const AtomData& a) {
+                    for (const auto& e : elems) if (a.element == e) return true;
+                    return false;
+                },
+                "element " + elems[0]);
         }
         if (kwLower == "helix") {
             return Selection::fromPredicate(mol_,
@@ -903,8 +958,9 @@ private:
                     ranges.push_back({n, m});
                     label += " " + std::to_string(n);
                     if (m != n) label += "-" + std::to_string(m);
-                    if (current_.type != Token::Plus) break;
-                    advance();
+                    // Same list rule as `resi`: '+', ',' (tokenized as Plus)
+                    // or bare adjacency continues the set. Issue #116.
+                    if (!match(Token::Plus) && current_.type != Token::Number) break;
                 }
             } else {
                 std::string region;
@@ -1190,7 +1246,7 @@ std::string normalizeColonSpecs(const std::string& expr) {
     auto isTokChar = [](char c) {
         return std::isalnum(static_cast<unsigned char>(c)) ||
                c == '_' || c == '*' || c == '/' || c == '.' ||
-               c == '+' || c == '-' || c == ':';
+               c == '+' || c == ',' || c == '-' || c == ':';
     };
     std::string out;
     out.reserve(expr.size() + 8);
