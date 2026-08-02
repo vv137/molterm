@@ -256,6 +256,12 @@ sees the temp PDB, so the same atom-level filter that drove per-side
 `[sel]` arguments before now drives this shorthand — `chain=` and a
 literal `chain X or chain Y` expression are interchangeable.
 
+The comma binds to the value, not to the argument list: commas normally
+separate command arguments (`:rename old, new`), but one inside a
+`KEY=VALUE` argument is part of the value, so `chain=A,B` arrives whole
+(issue #120). Write the list without spaces — `chain=A, B` is two
+arguments and the `B` is not part of the filter.
+
 ### Multi-object workflow
 
 After `:loadalign` (or any multi-load), per-object commands (`:color`,
