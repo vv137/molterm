@@ -37,6 +37,14 @@ int main(int argc, char* argv[]) {
                 "      --no-tui            Run without the terminal UI (auto-on for non-TTY scripts)\n"
                 "      --tui               Force the terminal UI even when auto-detect would skip it\n"
                 "\n"
+                "Exit status:\n"
+                "  0                       Success\n"
+                "  1                       A --script command failed (without --strict the rest\n"
+                "                          of the script still runs; per-failure detail is on\n"
+                "                          stderr). Applies to batch runs (--no-tui); an\n"
+                "                          interactive session's status is its own.\n"
+                "  2                       Bad command-line usage\n"
+                "\n"
                 "In-app help:\n"
                 "  ?                       Keybinding cheat sheet overlay (Normal mode)\n"
                 "  :help                   Command index overlay, grouped by category\n"
@@ -104,6 +112,7 @@ int main(int argc, char* argv[]) {
             if (headless && !msg.empty()) std::cout << msg << "\n";
         }
 
+        bool scriptFailed = false;
         if (!scriptPath.empty()) {
             std::ifstream file;
             std::istream* in = &std::cin;
@@ -137,6 +146,13 @@ int main(int argc, char* argv[]) {
             if (headless) {
                 if (r.failures > 0) {
                     std::fprintf(stderr, "Script: %d command(s) failed\n", r.failures);
+                    // A batch render is only as good as its inputs, and a
+                    // failed command leaves the previous state in place — the
+                    // screenshot after it still gets written, just wrong. The
+                    // diagnostic above is on stderr, which a driver that keys
+                    // off the return code never surfaces, so the failure has
+                    // to reach the process status too. Issue #117.
+                    scriptFailed = true;
                 }
             } else {
                 if (r.failures > 0) {
@@ -159,7 +175,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        return app.run();
+        int rc = app.run();
+        return (rc == 0 && scriptFailed) ? 1 : rc;
     } catch (const std::exception& e) {
         leaveCurses();
         std::cerr << "Fatal error: " << e.what() << std::endl;

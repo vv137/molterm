@@ -120,6 +120,40 @@ out=$(run ':let y = 3.14159
 ')
 assert_has "fmt: valid spec still formats" "$out" "y=3.14"
 
+# ── Batch exit status (issue #117) ───────────────────────────────────────────
+# A driver that keys off the return code has to be able to tell a clean batch
+# render from one where commands failed. Before this, both exited 0 and the
+# only evidence was a stdout line the driver never printed.
+
+# rc <flags...> — run a script (stdin) headless, echo only its exit status.
+rc() { printf '%s' "$1" | "$MOLTERM" --script - --no-tui "${@:2}" >/dev/null 2>&1; echo $?; }
+
+# assert_eq <label> <actual> <expected>
+assert_eq() {
+    if [ "$2" = "$3" ]; then echo "[PASS] $1"
+    else echo "[FAIL] $1 (got: $2, want: $3)"; fail=1; fi
+}
+
+assert_eq "exit: clean script exits 0" \
+          "$(rc ':echo ok
+')" 0
+assert_eq "exit: failed command exits 1" \
+          "$(rc ':color firebrick
+')" 1
+# The script must still run to completion — only the status changes.
+out=$(run ':color firebrick
+:echo AFTER_FAILURE
+')
+assert_has "exit: non-strict still runs on" "$out" "AFTER_FAILURE"
+assert_eq "exit: failure anywhere counts, not just last" \
+          "$(rc ':color firebrick
+:echo later
+')" 1
+assert_eq "exit: --strict still exits 1" \
+          "$(rc ':color firebrick
+:echo later
+' --strict)" 1
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL SCRIPT TESTS PASSED"; else echo "SCRIPT TESTS FAILED"; fi
 exit "$fail"

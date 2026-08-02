@@ -106,7 +106,7 @@ make -j$(nproc)
 ./molterm -r                           # short form
 ./molterm --script setup.mt            # run a command script after load (also -s)
 ./molterm --script setup.mt --strict   # abort on first script error (exit 1)
-./molterm --script render.mt --no-tui  # batch render: no UI, no flicker
+./molterm --script render.mt --no-tui  # batch render: no UI, no flicker (exit 1 if any command failed)
 ./molterm --help                       # full CLI help (also -h)
 ./molterm --version                    # prints version + git hash
 ```
@@ -131,6 +131,18 @@ quit
 ```bash
 ./molterm --script render.mt --no-tui
 # → writes 1crn.png (1920×1080) into the cwd
+```
+
+**Exit status in batch mode** — a `--script` run that had any command fail
+exits **1**, so a driver can tell a good render from a bad one by return code
+alone. This matters because a failed command leaves the previous state in
+place and the *next* `screenshot` is still written: without the non-zero
+status you get a plausible-looking but wrong figure and a "success". Add
+`--strict` to stop at the first failure instead of running on. Per-failure
+`file:line: command: reason` detail goes to stderr either way.
+
+```bash
+./molterm --script render.mt --no-tui || echo "render failed, see stderr"
 ```
 
 `--no-tui` is auto-enabled whenever `--script` is used and stdout is

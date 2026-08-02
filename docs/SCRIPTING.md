@@ -26,6 +26,26 @@ Inline `KEY=VALUE` args are seeded into the recipe's env (so `${KEY}` resolves)
 and force a `scope=local` frame — no `:setenv` needed first. Quote a value if it
 contains spaces or commas (`KEY="a, b"`).
 
+### Exit status (issue #117)
+
+A batch run — `molterm --script FILE --no-tui` — exits **1** if any command in
+the script failed, and **0** only if every command succeeded. Without
+`--strict` the script still runs to completion after a failure, so the exit
+code is the signal that something in it went wrong:
+
+```bash
+molterm --script figure.mt --no-tui || echo "figure is not trustworthy"
+```
+
+This is worth wiring into any driver. A failed command leaves the prior state
+untouched rather than aborting, so a `:screenshot` after a failed `:color` is
+still written — with the old colour. Checking only that the PNG exists, or
+surfacing output only on a non-zero return code before this existed, silently
+passes a wrong figure. Per-failure `path:line: \`command\`: reason` detail is
+streamed to stderr as commands execute; `--strict` additionally stops at the
+first failure. An interactive (`--tui`) session's exit status is its own and
+is not affected by script failures.
+
 A script may begin with a shebang declaring its frame behavior:
 
 ```
