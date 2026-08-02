@@ -115,6 +115,7 @@
 - [x] **Structured `ExecResult`** — commands return `{ok, msg}` instead of bare strings; enables proper error propagation
 - [x] **`-s`/`--script <file>` CLI flag** — run a command script after init, before entering the REPL
 - [x] **`--strict` flag** — script errors abort startup (exit 1) for both `--script` and `:run --strict`
+- [x] **Batch exit status** — a `--script --no-tui` run with any failed command exits 1, so drivers can detect it from the return code (issue #117)
 - [x] **`init.mt` auto-loader** — runs `~/.molterm/init.mt` on startup before files/`--script`/`--resume`; failures logged but never block REPL
 
 ### Phase 6.5: Sequence Bar — DONE
