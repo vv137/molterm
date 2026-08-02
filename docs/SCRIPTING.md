@@ -101,8 +101,9 @@ Type rules: `vec±vec`, `scalar±scalar`, `scalar*vec`, `vec*scalar`, `vec/scala
 | `dihedral(a, b, c, d)` | → Scalar | signed degrees, ±180 |
 | scalar math | → Scalar | `abs sqrt exp log log10 log2 sin cos tan asin acos atan floor ceil round` (1 arg); `min max pow atan2` (2 args; `atan2` in degrees) |
 
-Selections inside `pca(...)`/`centroid(...)` use the normal selection grammar;
-commas are accepted as list separators (`pca(resi 1,2,3)` == `pca(resi 1 2 3)`).
+Selections inside `pca(...)`/`centroid(...)` use the normal selection grammar,
+where `+`, `,` and space are interchangeable list separators
+(`pca(resi 1,2,3)` == `pca(resi 1+2+3)` == `pca(resi 1 2 3)`).
 
 ### Field access
 

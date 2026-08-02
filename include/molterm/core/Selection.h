@@ -54,6 +54,14 @@ public:
     using NameResolver = std::function<const Selection*(const std::string&)>;
 
     // Parse a PyMOL-like selection expression against a MolObject
+    //
+    // Value lists (chain / resn / resi / name / element / imgt) union their
+    // entries and accept '+', ',' and plain whitespace interchangeably:
+    // `chain A+B` == `chain A,B` == `chain A B`. Whitespace counts because
+    // CommandParser splits argv on commas, so `:color red resi 2,3,6` reaches
+    // the parser as "resi 2 3 6" — treating that as one value is the silent
+    // truncation of issue #116. `resi 10-12` stays an inclusive range.
+    //
     // Supported: chain X, resn XXX, resi N, resi N-M, name XX, element X,
     //            helix, sheet, loop, backbone, sidechain, hydro,
     //            vis | visible,            (atoms shown by any active repr)

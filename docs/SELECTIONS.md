@@ -57,7 +57,7 @@ structural papers.
 
 **IMGT positions** (issue #84) — alongside the named regions, `imgt`
 also accepts numeric forms for single positions, inclusive ranges, and
-'+'-separated sets:
+sets (`+`, `,` or space-separated, as with `resi`):
 
 ```vim
 :select e108 = chain B and imgt 108              " single IMGT position
@@ -156,6 +156,20 @@ cross chain breaks. Works with the rest of the algebra:
 **Sequence search:** `pepseq <one-letter-codes>` (aliases: `seq`, `sequence`); `.` / `?` = single-residue wildcard
 
 **Operators:** `and`, `or`, `minus`, `xor`, `not`, `( )`, `+` (OR shorthand: `chain A+B`, `resi 10+20+30-40`)
+
+**List separators (issue #116):** inside a value list — `chain`, `resn`,
+`resi`, `name`, `element`, `imgt` — `+`, `,` and a plain space all mean the
+same thing, so these three are identical:
+
+```vim
+:color red resi 2+3+6
+:color red resi 2,3,6
+:color red resi 2 3 6
+```
+
+The list ends at an operator or at the next keyword, so `resi 2,3 and chain A`
+and `chain A,B and name CA` parse the way they read. `-` still builds an
+inclusive range (`resi 10-12,20` = 10, 11, 12, 20).
 
 **Set algebra examples (issue #52):**
 

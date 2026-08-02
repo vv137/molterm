@@ -643,6 +643,78 @@ static void testNucleicSubstructure(const MolObject& mol) {
           "phosphate+sugar+base partitions the nucleotide heavy atoms");
 }
 
+// ── Comma / whitespace list separators (issue #116) ──────────────────────────
+
+// `+`, `,` and a bare space are interchangeable inside a value list. The
+// space form is not cosmetic: CommandParser splits argv on commas, so
+// `:color red resi 10,11` reaches the parser as the string "resi 10 11".
+static void testListSeparatorsEquivalent(const MolObject& mol) {
+    struct { const char* plus; const char* comma; const char* space; } kCases[] = {
+        {"resi 10+11+20",   "resi 10,11,20",   "resi 10 11 20"},
+        {"resi 10-11+35",   "resi 10-11,35",   "resi 10-11 35"},
+        {"chain A+B",       "chain A,B",       "chain A B"},
+        {"resn ALA+GLY",    "resn ALA,GLY",    "resn ALA GLY"},
+        {"name CA+CB",      "name CA,CB",      "name CA CB"},
+        {"element N+O",     "element N,O",     "element N O"},
+        {"/test/A+B//CA",   "/test/A,B//CA",   "/test/A B//CA"},
+        {"//A/10+11/",      "//A/10,11/",      "//A/10 11/"},
+    };
+    for (const auto& c : kCases) {
+        auto plus  = toSet(Selection::parse(c.plus, mol));
+        auto comma = toSet(Selection::parse(c.comma, mol));
+        auto space = toSet(Selection::parse(c.space, mol));
+        CHECK(!plus.empty(), std::string(c.plus) + " matches something");
+        CHECK(comma == plus, std::string(c.comma) + " == " + c.plus);
+        CHECK(space == plus, std::string(c.space) + " == " + c.plus);
+    }
+
+    // The union is the whole point — issue #116 was this list collapsing to
+    // its first entry, which no equality-to-`+` check above would have caught
+    // if `+` had been broken the same way.
+    auto many = toSet(Selection::parse("resi 10,11,20", mol));
+    CHECK(many.count(0) && many.count(4) && many.count(8),
+          "resi 10,11,20 unions all three residues");
+
+    // Region names list too, not just imgt's numeric form. fr1 (1-26) holds
+    // the protein residues, fr3 (66-104) the waters, so the union is strictly
+    // bigger than either — the truncation bug would show as equality.
+    CHECK(toSet(Selection::parse("imgt fr1,fr3", mol)) ==
+          toSet(Selection::parse("imgt fr1+fr3", mol)),
+          "imgt fr1,fr3 == imgt fr1+fr3");
+    CHECK(toSet(Selection::parse("imgt fr1,fr3", mol)).size() >
+          toSet(Selection::parse("imgt fr1", mol)).size(),
+          "imgt region list is not truncated to the first region");
+    CHECK(toSet(Selection::parse("imgt cdr1,nosuchregion", mol)).empty(),
+          "an unknown region voids the term rather than narrowing it");
+}
+
+// A list ends at an operator or at the next primary keyword, so adjacency
+// never swallows the rest of the expression.
+static void testListSeparatorsStopAtOperators(const MolObject& mol) {
+    auto s = toSet(Selection::parse("chain A and resi 10", mol));
+    CHECK(s.count(0) && s.count(20), "chain A and resi 10 keeps the and-term");
+    CHECK(!s.count(4) && !s.count(8), "chain A and resi 10 excludes others");
+
+    CHECK(toSet(Selection::parse("chain A or chain B", mol)) ==
+          toSet(Selection::parse("chain A+B", mol)),
+          "chain A or chain B == chain A+B");
+
+    auto notH = toSet(Selection::parse("resn ALA GLY and not hydro", mol));
+    CHECK(!notH.count(20), "resn list still binds looser than a following and-not");
+    CHECK(notH.count(0) && notH.count(4), "resn ALA GLY keeps both residues");
+
+    // A primary keyword ends the list rather than being read as another
+    // atom name — `within` here must not become `name WITHIN`.
+    CHECK(toSet(Selection::parse("name N CA within 5 of chain A", mol)) ==
+          toSet(Selection::parse("name N+CA", mol)),
+          "name list stops at a primary keyword");
+
+    // Adjacency never overrides an explicit operator: `resi 10 and 11` is
+    // still an intersection with a bare (unparseable) term, not a union.
+    CHECK(toSet(Selection::parse("resi 10 and 11", mol)).empty(),
+          "resi 10 and 11 stays an intersection, not a list");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -732,6 +804,10 @@ int main() {
 
     // Nucleic-acid substructure selectors (issue #111)
     testNucleicSubstructure(mol);
+
+    // Comma / whitespace list separators (issue #116)
+    testListSeparatorsEquivalent(mol);
+    testListSeparatorsStopAtOperators(mol);
 
     std::cout << "\n" << passed << " passed, " << failed << " failed\n";
     return failed > 0 ? 1 : 0;

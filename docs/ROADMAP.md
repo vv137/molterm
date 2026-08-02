@@ -130,7 +130,7 @@
 ### Phase 6.8: Selection + Rendering — DONE
 
 - [x] **Slash notation** — `/obj/chain/resi/name` hierarchical selection (empty = wildcard): `//A/42/CA`, `//A+B/10-50`
-- [x] **`+` operator** — OR shorthand: `chain A+B`, `resi 10+20+30-40`, `name CA+CB+N`
+- [x] **`+` operator** — OR shorthand: `chain A+B`, `resi 10+20+30-40`, `name CA+CB+N`; `,` and space are equivalent separators (issue #116)
 - [x] **Heteroatom coloring** — `ce` / `:color element` now colors N/O/S/P by element, carbon unchanged
 - [x] **Command line editing** — `Left`/`Right` cursor, `Home`/`End`, `Del`, fast input (no viewport re-render)
 - [x] **Canvas::drawTriangle** — scanline rasterizer with bounding box clamp (all canvases)

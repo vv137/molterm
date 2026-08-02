@@ -14,17 +14,16 @@ namespace molterm {
 
 // Shared selection→coordinate resolver for the expression context. When
 // `masses` is non-null it is also filled with per-atom atomic weights (for
-// com()); centroid()/pca() pass null. Commas are treated as list separators
-// (the selection grammar is space-separated and never uses commas), so
-// `pca(resi 1,2,3)` is accepted as a convenience alongside `pca(resi 1 2 3)`.
+// com()); centroid()/pca() pass null. `pca(...)` hands us the paren body
+// verbatim, so `pca(resi 1,2,3)` arrives with its commas intact — the
+// selection grammar reads them as list separators itself (issue #116), and
+// this used to pre-substitute spaces to compensate.
 static int collectSelXYZ(Application& app, const std::string& expr,
                          std::vector<float>* xs, std::vector<float>* ys,
                          std::vector<float>* zs, std::vector<float>* masses) {
     auto obj = app.tabs().currentTab().currentObject();
     if (!obj) return 0;
-    std::string normalized = expr;
-    for (char& c : normalized) if (c == ',') c = ' ';
-    auto sel = app.parseSelection(normalized, *obj);
+    auto sel = app.parseSelection(expr, *obj);
     const auto& atoms = obj->atoms();
     for (int i : sel.indices()) {
         if (i < 0 || i >= (int)atoms.size()) continue;
