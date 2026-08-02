@@ -10,6 +10,25 @@ fail=0
 
 # Run a script (stdin) headless, capture stdout.
 run() { printf '%s' "$1" | "$MOLTERM" --script - --no-tui 2>/dev/null; }
+# Same, but merge stderr — per-command failures stream there in headless mode.
+run_err() { printf '%s' "$1" | "$MOLTERM" --script - --no-tui 2>&1; }
+
+# A two-residue chain-A structure, so selection tests have something to match
+# without depending on a downloaded fixture.
+TESTPDB="$(mktemp -t molterm_test_XXXXXX).pdb"
+NESTED="$(mktemp -t molterm_nested_XXXXXX).mt"
+trap 'rm -f "$TESTPDB" "$NESTED"' EXIT
+cat > "$TESTPDB" <<'PDB'
+ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 20.00           N
+ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00 20.00           C
+ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00 20.00           C
+ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00 20.00           O
+ATOM      5  N   GLY A   2       3.332   1.550   0.000  1.00 20.00           N
+ATOM      6  CA  GLY A   2       3.970   2.850   0.000  1.00 20.00           C
+ATOM      7  C   GLY A   2       5.486   2.750   0.000  1.00 20.00           C
+ATOM      8  O   GLY A   2       6.030   1.650   0.000  1.00 20.00           O
+END
+PDB
 
 # assert_has <label> <output> <needle>
 assert_has() {
@@ -153,6 +172,97 @@ assert_eq "exit: --strict still exits 1" \
           "$(rc ':color firebrick
 :echo later
 ' --strict)" 1
+
+# ── Malformed selections fail the command (issue #121) ───────────────────────
+# A selection the grammar can't fully consume used to narrow to whatever prefix
+# parsed and report success, so `:color red chain A resi 5` coloured chain A and
+# the run looked clean. It now fails, which the batch exit code then surfaces.
+out=$(run_err ":load $TESTPDB
+:color red chain A resi 5
+:echo STILL_RUNNING
+")
+assert_has "bad selection: reported"       "$out" "Bad selection"
+# The full quoted form — a bare "resi" would also match the echoed source line.
+assert_has "bad selection: names token"    "$out" "unexpected 'resi'"
+assert_has "bad selection: script goes on" "$out" "STILL_RUNNING"
+
+out=$(run_err ":load $TESTPDB
+:count (chain A
+")
+assert_has "bad selection: unclosed paren" "$out" "unclosed"
+
+# A well-formed selection must not trip the check.
+out=$(run_err ":load $TESTPDB
+:count chain A and resi 1-2
+:color red resi 1,2
+")
+assert_absent "good selection: no false error" "$out" "Bad selection"
+assert_has    "good selection: comma list works" "$out" "8 atom(s) red"
+
+# A bad selection is a failed command, so it reaches the exit status (#117).
+assert_eq "bad selection: exits 1" \
+          "$(rc ":load $TESTPDB
+:color red chain A resi 5
+")" 1
+
+# Dispatch nests: `:run` executes its body through the same path, so a child's
+# bad selection must be reported against the child, not swapped in as the
+# parent's result. Guards the save/restore in CommandRegistry::execute.
+printf ':echo INNER_START\n:color red chain A resi 5\n' > "$NESTED"
+out=$(run_err ":load $TESTPDB
+:run $NESTED
+:echo OUTER_DONE
+")
+assert_has "nested: child error reported"   "$out" "Bad selection"
+assert_has "nested: parent keeps its summary" "$out" "1 failed"
+assert_has "nested: outer script continues" "$out" "OUTER_DONE"
+
+# Fail closed: the command must stop BEFORE it mutates, not report afterwards.
+# `:extract` is the sharp case — it used to carve a new object out of the
+# truncated prefix and shrink the source, then announce the failure.
+out=$(run_err ":load $TESTPDB
+:extract chain A resi 5 as carved
+:objects
+:count chain A
+")
+assert_has "fail-closed: extract rejected" "$out" "Bad selection"
+# Check the :objects listing, not the whole transcript — the echoed command
+# line contains "carved" whether or not the object was created.
+assert_absent "fail-closed: no object created" \
+              "$(printf '%s' "$out" | grep '^Objects:')" "carved"
+assert_has    "fail-closed: source untouched"  "$out" "8 atoms match: chain A"
+
+# $sele must not be left holding the truncated prefix for later commands.
+out=$(run_err ":load $TESTPDB
+:select chain A resi 5
+:count \$sele
+")
+assert_has "fail-closed: \$sele not poisoned" "$out" "0 atoms match"
+
+# The :foreach header parses a selection outside command dispatch, so it needs
+# its own check — it used to iterate the prefix silently at exit 0.
+out=$(run_err ":load $TESTPDB
+:foreach r in chain A resi 5
+  :echo ITERATED
+:end
+:echo AFTER_LOOP
+")
+assert_has    "foreach: bad header reported"  "$out" "Bad selection"
+assert_absent "foreach: body did not run"     "$out" "ITERATED"
+assert_has    "foreach: script continues"     "$out" "AFTER_LOOP"
+assert_eq "foreach: bad header exits 1" \
+          "$(rc ":load $TESTPDB
+:foreach r in chain A resi 5
+  :echo x
+:end
+")" 1
+# A well-formed header still iterates.
+out=$(run_err ":load $TESTPDB
+:foreach r in chain A and resi 1
+  :echo GOOD_ITER=\${r}
+:end
+")
+assert_has "foreach: good header still runs" "$out" "GOOD_ITER=A:1"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL SCRIPT TESTS PASSED"; else echo "SCRIPT TESTS FAILED"; fi

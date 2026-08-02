@@ -1061,8 +1061,14 @@ void Application::executeSearch(const std::string& query) {
         return;
     }
 
-    // Parse as selection expression
+    // Parse as selection expression. Search runs outside command dispatch, so
+    // drain the diagnostic here — otherwise a malformed query both searches
+    // silently and leaves the error to be blamed on the next command (#121).
     auto sel = parseSelection(query, *obj);
+    if (std::string err = takeSelectionError(); !err.empty()) {
+        cmdLine_.setMessage("/" + query + ": " + err);
+        return;
+    }
     searchMatches_ = std::vector<int>(sel.indices().begin(), sel.indices().end());
 
     if (searchMatches_.empty()) {

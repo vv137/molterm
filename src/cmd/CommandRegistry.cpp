@@ -44,6 +44,15 @@ ExecResult CommandRegistry::execute(Application& app, const std::string& input) 
     // std::exception into an error result. Individual handlers still do
     // their own validation for friendlier per-option messages; this is
     // the safety net that keeps one bad argument from being fatal.
+    // Selection-parse errors are scoped to this command's own expressions.
+    // Dispatch nests — `:run` and the control-flow commands execute their body
+    // through this same path — so take the slot on the way in and give it back
+    // on the way out. Clearing on exit alone is what keeps a child's bad
+    // selection from replacing `:run`'s "N commands, 1 failed" summary; saving
+    // the caller's covers the reverse, a handler that parses a selection and
+    // then nests a dispatch. No handler does both today.
+    std::string outerErr = app.takeSelectionError();
+
     ExecResult r;
     try {
         r = it->second.handler(app, cmd);
@@ -51,6 +60,16 @@ ExecResult CommandRegistry::execute(Application& app, const std::string& input) 
         r = {false, std::string("error: ") + e.what()};
     }
     if (flipScope) app.clearScopeOverride();
+
+    std::string ownErr = app.takeSelectionError();
+    app.noteSelectionError(outerErr);
+
+    // A selection the grammar could not fully consume fails the command, even
+    // if the handler was happy with the prefix that did parse. That prefix is
+    // the whole danger: `:color red chain A resi 5` used to colour chain A and
+    // report success, so a wrong figure looked like a good one (issue #121).
+    // Enforced here so it holds for every command, including future ones.
+    if (!ownErr.empty()) r = {false, "Bad selection: " + ownErr};
     return r;
 }
 

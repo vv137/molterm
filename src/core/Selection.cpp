@@ -230,10 +230,7 @@ public:
     // see the Word, missing the slash beyond.
     bool peekObjSlashLParen() const {
         size_t p = lastStart_;
-        while (p < input_.size() &&
-               (std::isalnum(static_cast<unsigned char>(input_[p])) ||
-                input_[p] == '_' || input_[p] == '*' ||
-                input_[p] == '-' || input_[p] == '.')) ++p;
+        while (p < input_.size() && isObjChar(input_[p])) ++p;
         return p + 1 < input_.size() && input_[p] == '/' && input_[p + 1] == '(';
     }
 
@@ -259,16 +256,23 @@ public:
     // identifiers count as a single Word). Used by the `obj <name>`
     // handler so PDB-style names like "1ubq" parse as one token rather
     // than splitting into Number "1" + Word "ubq".
-    std::string readObjName() {
-        pos_ = lastStart_;
-        size_t start = pos_;
-        while (pos_ < input_.size() &&
-               (std::isalnum(static_cast<unsigned char>(input_[pos_])) ||
-                input_[pos_] == '_' || input_[pos_] == '*' ||
-                input_[pos_] == '-' || input_[pos_] == '.'))
-            ++pos_;
-        return input_.substr(start, pos_ - start);
+    std::string readObjName() { return reread(isObjChar); }
+
+    // Re-read the most recent token as a pepseq pattern. readWord() stops at
+    // the documented `.` / `?` single-residue wildcards, so `pepseq H.L`
+    // reached the matcher as bare "H" and silently matched every histidine
+    // (issue #121). The matcher itself has always understood both.
+    std::string readPepSeqPattern() {
+        return reread([](char c) { return isWordChar(c) || c == '.' || c == '?'; });
     }
+
+    // Character classes the scanners share. Every "read a run" below is one of
+    // these plus at most a couple of extras, so a new token shape states its
+    // difference from a word instead of re-spelling the whole set.
+    static bool isWordChar(char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '*';
+    }
+    static bool isObjChar(char c) { return isWordChar(c) || c == '-' || c == '.'; }
 
 private:
     std::string input_;
@@ -277,6 +281,22 @@ private:
 
     void skipWhitespace() {
         while (pos_ < input_.size() && std::isspace(input_[pos_])) ++pos_;
+    }
+
+    // Consume input while `pred` holds, from the current position.
+    template <class P>
+    std::string readWhile(P pred) {
+        size_t start = pos_;
+        while (pos_ < input_.size() && pred(input_[pos_])) ++pos_;
+        return input_.substr(start, pos_ - start);
+    }
+
+    // Same, but rewound to the start of the token just returned — the parser
+    // has already consumed it under a narrower rule and wants it back whole.
+    template <class P>
+    std::string reread(P pred) {
+        pos_ = lastStart_;
+        return readWhile(pred);
     }
 
     // Token body, whitespace already consumed. Private because it leaves
@@ -331,13 +351,7 @@ private:
         return {Token::Number, input_.substr(start, pos_ - start)};
     }
 
-    Token readWord() {
-        size_t start = pos_;
-        while (pos_ < input_.size() &&
-               (std::isalnum(input_[pos_]) || input_[pos_] == '_' || input_[pos_] == '*'))
-            ++pos_;
-        return {Token::Word, input_.substr(start, pos_ - start)};
-    }
+    Token readWord() { return {Token::Word, readWhile(isWordChar)}; }
 };
 
 // ── Nucleic-acid substructure helpers (issue #111) ────────────────────────────
@@ -375,8 +389,20 @@ public:
         advance();
     }
 
-    Selection parse() {
+    // `error` (optional) reports an expression the grammar could not fully
+    // consume. Every silent-truncation bug in this parser reached the user
+    // through the missing check here (issue #121).
+    Selection parse(std::string* error) {
         auto sel = parseOr();
+        if (error) {
+            if (unclosedParen_)
+                *error = "unclosed '(' in selection";
+            else if (current_.type != Token::End)
+                *error = "unexpected '" +
+                         (current_.type == Token::AtRef ? "$" + current_.value
+                                                        : current_.value) +
+                         "' in selection";
+        }
         return sel;
     }
 
@@ -386,12 +412,19 @@ private:
     Selection::NameResolver resolver_;
     int totalAtoms_;
     Token current_;
+    bool unclosedParen_ = false;   // a ')' never arrived
 
     void advance() { current_ = tokenizer_.next(); }
 
     bool match(Token::Type type) {
         if (current_.type == type) { advance(); return true; }
         return false;
+    }
+
+    // Consume the ')' closing a group; note it rather than throw, so the
+    // prefix result still comes back for callers that pass no error.
+    void expectRParen() {
+        if (!match(Token::RParen)) unclosedParen_ = true;
     }
 
     bool matchWord(const std::string& w) {
@@ -645,7 +678,7 @@ private:
             advance();   // consume Slash → LParen
             advance();   // consume LParen
             Selection inner = parseOr();
-            match(Token::RParen);
+            expectRParen();
             // objName is always non-empty here (the grammar read a Word/Number
             // before "/("), so isObjGlob reduces to the "*"/"all" test.
             if (isObjGlob(objName)) return inner;        // every object — unscoped
@@ -678,7 +711,7 @@ private:
         // Parentheses
         if (match(Token::LParen)) {
             auto inner = parseOr();
-            match(Token::RParen);
+            expectRParen();
             return inner;
         }
 
@@ -1050,7 +1083,7 @@ private:
             if (current_.type != Token::Word) {
                 return Selection({}, kwLower);
             }
-            std::string seq = current_.value;
+            std::string seq = tokenizer_.readPepSeqPattern();
             advance();
             return matchPepSeq(seq);
         }
@@ -1289,11 +1322,12 @@ std::string normalizeColonSpecs(const std::string& expr) {
 }  // namespace
 
 Selection Selection::parse(const std::string& exprIn, const MolObject& mol,
-                           NameResolver resolver) {
+                           NameResolver resolver, std::string* error) {
+    if (error) error->clear();
     if (exprIn.empty()) return Selection();
     std::string expr = normalizeColonSpecs(exprIn);
     SelectionParser parser(expr, mol, std::move(resolver));
-    return parser.parse();
+    return parser.parse(error);
 }
 
 } // namespace molterm

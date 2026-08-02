@@ -41,7 +41,12 @@ int forEachInScope(Application& app, ScopeMode mode, const std::string& expr,
             t.sel = Selection::all(static_cast<int>(obj->atoms().size()));
             t.wholeObject = true;
         } else {
-            t.sel = Selection::parse(expr, *obj, resolver);
+            std::string err;
+            t.sel = Selection::parse(expr, *obj, resolver, &err);
+            // Skip before fn() runs, not after: fn is the mutation (colour,
+            // extract, transform), so a malformed expression has to stop short
+            // of it rather than be reported once the damage is done (#121).
+            if (!err.empty()) { app.noteSelectionError(err); return true; }
             if (t.sel.empty()) return true;  // skip but keep iterating
             t.wholeObject = false;
         }
@@ -65,6 +70,8 @@ int forEachInScope(Application& app, ScopeMode mode, const std::string& expr,
         const auto& objs = tab.objects();
         for (const auto& obj : objs) {
             if (!obj) continue;
+            // Same expression, already parsed (and any error already noted)
+            // by visit() above — diagnostics off here would only duplicate it.
             auto sel = Selection::parse(expr, *obj, resolver);
             if (!sel.empty()) {
                 app.namedSelections()[kSele] = std::move(sel);

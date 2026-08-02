@@ -453,6 +453,16 @@ ScriptRunner::ScriptFlow ScriptRunner::dispatch(
                 continue;
             }
             Selection fsel = app_.parseSelection(rangeExpr, *fobj);
+            // The loop header parses a selection outside command dispatch, so
+            // CommandRegistry's check never sees it. Without this a malformed
+            // header iterated whatever prefix parsed, silently, at exit 0.
+            std::string selErr = app_.takeSelectionError();
+            if (!selErr.empty()) {
+                recordFailure(i, srcLine, "Bad selection: " + selErr);
+                if (strict) { result.stopped = true; return Flow::Stopped; }
+                i = endIdx;
+                continue;
+            }
             // Atoms of a residue are contiguous, so group consecutive picks by
             // (chain, resSeq, insCode) to get distinct residues in order.
             struct ResKey { std::string chain, resn; int resSeq; char ins; };

@@ -85,8 +85,16 @@ public:
     // SessionExporter currently emits hand-built PyMOL commands and does not
     // round-trip Selection::expression(). When that changes, add a translator
     // here rather than letting the molterm-internal form leak into PML.
+    // `error`, when non-null, receives a diagnostic if the expression did not
+    // parse cleanly — an unbalanced paren, or a tail the grammar could not
+    // consume. Without it a malformed expression silently narrows to whatever
+    // prefix did parse, which is how `resi 2,3,6` shipped wrong figures
+    // (issues #116, #121). The returned Selection is still the prefix match,
+    // so callers that don't care keep their old behavior; callers that pass
+    // `error` should treat a non-empty result as a failed command.
     static Selection parse(const std::string& expr, const MolObject& mol,
-                           NameResolver resolver = nullptr);
+                           NameResolver resolver = nullptr,
+                           std::string* error = nullptr);
 
     // True if `word` (ASCII, case-insensitive) is a token that begins a
     // primary selector (chain, resi, helix, within, ...). Used by callers

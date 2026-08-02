@@ -715,6 +715,80 @@ static void testListSeparatorsStopAtOperators(const MolObject& mol) {
           "resi 10 and 11 stays an intersection, not a list");
 }
 
+// ── Parse diagnostics (issue #121) ───────────────────────────────────────────
+
+// An expression the grammar cannot fully consume must say so. Without this the
+// parser silently narrows to whatever prefix parsed, which is how a truncated
+// selection reaches a figure looking plausible.
+static void testTrailingTokensReported(const MolObject& mol) {
+    struct { const char* expr; const char* want; } kBad[] = {
+        {"chain A resi 5",      "resi"},   // missing operator between terms
+        {"resi 10 )junk",       ")"},
+        {"resi 10 junk",        "junk"},
+        {"chain A OR chain B",  "OR"},     // operators are case-sensitive
+        {"obj a b",             "b"},
+        {"pepseq AG L",         "L"},
+    };
+    for (const auto& c : kBad) {
+        std::string err;
+        Selection::parse(c.expr, mol, nullptr, &err);
+        CHECK(!err.empty(), std::string(c.expr) + " reports an error");
+        CHECK(err.find(c.want) != std::string::npos,
+              std::string(c.expr) + " names the offending token '" + c.want + "'");
+    }
+
+    // Unbalanced parens are their own diagnostic — nothing is left over to
+    // point at, so an end-of-input check alone would miss them.
+    for (const char* expr : {"(chain A", "((chain A)", "chain A and (resi 5"}) {
+        std::string err;
+        Selection::parse(expr, mol, nullptr, &err);
+        CHECK(err.find("unclosed") != std::string::npos,
+              std::string(expr) + " reports an unclosed paren");
+    }
+
+    // Well-formed expressions must stay silent — a false positive here fails
+    // commands that work today.
+    for (const char* expr : {
+            "chain A", "chain A+B", "chain A,B", "resi 10-20", "resn ALA GLY",
+            "not water and not hydro", "(chain A or chain B) and name CA",
+            "chain A minus resi 10", "byres name CA", "same chain as resi 10",
+            "within 5 of chain A", "exwithin 5 of chain A", "imgt cdr1,cdr3",
+            "/test/A//CA", "//A/10-11/", "test/(chain A)", "pepseq H.L",
+            "pepseq H?L", "all", "vis", "backbone and chain B", "$nosuch"}) {
+        std::string err;
+        Selection::parse(expr, mol, nullptr, &err);
+        CHECK(err.empty(), std::string("well-formed, no error: ") + expr);
+    }
+
+    // Selection::parse itself still returns the prefix, so callers that pass
+    // no error pointer keep their old behavior. Failing closed is the layer
+    // above's job (Application::parseSelection / forEachInScope), which is
+    // what stops a command mutating on a truncated selection.
+    std::string err;
+    auto sel = Selection::parse("chain A resi 5", mol, nullptr, &err);
+    CHECK(toSet(sel) == toSet(Selection::parse("chain A", mol)),
+          "a rejected expression still returns its prefix to nullptr callers");
+}
+
+// ── pepseq wildcards (issue #121) ────────────────────────────────────────────
+
+// `.` / `?` are documented single-residue wildcards, and matchPepSeq has always
+// understood them — but readWord() stopped at the punctuation, so `pepseq H.L`
+// reached the matcher as bare "H" and matched every histidine instead.
+static void testPepSeqWildcards(const MolObject& mol) {
+    // The fixture's chain A reads ALA(10) GLY(11); chain H is VAL/VAL/VAL.
+    auto exact = toSet(Selection::parse("pepseq AG", mol));
+    CHECK(!exact.empty(), "pepseq AG matches the ALA-GLY run");
+    CHECK(toSet(Selection::parse("pepseq A.", mol)) == exact,
+          "pepseq A. == pepseq AG (dot is one residue)");
+    CHECK(toSet(Selection::parse("pepseq A?", mol)) == exact,
+          "pepseq A? == pepseq AG (question mark is one residue)");
+    // A wildcard pattern must not collapse to its leading letter.
+    CHECK(toSet(Selection::parse("pepseq A.", mol)) !=
+          toSet(Selection::parse("pepseq A", mol)),
+          "pepseq A. is not silently truncated to pepseq A");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -804,6 +878,10 @@ int main() {
 
     // Nucleic-acid substructure selectors (issue #111)
     testNucleicSubstructure(mol);
+
+    // Parse diagnostics + pepseq wildcards (issue #121)
+    testTrailingTokensReported(mol);
+    testPepSeqWildcards(mol);
 
     // Comma / whitespace list separators (issue #116)
     testListSeparatorsEquivalent(mol);

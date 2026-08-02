@@ -153,7 +153,7 @@ cross chain breaks. Works with the rest of the algebra:
 
 **Spatial / expansion:** `within N of <expr>`, `exwithin N of <expr>`, `same residue as <expr>`, `same chain as <expr>`, `same resname as <expr>` (alias `resn`); `byres <expr>` / `bychain <expr>` are sugar for `same residue|chain as <expr>` (issue #52)
 
-**Sequence search:** `pepseq <one-letter-codes>` (aliases: `seq`, `sequence`); `.` / `?` = single-residue wildcard
+**Sequence search:** `pepseq <one-letter-codes>` (aliases: `seq`, `sequence`); `.` / `?` = single-residue wildcard (`pepseq H.L` == `pepseq H?L`, both "His-anything-Leu")
 
 **Operators:** `and`, `or`, `minus`, `xor`, `not`, `( )`, `+` (OR shorthand: `chain A+B`, `resi 10+20+30-40`)
 
@@ -170,6 +170,22 @@ same thing, so these three are identical:
 The list ends at an operator or at the next keyword, so `resi 2,3 and chain A`
 and `chain A,B and name CA` parse the way they read. `-` still builds an
 inclusive range (`resi 10-12,20` = 10, 11, 12, 20).
+
+**Malformed selections fail (issue #121)** — an expression the parser cannot
+consume to the end is rejected with the offending token named, instead of
+quietly narrowing to whatever prefix did parse:
+
+```vim
+:color red chain A resi 5     " Bad selection: unexpected 'resi' in selection
+:count (chain A               " Bad selection: unclosed '(' in selection
+:count chain A OR chain B     " Bad selection: unexpected 'OR' in selection
+```
+
+The first is the shape that matters: it used to colour all of chain A and
+report success, so a figure built from it looked fine. Operators are
+lower-case (`and`, `or`, `not`, `minus`, `xor`) — `OR` is not an operator, so
+the tail after it was being dropped. In batch mode a rejected selection is a
+failed command, so it also reaches the process exit status.
 
 **Set algebra examples (issue #52):**
 
