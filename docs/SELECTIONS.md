@@ -179,13 +179,34 @@ quietly narrowing to whatever prefix did parse:
 :color red chain A resi 5     " Bad selection: unexpected 'resi' in selection
 :count (chain A               " Bad selection: unclosed '(' in selection
 :count chain A OR chain B     " Bad selection: unexpected 'OR' in selection
+:color red not heliix         " Bad selection: unknown selector 'heliix'
 ```
 
 The first is the shape that matters: it used to colour all of chain A and
 report success, so a figure built from it looked fine. Operators are
 lower-case (`and`, `or`, `not`, `minus`, `xor`) — `OR` is not an operator, so
-the tail after it was being dropped. In batch mode a rejected selection is a
-failed command, so it also reaches the process exit status.
+the tail after it was being dropped. The last one (issue #124) was the worst:
+a typo'd keyword matched nothing, and `not` inverted nothing into *everything*.
+
+A bare word is only rejected when it names neither a keyword nor a **loaded
+object** — `:color red 1crn` stays valid while `1crn` is loaded, including
+while a different object is current, so cross-object selections still work.
+Names carrying `-` or `.` (`my-model`, `mod.el`) resolve as a whole.
+
+Covered by the unknown-selector check: a bare object name, `obj <name>`, and
+`<name>/*`. **Not yet covered** — these still match nothing silently, so
+`not <them>` still inverts to everything:
+
+| form | example |
+|---|---|
+| unresolved `$name` | `not $typo` |
+| slash paths | `not /nosuch/A/10` |
+| `<obj>/(...)` | `not nosuchobj/(chain A)` |
+| unknown `imgt` region | `not imgt nosuchregion` |
+| a typo inside a value list | `chain A heliix` (read as a second chain id) |
+
+In batch mode a rejected selection is a failed command, so it also reaches the
+process exit status.
 
 **Set algebra examples (issue #52):**
 

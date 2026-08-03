@@ -52,6 +52,24 @@ public:
 
     // Resolver for named selections: @name → Selection
     using NameResolver = std::function<const Selection*(const std::string&)>;
+    // "Is this the name of a loaded object?" A bare word that is neither a
+    // keyword nor any loaded object's name is a typo, and must be reported
+    // rather than matched as nothing (issue #124). The parser sees one object
+    // at a time, so it cannot tell a typo from a cross-object reference —
+    // `1crn` parsed against `1ubq` is legitimate and yields empty until the
+    // loop reaches `1crn`. This is what supplies the missing half.
+    using ObjectNameCheck = std::function<bool(const std::string&)>;
+
+    // The lookups the parser needs from outside the MolObject it is parsing
+    // against — inputs only, so one env is shareable across a whole
+    // multi-object loop. A new lookup adds a field rather than a parameter.
+    // `knownObject` is optional: absent means "I cannot check", and an
+    // unmatched bareword is then left alone rather than accused of being a
+    // typo, since only the caller knows what objects exist.
+    struct ParseEnv {
+        NameResolver resolver;        // $name → Selection
+        ObjectNameCheck knownObject;  // name → is a loaded object?
+    };
 
     // Parse a PyMOL-like selection expression against a MolObject
     //
@@ -86,12 +104,17 @@ public:
     // round-trip Selection::expression(). When that changes, add a translator
     // here rather than letting the molterm-internal form leak into PML.
     // `error`, when non-null, receives a diagnostic if the expression did not
-    // parse cleanly — an unbalanced paren, or a tail the grammar could not
-    // consume. Without it a malformed expression silently narrows to whatever
-    // prefix did parse, which is how `resi 2,3,6` shipped wrong figures
-    // (issues #116, #121). The returned Selection is still the prefix match,
-    // so callers that don't care keep their old behavior; callers that pass
-    // `error` should treat a non-empty result as a failed command.
+    // parse cleanly: an unknown selector, an unbalanced paren, or a tail the
+    // grammar could not consume. Without it a malformed expression silently
+    // narrows to whatever prefix did parse, which is how `resi 2,3,6` shipped
+    // wrong figures (issues #116, #121, #124). The returned Selection is still
+    // the prefix match, so callers that pass no error keep their old behavior;
+    // callers that pass one should treat a non-empty result as a failed
+    // command and act on nothing.
+    static Selection parse(const std::string& expr, const MolObject& mol,
+                           const ParseEnv& env, std::string* error = nullptr);
+    // Convenience for callers with nothing to look up (tests, and code that
+    // only wants the atom set).
     static Selection parse(const std::string& expr, const MolObject& mol,
                            NameResolver resolver = nullptr,
                            std::string* error = nullptr);
