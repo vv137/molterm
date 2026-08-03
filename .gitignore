@@ -8,3 +8,9 @@ compile_commands.json
 *.dylib
 .DS_Store
 references/
+
+# Session artifacts a run drops in the repo root (:screenshot, camera saves).
+# Root-anchored on purpose — assets/*.png are tracked README images.
+/*.cam
+/*.png
+/*.pml
